@@ -64,7 +64,7 @@ public struct TileCard<Content: View>: View {
 
     private var footer: some View {
         HStack(spacing: 6) {
-            Text(info.detail.map { $0.obscured(privacy) } ?? info.subtitle)
+            Text(info.detail.map { privacy ? AttributedString($0.obscured(true)) : $0.markdownPreview(160) } ?? AttributedString(info.subtitle))
                 .font(Style.mono(9.5))
                 .foregroundStyle(info.detail != nil && info.activity.isAttention ? Style.state(info.activity) : Style.dim)
                 .lineLimit(1)

@@ -169,6 +169,23 @@ public extension String {
         return flat.count <= limit ? flat : String(flat.prefix(limit - 1)) + "…"
     }
 
+    /// A one-line preview with inline Markdown rendered (bold, italics, `code`, links) and block
+    /// syntax like headings and list bullets dropped, for cards.
+    func markdownPreview(_ limit: Int) -> AttributedString {
+        let flat = split(whereSeparator: \.isNewline)
+            .map { line -> Substring in
+                var l = line.drop(while: { $0 == " " })
+                while l.first == "#" { l = l.dropFirst() }
+                if l.hasPrefix("- ") || l.hasPrefix("* ") { l = l.dropFirst(2) }
+                return l.drop(while: { $0 == " " })
+            }
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
+        let text = flat.count <= limit ? flat : String(flat.prefix(limit - 1)) + "…"
+        let options = AttributedString.MarkdownParsingOptions(interpretedSyntax: .inlineOnlyPreservingWhitespace)
+        return (try? AttributedString(markdown: text, options: options)) ?? AttributedString(text)
+    }
+
     /// `/Users/me/src/app` → `~/src/app`.
     var abbreviatingHome: String {
         let home = NSHomeDirectory()

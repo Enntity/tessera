@@ -120,6 +120,17 @@ final class TerminalActivityTrackerTests: XCTestCase {
         XCTAssertEqual(t.activity, .idle)
     }
 
+    func testSpinnerGlyphsLeaveTitles() {
+        XCTAssertEqual(TerminalSession.cleanTitle("⠂ Respond to greeting | ml"), "Respond to greeting | ml")
+        XCTAssertEqual(TerminalSession.cleanTitle("✳ Claude Code"), "Claude Code")
+        XCTAssertEqual(TerminalSession.cleanTitle("~/src/app"), "~/src/app")
+    }
+
+    func testMarkdownPreviewRendersInlineAndDropsHeadings() {
+        let a = "# Audit\n**Normal mode:** uses `crop` now".markdownPreview(200)
+        XCTAssertEqual(String(a.characters), "Audit Normal mode: uses crop now")
+    }
+
     func testWaitStatusDecoding() {
         XCTAssertEqual(TerminalSession.exitCode(fromWaitStatus: 256), 1)
         XCTAssertEqual(TerminalSession.exitCode(fromWaitStatus: 0), 0)

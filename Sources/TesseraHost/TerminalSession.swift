@@ -138,6 +138,15 @@ public final class TerminalSession: NSObject {
         return SessionResume.resumeCommand(original: command, sessionId: id) ?? command
     }
 
+    /// Agent CLIs animate their titles with spinner glyphs (braille dots, ✳ ✶ ·); keep just the words.
+    nonisolated static func cleanTitle(_ title: String) -> String {
+        let spinner: (Unicode.Scalar) -> Bool = { s in
+            (0x2800...0x28FF).contains(s.value) || (0x2700...0x27BF).contains(s.value) || "·•*∙⋅".unicodeScalars.contains(s)
+        }
+        let scalars = title.unicodeScalars.drop { spinner($0) || $0 == " " }
+        return String(String.UnicodeScalarView(scalars)).trimmingCharacters(in: .whitespaces)
+    }
+
     static func claudeTranscriptExists(_ id: String) -> Bool {
         let projects = NSHomeDirectory() + "/.claude/projects"
         let dirs = (try? FileManager.default.contentsOfDirectory(atPath: projects)) ?? []
@@ -381,7 +390,7 @@ extension TerminalSession: TerminalViewDelegate {
 
     nonisolated public func setTerminalTitle(source: TerminalView, title: String) {
         MainActor.assumeIsolated {
-            let clean = title.trimmingCharacters(in: .whitespaces)
+            let clean = Self.cleanTitle(title)
             if !clean.isEmpty { self.title = clean }
             refreshInfo()
         }

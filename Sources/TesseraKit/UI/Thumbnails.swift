@@ -77,7 +77,7 @@ public struct ConversationThumbnail: View {
         case .user:
             HStack {
                 Spacer(minLength: 24 * fontScale)
-                Text(item.text.preview(220).obscured(privacy))
+                Text(privacy ? AttributedString(item.text.preview(220).obscured(true)) : item.text.markdownPreview(220))
                     .font(Style.ui(10 * fontScale))
                     .foregroundStyle(Style.ink)
                     .lineLimit(3)
@@ -86,7 +86,7 @@ public struct ConversationThumbnail: View {
                     .background(Style.accent(flavor).opacity(0.18), in: RoundedRectangle(cornerRadius: 7 * fontScale, style: .continuous))
             }
         case .assistant:
-            Text(item.text.preview(400).obscured(privacy))
+            Text(privacy ? AttributedString(item.text.preview(400).obscured(true)) : item.text.markdownPreview(400))
                 .font(Style.ui(10 * fontScale))
                 .foregroundStyle(Style.ink.opacity(0.9))
                 .lineLimit(4)
