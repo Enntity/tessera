@@ -6,6 +6,9 @@ import TesseraKit
 struct AccountsSidebar: View {
     @Environment(AppModel.self) private var model
     @Environment(\.openSettings) private var openSettings
+    /// The row being dragged and when; rows reorder live as it passes over them. SwiftUI has no
+    /// drag-ended callback for drops outside the list, so a stale marker simply expires.
+    @State private var dragging: (id: String, at: Date)?
 
     var body: some View {
         let usage = model.workspace.usage
@@ -16,7 +19,7 @@ struct AccountsSidebar: View {
                 Spacer()
                 Button { usage.refreshAll() } label: { Image(systemName: "arrow.clockwise") }
                     .buttonStyle(.plain).foregroundStyle(Style.dim).help("Refresh balances")
-                Button { openSettings() } label: { Image(systemName: "plus") }
+                Button { addAccount() } label: { Image(systemName: "plus") }
                     .buttonStyle(.plain).foregroundStyle(Style.dim).help("Connect a provider")
             }
             .padding(.horizontal, 14)
@@ -27,6 +30,12 @@ struct AccountsSidebar: View {
                 VStack(spacing: 8) {
                     ForEach(usage.orderedReadings) { reading in
                         UsageRow(reading: reading) { NSWorkspace.shared.open($0) }
+                            .help("Drag to reorder")
+                            .onDrag {
+                                dragging = (reading.id, Date())
+                                return NSItemProvider(object: ("account:" + reading.id) as NSString)
+                            }
+                            .onDrop(of: [.text], delegate: AccountDropDelegate(target: reading.id, usage: usage, dragging: $dragging))
                             .contextMenu {
                                 Button("Refresh") {
                                     if let c = usage.configs.first(where: { $0.id == reading.id }) { usage.refresh(c) }
@@ -35,7 +44,7 @@ struct AccountsSidebar: View {
                             }
                     }
                     if usage.configs.count <= 1 {
-                        Button { openSettings() } label: {
+                        Button { addAccount() } label: {
                             VStack(spacing: 6) {
                                 Image(systemName: "link.badge.plus").font(.system(size: 18))
                                 Text("Connect OpenAI, Anthropic, OpenRouter, DeepSeek…").font(Style.ui(11)).multilineTextAlignment(.center)
@@ -80,5 +89,30 @@ struct RemoteStatus: View {
             .background(Style.glass.opacity(0.6), in: RoundedRectangle(cornerRadius: 10))
         }
         .buttonStyle(.plain)
+    }
+}
+
+extension AccountsSidebar {
+    private func addAccount() {
+        model.showAddAccount = true
+        openSettings()
+    }
+}
+
+struct AccountDropDelegate: DropDelegate {
+    let target: String
+    let usage: UsageService
+    @Binding var dragging: (id: String, at: Date)?
+
+    func dropEntered(info: DropInfo) {
+        guard let drag = dragging, Date().timeIntervalSince(drag.at) < 20, drag.id != target else { return }
+        withAnimation(.spring(duration: 0.3)) { usage.move(drag.id, onto: target) }
+    }
+
+    func dropUpdated(info: DropInfo) -> DropProposal? { DropProposal(operation: .move) }
+
+    func performDrop(info: DropInfo) -> Bool {
+        dragging = nil
+        return true
     }
 }

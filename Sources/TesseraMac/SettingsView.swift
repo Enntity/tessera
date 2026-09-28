@@ -45,41 +45,59 @@ struct ProvidersSettings: View {
                 }
                 .onMove { usage.move(fromOffsets: $0, toOffset: $1) }
             }
-            .frame(height: 170)
+            .frame(maxHeight: .infinity)
 
-            GroupBox("Connect a provider") {
-                Form {
-                    Picker("Provider", selection: $kind) {
-                        ForEach(UsageProviderKind.allCases, id: \.self) { k in Text(k.spec.name).tag(k) }
-                    }
-                    Text(kind.spec.help).font(.caption).foregroundStyle(.secondary)
-                    TextField("Display name", text: $name, prompt: Text(kind.spec.name))
-                    if let hint = kind.spec.keyHint {
-                        SecureField("Key", text: $key, prompt: Text(hint))
-                    }
-                    if kind == .openai || kind == .anthropic || kind == .custom {
-                        TextField("Monthly budget (USD)", text: $budget, prompt: Text("optional"))
-                    }
-                    if kind == .custom {
-                        TextField("Balance URL", text: $customURL, prompt: Text("https://api.example.com/v1/balance"))
-                        TextField("Auth header", text: $customHeader, prompt: Text("Authorization"))
-                        TextField("JSON path to number", text: $customPath, prompt: Text("data.balance"))
-                        TextField("Top-up URL", text: $customTopUp, prompt: Text("https://…/billing"))
-                    }
-                    HStack {
-                        Spacer()
-                        Button("Connect") { connect() }
-                            .keyboardShortcut(.defaultAction)
-                            .disabled(kind.spec.keyHint != nil && kind != .custom && key.isEmpty)
-                    }
-                }
-                .formStyle(.columns)
-                .padding(6)
+            HStack {
+                Text("Keys are stored in your login Keychain and only sent to the provider they belong to. Drag to reorder.")
+                    .font(.caption).foregroundStyle(.secondary)
+                Spacer()
+                Button("Add Account…") { model.showAddAccount = true }
             }
-            Text("Keys are stored in your login Keychain and only sent to the provider they belong to.")
-                .font(.caption).foregroundStyle(.secondary)
         }
         .padding(18)
+        .sheet(isPresented: Bindable(model).showAddAccount) { addSheet }
+    }
+
+    /// A focused sheet: pick a provider, paste a key, Connect — or Cancel / Esc.
+    private var addSheet: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("Connect an Account").font(.title3.weight(.semibold))
+            Form {
+                Picker("Provider", selection: $kind) {
+                    ForEach(UsageProviderKind.allCases, id: \.self) { k in Text(k.spec.name).tag(k) }
+                }
+                Text(kind.spec.help).font(.caption).foregroundStyle(.secondary)
+                TextField("Display name", text: $name, prompt: Text(kind.spec.name))
+                if let hint = kind.spec.keyHint {
+                    SecureField("Key", text: $key, prompt: Text(hint))
+                }
+                if kind == .openai || kind == .anthropic || kind == .custom {
+                    TextField("Monthly budget (USD)", text: $budget, prompt: Text("optional"))
+                }
+                if kind == .custom {
+                    TextField("Balance URL", text: $customURL, prompt: Text("https://api.example.com/v1/balance"))
+                    TextField("Auth header", text: $customHeader, prompt: Text("Authorization"))
+                    TextField("JSON path to number", text: $customPath, prompt: Text("data.balance"))
+                    TextField("Top-up URL", text: $customTopUp, prompt: Text("https://…/billing"))
+                }
+            }
+            .formStyle(.columns)
+            HStack {
+                Spacer()
+                Button("Cancel", role: .cancel) { closeSheet() }
+                    .keyboardShortcut(.cancelAction)
+                Button("Connect") { connect() }
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(kind.spec.keyHint != nil && kind != .custom && key.isEmpty)
+            }
+        }
+        .padding(22)
+        .frame(width: 520)
+    }
+
+    private func closeSheet() {
+        model.showAddAccount = false
+        name = ""; key = ""; budget = ""; customURL = ""; customHeader = ""; customPath = ""; customTopUp = ""
     }
 
     private func connect() {
@@ -89,7 +107,7 @@ struct ProvidersSettings: View {
                                          customJSONPath: customPath.isEmpty ? nil : customPath,
                                          customTopUpURL: customTopUp.isEmpty ? nil : customTopUp)
         model.workspace.usage.add(config, key: key.isEmpty ? nil : key)
-        name = ""; key = ""; budget = ""; customURL = ""; customHeader = ""; customPath = ""; customTopUp = ""
+        closeSheet()
     }
 }
 

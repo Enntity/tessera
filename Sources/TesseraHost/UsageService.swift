@@ -14,6 +14,10 @@ public final class UsageService {
     }
 
     @ObservationIgnored private var timer: Timer?
+    @ObservationIgnored private var lastAttempt: [String: Date] = [:]
+    @ObservationIgnored private var retryAt: [String: Date] = [:]
+    @ObservationIgnored private var failures: [String: Int] = [:]
+    @ObservationIgnored private var lastGood: [String: Date] = [:]
     @ObservationIgnored private let store: URL
     @ObservationIgnored private let session: URLSession = {
         let c = URLSessionConfiguration.ephemeral
@@ -49,7 +53,7 @@ public final class UsageService {
         configs.append(config)
         if let key { Keychain.set(key, account: "provider." + config.id) }
         save()
-        refresh(config)
+        refresh(config, force: true)
     }
 
     public func update(_ config: UsageProviderConfig, key: String?) {
@@ -57,7 +61,7 @@ public final class UsageService {
         configs[i] = config
         if let key { Keychain.set(key, account: "provider." + config.id) }
         save()
-        refresh(config)
+        refresh(config, force: true)
     }
 
     public func remove(id: String) {
@@ -72,14 +76,29 @@ public final class UsageService {
         save()
     }
 
+    /// Drag-reorder: `id` takes `target`'s place, pushing it down (or up when dragging downward).
+    public func move(_ id: String, onto target: String) {
+        guard id != target, let from = configs.firstIndex(where: { $0.id == id }),
+              let to = configs.firstIndex(where: { $0.id == target }) else { return }
+        configs.move(fromOffsets: [from], toOffset: to > from ? to + 1 : to)
+        save()
+    }
+
     public func hasKey(_ id: String) -> Bool { Keychain.get(account: "provider." + id) != nil }
 
     public func refreshAll() {
         for c in configs { refresh(c) }
     }
 
-    public func refresh(_ config: UsageProviderConfig) {
+    /// Asks the provider for fresh numbers, unless it was asked too recently or told us to back off.
+    /// `force` (a changed key or config) skips the spacing but never a server-requested backoff.
+    public func refresh(_ config: UsageProviderConfig, force: Bool = false) {
         let spec = config.kind.spec
+        let now = Date()
+        if config.kind != .codexPlan {
+            if let until = retryAt[config.id], now < until { return }
+            if !force, let last = lastAttempt[config.id], now.timeIntervalSince(last) < UsageAPI.minimumInterval(for: config.kind) { return }
+        }
         switch config.kind {
         case .codexPlan:
             readings[config.id] = UsageAPI.reading(for: codexRateLimits, config: config)
@@ -96,27 +115,52 @@ public final class UsageService {
         if current.headline.isEmpty { current.status = .loading }
         readings[config.id] = current
 
+        lastAttempt[config.id] = now
         let secret = Keychain.get(account: "provider." + config.id)
         Task { [session] in
             // The Claude sign-in read can raise a Keychain prompt; keep it off the main thread.
             let key: String? = config.kind == .claudePlan ? await ClaudeTokenCache.shared.token() : secret
-            let result: UsageReading
-            if let request = UsageAPI.request(for: config, key: key) {
-                do {
-                    let (data, response) = try await session.data(for: request)
-                    let code = (response as? HTTPURLResponse)?.statusCode ?? 0
-                    guard (200..<300).contains(code) else {
-                        if code == 401, config.kind == .claudePlan { await ClaudeTokenCache.shared.invalidate() }
-                        throw UsageAPI.Failure.http(code, String(decoding: data, as: UTF8.self))
-                    }
-                    result = try UsageAPI.parse(data, for: config)
-                } catch {
-                    result = self.failure(config, error.localizedDescription)
-                }
-            } else {
-                result = self.failure(config, config.kind == .claudePlan ? "Sign in to Claude Code first" : "Incomplete configuration")
+            guard let request = UsageAPI.request(for: config, key: key) else {
+                self.readings[config.id] = self.failure(config, config.kind == .claudePlan ? "Sign in to Claude Code first" : "Incomplete configuration")
+                return
             }
-            self.readings[config.id] = result
+            do {
+                let (data, response) = try await session.data(for: request)
+                let http = response as? HTTPURLResponse
+                let code = http?.statusCode ?? 0
+                if code == 429 || code >= 500 {
+                    self.backOff(config, retryAfter: http?.value(forHTTPHeaderField: "Retry-After"), code: code)
+                    return
+                }
+                guard (200..<300).contains(code) else {
+                    if code == 401, config.kind == .claudePlan { await ClaudeTokenCache.shared.invalidate() }
+                    throw UsageAPI.Failure.http(code, String(decoding: data, as: UTF8.self))
+                }
+                self.readings[config.id] = try UsageAPI.parse(data, for: config)
+                self.failures[config.id] = nil
+                self.retryAt[config.id] = nil
+                self.lastGood[config.id] = Date()
+            } catch {
+                self.readings[config.id] = self.failure(config, error.localizedDescription)
+            }
+        }
+    }
+
+    /// Keep showing the last good numbers, say they're held, and wait as long as the provider asks.
+    private func backOff(_ config: UsageProviderConfig, retryAfter: String?, code: Int) {
+        let count = (failures[config.id] ?? 0) + 1
+        failures[config.id] = count
+        let until = Date().addingTimeInterval(UsageAPI.backoff(failures: count, retryAfter: retryAfter))
+        retryAt[config.id] = until
+        let why = code == 429 ? "Rate limited" : "Provider error \(code)"
+        let when = until.formatted(date: .omitted, time: .shortened)
+        if var held = readings[config.id], held.status == .ok, let good = lastGood[config.id] {
+            held.message = "\(why) · data from \(good.shortAge()) ago · retry \(when)"
+            readings[config.id] = held
+        } else {
+            var r = failure(config, "Retrying at \(when)")
+            r.headline = why
+            readings[config.id] = r
         }
     }
 

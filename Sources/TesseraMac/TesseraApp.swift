@@ -46,6 +46,8 @@ final class AppModel {
     @ObservationIgnored lazy var server = HostServer(workspace: workspace)
     var showPalette = false
     var showSidebar = true
+    /// The "connect an account" sheet in Settings; the sidebar's + opens it directly.
+    var showAddAccount = false
     var paletteMode: PaletteMode = .all
     /// Where each visible tile is, in window coordinates; used to open panels and native windows in place.
     @ObservationIgnored var tileFrames: [String: CGRect] = [:]
@@ -99,7 +101,12 @@ final class AppModel {
             case "remote": server.start() // not persisted: normal launches keep the user's setting
             case "pairurl":
                 if parts.count > 1 { try? server.pairingURL?.absoluteString.write(toFile: parts[1], atomically: true, encoding: .utf8) }
-            case "filter": workspace.filter = Workspace.Filter(rawValue: parts.count > 1 ? parts[1] : "all") ?? .all
+            case "filter": workspace.filter = parts.count > 1 && parts[1] == "attention" ? .attention : .all
+            case "tab":
+                if parts.count > 1 {
+                    let id = workspace.createGroup(named: parts[1])
+                    for tile in workspace.allTiles.prefix(2) { workspace.move(tile: tile.id, toGroup: id) }
+                }
             case "wait": next = Double(parts.count > 1 ? parts[1] : "1") ?? 1
             case "open":
                 let kind: TileKind = parts.count > 1 ? (parts[1] == "app" ? .agentSession : parts[1] == "web" ? .browser : .terminal) : .terminal
@@ -172,6 +179,10 @@ final class AppModel {
 struct BoardCommands: Commands {
     let model: AppModel
 
+    private func show(_ filter: Workspace.Filter) {
+        withAnimation(.spring(duration: 0.35)) { model.workspace.filter = filter }
+    }
+
     var body: some Commands {
         CommandGroup(replacing: .newItem) {
             Button("New Shell") { model.workspace.launch(command: nil, cwd: model.contextDirectory) }
@@ -206,9 +217,12 @@ struct BoardCommands: Commands {
                 withAnimation(.spring(duration: 0.3)) { model.showSidebar.toggle() }
             }
             .keyboardShortcut("\\")
-            ForEach(Array(Workspace.Filter.allCases.enumerated()), id: \.element) { i, f in
-                Button("Show \(f.label)") { withAnimation(.spring(duration: 0.35)) { model.workspace.filter = f } }
-                    .keyboardShortcut(KeyEquivalent(Character("\(i + 1)")), modifiers: [.command, .option])
+            Divider()
+            Button("Show All") { show(.all) }.keyboardShortcut("1")
+            Button("Show Needs You") { show(.attention) }.keyboardShortcut("2")
+            ForEach(Array(model.workspace.groups.list.prefix(7).enumerated()), id: \.element.id) { i, group in
+                Button("Show \(group.name)") { show(.group(group.id)) }
+                    .keyboardShortcut(KeyEquivalent(Character("\(i + 3)")))
             }
         }
     }

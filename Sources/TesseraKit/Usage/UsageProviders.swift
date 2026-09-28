@@ -114,10 +114,43 @@ public enum UsageAPI {
         case shape(String)
         public var errorDescription: String? {
             switch self {
-            case .http(let code, let body): "HTTP \(code): \(body.preview(120))"
+            case .http(429, _): "Rate limited by the provider"
+            case .http(let code, let body): "HTTP \(code): \(UsageAPI.errorMessage(from: body))"
             case .shape(let why): why
             }
         }
+    }
+
+    /// The human part of an API error body (`{"error":{"message":…}}` and friends), not raw JSON.
+    public static func errorMessage(from body: String) -> String {
+        if let data = body.data(using: .utf8), let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] {
+            if let err = obj["error"] as? [String: Any], let m = err["message"] as? String { return m.preview(120) }
+            if let m = obj["message"] as? String { return m.preview(120) }
+            if let m = obj["error"] as? String { return m.preview(120) }
+        }
+        return body.preview(120)
+    }
+
+    /// How often a provider may be asked. Plan-usage endpoints are shared with the official
+    /// clients and rate-limit aggressively, so they get the longest spacing.
+    public static func minimumInterval(for kind: UsageProviderKind) -> TimeInterval {
+        switch kind {
+        case .codexPlan: 0
+        case .claudePlan: 300
+        default: 60
+        }
+    }
+
+    /// Wait before retrying after a 429/5xx: the server's Retry-After if given, else 5 min doubling to an hour.
+    public static func backoff(failures: Int, retryAfter: String?) -> TimeInterval {
+        if let raw = retryAfter?.trimmingCharacters(in: .whitespaces) {
+            if let seconds = TimeInterval(raw), seconds > 0 { return min(seconds, 3600) }
+            let f = DateFormatter()
+            f.locale = Locale(identifier: "en_US_POSIX")
+            f.dateFormat = "EEE, dd MMM yyyy HH:mm:ss zzz"
+            if let date = f.date(from: raw) { return min(max(date.timeIntervalSinceNow, 30), 3600) }
+        }
+        return min(3600, 300 * pow(2, Double(max(failures, 1) - 1)))
     }
 
     public static func monthStart(_ now: Date = Date(), calendar: Calendar = .current) -> Date {

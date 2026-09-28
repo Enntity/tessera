@@ -4,7 +4,7 @@ set -euo pipefail
 
 root=$(cd "$(dirname "$0")/.." && pwd)
 configuration=${CONFIGURATION:-release}
-app="$root/.build/app/Tessera.app"
+app="${TESSERA_APP_PATH:-$root/.build/app/Tessera.app}"
 contents="$app/Contents"
 
 swift build --package-path "$root" -c "$configuration" --product Tessera >&2

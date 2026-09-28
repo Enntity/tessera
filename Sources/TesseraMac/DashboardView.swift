@@ -84,7 +84,7 @@ struct HUDBar: View {
     @Environment(AppModel.self) private var model
 
     var body: some View {
-        @Bindable var workspace = model.workspace
+        let workspace = model.workspace
         let counts = model.workspace.counts
         HStack(spacing: 14) {
             Wordmark()
@@ -102,12 +102,7 @@ struct HUDBar: View {
                 }
             }
             Spacer()
-            Picker("", selection: $workspace.filter.animation(.spring(duration: 0.35))) {
-                ForEach(Workspace.Filter.allCases) { f in Text(f.label).tag(f) }
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .frame(width: 360)
+            TabStrip()
             Spacer()
             MachineVitals()
             Button {
@@ -223,6 +218,136 @@ struct Sparkline: View {
             fill.addLine(to: CGPoint(x: 0, y: size.height))
             ctx.fill(fill, with: .linearGradient(Gradient(colors: [color.opacity(0.3), .clear]),
                                                  startPoint: .zero, endPoint: CGPoint(x: 0, y: size.height)))
+        }
+    }
+}
+
+/// All · Needs you · the user's own tabs · +. Tiles can be dropped onto a tab to file them.
+struct TabStrip: View {
+    @Environment(AppModel.self) private var model
+    @State private var naming = false
+    @State private var renaming: String?
+    @State private var draft = ""
+
+    var body: some View {
+        let workspace = model.workspace
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 2) {
+                TabChip(title: "All", count: workspace.allTiles.count, attention: false,
+                        selected: workspace.filter == .all, dropTile: { file($0, into: nil) }) { select(.all) }
+                TabChip(title: "Needs you", count: workspace.counts.needsInput + workspace.counts.done, attention: false,
+                        selected: workspace.filter == .attention, tint: Style.amber) { select(.attention) }
+                if !workspace.groups.list.isEmpty {
+                    Rectangle().fill(Style.hairline).frame(width: 1, height: 14).padding(.horizontal, 4)
+                }
+                ForEach(workspace.groups.list) { group in
+                    let tiles = workspace.tiles(inGroup: group.id)
+                    TabChip(title: group.name, count: tiles.count,
+                            attention: tiles.contains { $0.attention || $0.activity == .needsInput },
+                            selected: workspace.filter == .group(group.id), dropTile: { file($0, into: group.id) }) {
+                        select(.group(group.id))
+                    }
+                        .contextMenu {
+                            Button("Rename…") {
+                                draft = group.name
+                                renaming = group.id
+                            }
+                            Button("Delete Tab", role: .destructive) {
+                                withAnimation(.spring(duration: 0.3)) { workspace.deleteGroup(group.id) }
+                            }
+                        }
+                        .popover(isPresented: Binding(get: { renaming == group.id }, set: { if !$0 { renaming = nil } })) {
+                            nameField("Tab name") { workspace.renameGroup(group.id, to: $0) }
+                        }
+                        .transition(.scale(scale: 0.8).combined(with: .opacity))
+                }
+                Button {
+                    draft = ""
+                    naming = true
+                } label: {
+                    Image(systemName: "plus")
+                        .font(.system(size: 10, weight: .bold))
+                        .frame(width: 24, height: 22)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(Style.dim)
+                .help("New tab — then drag tiles onto it")
+                .popover(isPresented: $naming) {
+                    nameField("New tab") { name in
+                        withAnimation(.spring(duration: 0.3)) { _ = workspace.createGroup(named: name) }
+                    }
+                }
+            }
+            .padding(3)
+        }
+        .frame(maxWidth: 640)
+        .fixedSize(horizontal: true, vertical: false)
+        .background(Style.glass.opacity(0.7), in: Capsule())
+        .overlay(Capsule().strokeBorder(Style.hairline))
+        .animation(.spring(duration: 0.3), value: workspace.groups)
+    }
+
+    private func select(_ filter: Workspace.Filter) {
+        withAnimation(.spring(duration: 0.35)) { model.workspace.filter = filter }
+    }
+
+    private func file(_ tileId: String, into groupId: String?) {
+        withAnimation(.spring(duration: 0.4)) { model.workspace.move(tile: tileId, toGroup: groupId) }
+    }
+
+    private func nameField(_ prompt: String, commit: @escaping (String) -> Void) -> some View {
+        TextField(prompt, text: $draft)
+            .textFieldStyle(.roundedBorder)
+            .frame(width: 200)
+            .padding(10)
+            .onSubmit {
+                commit(draft)
+                naming = false
+                renaming = nil
+            }
+    }
+}
+
+struct TabChip: View {
+    let title: String
+    let count: Int
+    let attention: Bool
+    let selected: Bool
+    var tint: Color = Style.cyan
+    /// Accepts a tile dragged onto the tab.
+    var dropTile: ((String) -> Void)?
+    let action: () -> Void
+    @State private var targeted = false
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 5) {
+                if attention {
+                    Circle().fill(Style.amber).frame(width: 5, height: 5).shadow(color: Style.amber, radius: 3)
+                }
+                Text(title).font(Style.ui(12, selected ? .semibold : .medium)).lineLimit(1)
+                if count > 0 {
+                    Text("\(count)").font(Style.mono(9.5, .semibold))
+                        .foregroundStyle(selected ? tint : Style.faint)
+                        .contentTransition(.numericText())
+                }
+            }
+            .foregroundStyle(selected ? Style.ink : Style.dim)
+            .padding(.horizontal, 11)
+            .frame(height: 24)
+            .background(selected ? Style.ink.opacity(0.1) : .clear, in: Capsule())
+            .overlay(Capsule().strokeBorder(targeted ? Style.cyan : .clear, lineWidth: 1.5))
+            .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .onDrop(of: [.text], isTargeted: dropTile == nil ? nil : $targeted) { providers in
+            guard let dropTile, let provider = providers.first else { return false }
+            provider.loadObject(ofClass: NSString.self) { obj, _ in
+                guard let id = obj as? String else { return }
+                DispatchQueue.main.async { dropTile(id) }
+            }
+            return true
         }
     }
 }

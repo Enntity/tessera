@@ -7,18 +7,9 @@ import TesseraKit
 @Observable
 @MainActor
 public final class Workspace {
-    public enum Filter: String, CaseIterable, Identifiable, Sendable {
-        case all, attention, terminals, apps, web
-        public var id: String { rawValue }
-        public var label: String {
-            switch self {
-            case .all: "All"
-            case .attention: "Needs you"
-            case .terminals: "Terminals"
-            case .apps: "Apps"
-            case .web: "Web"
-            }
-        }
+    /// What the board shows: everything, what needs the user, or one of the user's tabs.
+    public enum Filter: Hashable, Sendable {
+        case all, attention, group(String)
     }
 
     public private(set) var order: [String] = []
@@ -32,6 +23,7 @@ public final class Workspace {
     public var selectedId: String?
     public private(set) var expandedId: String?
     public var filter: Filter = .all
+    public private(set) var groups = TileGroups()
     /// Snap the Claude / Codex window onto the tile when an app session is opened.
     public var placeNativeWindows = true
     public var defaultDirectory: String = NSHomeDirectory()
@@ -47,7 +39,12 @@ public final class Workspace {
     @ObservationIgnored private let directory: URL
 
     public init() {
-        directory = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("Tessera")
+        var dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("Tessera")
+        #if DEBUG
+        // Lets a development instance run beside the real one without sharing its board.
+        if let override = ProcessInfo.processInfo.environment["TESSERA_DATA_DIR"] { dir = URL(fileURLWithPath: override) }
+        #endif
+        directory = dir
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         usage = UsageService(directory: directory)
     }
@@ -82,13 +79,12 @@ public final class Workspace {
     public var allTiles: [TileInfo] { order.compactMap(info) }
 
     public var visibleTiles: [TileInfo] {
-        allTiles.filter { tile in
+        let members: Set<String>? = if case .group(let g) = filter { groups.members(of: g) } else { nil }
+        return allTiles.filter { tile in
             switch filter {
             case .all: true
             case .attention: tile.attention || tile.activity == .needsInput || tile.id == expandedId
-            case .terminals: tile.kind == .terminal
-            case .apps: tile.kind == .agentSession
-            case .web: tile.kind == .browser
+            case .group: members?.contains(tile.id) == true || tile.id == expandedId
             }
         }
     }
@@ -117,7 +113,44 @@ public final class Workspace {
         return session.id
     }
 
+    // MARK: Tabs
+
+    @discardableResult
+    public func createGroup(named name: String, with tileId: String? = nil) -> String {
+        let id = groups.create(named: name)
+        if let tileId { groups.assign(tileId, to: id) }
+        filter = .group(id)
+        save()
+        return id
+    }
+
+    public func renameGroup(_ id: String, to name: String) {
+        groups.rename(id, to: name)
+        save()
+    }
+
+    public func deleteGroup(_ id: String) {
+        groups.delete(id)
+        if filter == .group(id) { filter = .all }
+        save()
+    }
+
+    /// Moves a tile into a tab, or back to All only when `groupId` is nil.
+    public func move(tile tileId: String, toGroup groupId: String?) {
+        guard info(tileId) != nil else { return }  // e.g. an account row dropped on a tab
+        groups.assign(tileId, to: groupId)
+        save()
+    }
+
+    /// Tiles in a tab, for its count and attention dot.
+    public func tiles(inGroup id: String) -> [TileInfo] {
+        let members = groups.members(of: id)
+        return allTiles.filter { members.contains($0.id) }
+    }
+
     private func insert(_ id: String) {
+        // Viewing a tab? New work belongs there.
+        if case .group(let g) = filter { groups.assign(id, to: g) }
         // New tiles land after the selection so related work clusters.
         if let sel = selectedId, let i = order.firstIndex(of: sel) {
             order.insert(id, at: i + 1)
@@ -132,7 +165,7 @@ public final class Workspace {
         if expandedId == id { collapse() }
         if let t = terminals.removeValue(forKey: id) { t.terminate() }
         if let b = browsers.removeValue(forKey: id) { b.webView.stopLoading() }
-        if agents.sessions[id] != nil { hiddenAgents[id] = Date() }
+        if agents.sessions[id] != nil { hiddenAgents[id] = Date() } else { groups.assign(id, to: nil) }
         if let i = order.firstIndex(of: id) {
             order.remove(at: i)
             if selectedId == id { selectedId = order.indices.contains(i) ? order[i] : order.last }
@@ -271,6 +304,7 @@ public final class Workspace {
         var tiles: [Tile]
         var defaultDirectory: String?
         var placeNativeWindows: Bool?
+        var groups: [TileGroup]?
     }
 
     private var saveURL: URL { directory.appendingPathComponent("workspace.json") }
@@ -281,7 +315,7 @@ public final class Workspace {
             if let b = browsers[id] { return .init(id: id, kind: .browser, url: b.url?.absoluteString) }
             return nil
         }
-        let saved = Saved(tiles: tiles, defaultDirectory: defaultDirectory, placeNativeWindows: placeNativeWindows)
+        let saved = Saved(tiles: tiles, defaultDirectory: defaultDirectory, placeNativeWindows: placeNativeWindows, groups: groups.list)
         if let data = try? JSONEncoder().encode(saved) { try? data.write(to: saveURL, options: .atomic) }
     }
 
@@ -289,6 +323,7 @@ public final class Workspace {
         guard let data = try? Data(contentsOf: saveURL), let saved = try? JSONDecoder().decode(Saved.self, from: data) else { return }
         defaultDirectory = saved.defaultDirectory ?? defaultDirectory
         placeNativeWindows = saved.placeNativeWindows ?? true
+        groups = TileGroups(saved.groups ?? [])
         // "Continue the latest conversation" only makes sense for one tile per tool and folder;
         // any others start fresh rather than all attaching to the same session.
         var resumed: Set<String> = []

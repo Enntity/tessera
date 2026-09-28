@@ -241,6 +241,20 @@ final class UsageAPITests: XCTestCase {
         XCTAssertEqual(r.headline, "9.50")
     }
 
+    func testRateLimitErrorsAreReadable() {
+        XCTAssertEqual(UsageAPI.Failure.http(429, "{}").localizedDescription, "Rate limited by the provider")
+        let body = #"{"type":"error","error":{"type":"invalid_request_error","message":"Bad key"}}"#
+        XCTAssertEqual(UsageAPI.Failure.http(400, body).localizedDescription, "HTTP 400: Bad key")
+    }
+
+    func testBackoffHonorsRetryAfterThenDoubles() {
+        XCTAssertEqual(UsageAPI.backoff(failures: 1, retryAfter: "120"), 120)
+        XCTAssertEqual(UsageAPI.backoff(failures: 1, retryAfter: nil), 300)
+        XCTAssertEqual(UsageAPI.backoff(failures: 3, retryAfter: nil), 1200)
+        XCTAssertEqual(UsageAPI.backoff(failures: 9, retryAfter: nil), 3600)
+        XCTAssertEqual(UsageAPI.minimumInterval(for: .claudePlan), 300)
+    }
+
     func testOpenAIRequestUsesMonthStart() {
         let config = UsageProviderConfig(id: "oa", kind: .openai)
         let req = UsageAPI.request(for: config, key: "sk-admin", now: Date())
@@ -293,5 +307,35 @@ final class TerminalSnapshotTests: XCTestCase {
         guard case .tile(let info) = back else { return XCTFail("wrong case") }
         XCTAssertEqual(info.activity, .needsInput)
         XCTAssertEqual(info.flavor, .claude)
+    }
+}
+
+final class TileGroupsTests: XCTestCase {
+    func testTileLivesInOneTabAndDeletingKeepsTiles() {
+        var g = TileGroups()
+        let a = g.create(named: "  Backend ")
+        let b = g.create(named: "")
+        XCTAssertEqual(g.list.map(\.name), ["Backend", "Tab 2"])
+        g.assign("t1", to: a)
+        g.assign("t1", to: b)
+        XCTAssertEqual(g.group(of: "t1")?.id, b)
+        XCTAssertTrue(g.members(of: a).isEmpty)
+        g.rename(b, to: "Research")
+        g.rename(b, to: "   ")
+        XCTAssertEqual(g.group(of: "t1")?.name, "Research")
+        g.assign("t1", to: nil)
+        XCTAssertNil(g.group(of: "t1"))
+        g.assign("t2", to: a)
+        g.delete(a)
+        XCTAssertNil(g.group(of: "t2"))
+        XCTAssertEqual(g.list.count, 1)
+    }
+
+    func testGroupsRoundTripThroughJSON() throws {
+        var g = TileGroups()
+        let a = g.create(named: "Web")
+        g.assign("w1", to: a)
+        let back = try JSONDecoder().decode(TileGroups.self, from: JSONEncoder().encode(g))
+        XCTAssertEqual(back, g)
     }
 }

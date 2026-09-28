@@ -185,6 +185,9 @@ public struct UsageRow: View {
                     ForEach(reading.lines, id: \.self) { line in
                         Text(line).font(Style.mono(9)).foregroundStyle(Style.dim).lineLimit(1)
                     }
+                    if let note = reading.message {
+                        Text(note).font(Style.mono(8.5)).foregroundStyle(Style.amber.opacity(0.8)).lineLimit(2)
+                    }
                 }
             }
             Spacer(minLength: 0)

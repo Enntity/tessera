@@ -79,11 +79,21 @@ struct EmptyBoard: View {
     @Environment(AppModel.self) private var model
     let filter: Workspace.Filter
 
+    private var title: String {
+        switch filter {
+        case .all: "An empty board."
+        case .attention: "Nothing needs you."
+        case .group: "An empty tab."
+        }
+    }
+
     var body: some View {
         VStack(spacing: 18) {
             TesseraGlyph().frame(width: 44, height: 44).opacity(0.8)
-            Text(filter == .attention ? "Nothing needs you." : "An empty board.")
-                .font(Style.ui(20, .semibold)).foregroundStyle(Style.ink)
+            Text(title).font(Style.ui(20, .semibold)).foregroundStyle(Style.ink)
+            if case .group = filter {
+                Text("Drag tiles onto this tab, or start one here with ⌘K.").font(Style.ui(13)).foregroundStyle(Style.dim)
+            }
             if filter == .all {
                 HStack(spacing: 10) {
                     ForEach(model.workspace.presets.prefix(4)) { preset in
@@ -220,8 +230,32 @@ struct TileView: View {
             Button("Restart") { workspace.restart(info.id) }
         }
         if info.attention { Button("Mark as Seen") { workspace.acknowledge(info.id) } }
+        Menu("Move to Tab") {
+            let current = workspace.groups.group(of: info.id)?.id
+            ForEach(workspace.groups.list) { group in
+                Button(group.name) { withAnimation(.spring(duration: 0.4)) { workspace.move(tile: info.id, toGroup: group.id) } }
+                    .disabled(group.id == current)
+            }
+            if !workspace.groups.list.isEmpty { Divider() }
+            Button("New Tab with This Tile") {
+                withAnimation(.spring(duration: 0.4)) {
+                    _ = workspace.createGroup(named: Self.suggestedTabName(info), with: info.id)
+                }
+            }
+            if current != nil {
+                Button("Remove from Tab") { withAnimation(.spring(duration: 0.4)) { workspace.move(tile: info.id, toGroup: nil) } }
+            }
+        }
         Divider()
         Button(info.kind == .agentSession ? "Hide" : "Close", role: .destructive) { workspace.close(info.id) }
+    }
+}
+
+extension TileView {
+    /// A new tab is named after the tile's folder or site; rename it from the tab's menu.
+    static func suggestedTabName(_ info: TileInfo) -> String {
+        let last = (info.subtitle as NSString).lastPathComponent
+        return last.isEmpty || last == "~" ? info.title : last
     }
 }
 
