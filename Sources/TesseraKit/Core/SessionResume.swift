@@ -82,6 +82,16 @@ public enum SessionResume {
         }
     }
 
+    /// A fresh start that still claims `sessionId` — for Claude/Grok sessions that were assigned but
+    /// never saved (no message was ever sent, so there is nothing to resume).
+    public static func freshLaunch(original: String, sessionId: String) -> String? {
+        guard let tool = tool(for: original), tool == .claude || tool == .grok, isSafeId(sessionId) else { return nil }
+        var words = ShellWords.split(original)
+        let exe = words.removeFirst()
+        words = strip(words, flags: ["--resume", "-r", "--session-id"], switches: ["--continue", "-c", "--fork-session"])
+        return ShellWords.join([exe] + words + ["--session-id", sessionId])
+    }
+
     /// Session ids are interpolated into shell commands; only plain ids pass.
     public static func isSafeId(_ id: String) -> Bool {
         !id.isEmpty && id.count <= 128 && id.allSatisfy { $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "-" || $0 == "_") }

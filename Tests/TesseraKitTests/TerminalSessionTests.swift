@@ -42,7 +42,8 @@ final class TerminalSessionTests: XCTestCase {
         let session = TerminalSession(command: "claude --model opus", cwd: NSTemporaryDirectory(),
                                       sessionId: "11111111-2222-3333-4444-555555555555", resuming: true, startSuspended: true)
         XCTAssertTrue(session.isSuspended)
-        XCTAssertEqual(session.resumeHint, "Resume runs: claude --model opus --resume 11111111-2222-3333-4444-555555555555")
+        // No transcript was ever saved for this id, so it starts fresh under the same id.
+        XCTAssertEqual(session.resumeHint, "Resume runs: claude --model opus --session-id 11111111-2222-3333-4444-555555555555")
         let duplicate = TerminalSession(command: "claude", cwd: NSTemporaryDirectory(), resuming: true,
                                         mayContinueLatest: false, startSuspended: true)
         XCTAssertEqual(duplicate.resumeHint, "Resume runs: claude")

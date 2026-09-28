@@ -39,3 +39,15 @@ public enum Keychain {
         return String(data: data, encoding: .utf8)
     }
 }
+
+public enum Preferences {
+    /// App preferences. A development instance pointed at its own data folder (TESSERA_DATA_DIR)
+    /// also gets its own preferences, so it can't change the settings of the Tessera you use.
+    public static let store: UserDefaults = {
+        #if DEBUG
+        if ProcessInfo.processInfo.environment["TESSERA_DATA_DIR"] != nil,
+           let dev = UserDefaults(suiteName: "org.enntity.tessera.dev") { return dev }
+        #endif
+        return .standard
+    }()
+}

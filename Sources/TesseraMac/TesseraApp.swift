@@ -47,8 +47,8 @@ final class AppModel {
     var showPalette = false
     var showSidebar = true
     /// Screenshot-safe: terminals, conversations and pages stay lively but unreadable.
-    var privacyMode = UserDefaults.standard.bool(forKey: "tessera.privacy") {
-        didSet { UserDefaults.standard.set(privacyMode, forKey: "tessera.privacy") }
+    var privacyMode = Preferences.store.bool(forKey: "tessera.privacy") {
+        didSet { Preferences.store.set(privacyMode, forKey: "tessera.privacy") }
     }
     /// The "connect an account" sheet in Settings; the sidebar's + opens it directly.
     var showAddAccount = false
@@ -68,7 +68,7 @@ final class AppModel {
         guard !started else { return }
         started = true
         workspace.start()
-        if UserDefaults.standard.bool(forKey: "tessera.remoteEnabled") { server.start() }
+        if Preferences.store.bool(forKey: "tessera.remoteEnabled") { server.start() }
         // UNUserNotificationCenter requires an app bundle; a bare `swift run` binary goes without.
         if Bundle.main.bundleIdentifier != nil {
             // Record every terminal's folder and conversation, then stop them, so next launch resumes.
@@ -143,7 +143,7 @@ final class AppModel {
     #endif
 
     func setRemote(_ on: Bool) {
-        UserDefaults.standard.set(on, forKey: "tessera.remoteEnabled")
+        Preferences.store.set(on, forKey: "tessera.remoteEnabled")
         on ? server.start() : server.stop()
     }
 

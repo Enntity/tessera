@@ -113,7 +113,7 @@ public final class TerminalSession: NSObject {
     }
 
     /// The command line this tile runs now: a fresh launch (with an assigned session id where the
-    /// tool allows), or — after it has run once — the tool's resume form.
+    /// tool allows), or — after it has run once — the resume form.
     private func commandToRun() -> String? {
         guard let command, !command.isEmpty else { return nil }
         if !hasStarted, sessionId == nil {
@@ -121,18 +121,33 @@ public final class TerminalSession: NSObject {
             sessionId = prepared.sessionId
             return prepared.command
         }
-        let id = sessionId
-        if id == nil, !mayContinueLatest { return command }
+        return resumeLine(for: command)
+    }
+
+    /// How `command` comes back into its conversation.
+    private func resumeLine(for command: String) -> String {
+        guard let id = sessionId else {
+            return mayContinueLatest ? SessionResume.resumeCommand(original: command, sessionId: nil) ?? command : command
+        }
+        // Claude only saves a conversation once a message is sent; an assigned id with no transcript
+        // can't be resumed, so start it fresh under the same id.
+        if SessionResume.tool(for: command) == .claude, !Self.claudeTranscriptExists(id),
+           let fresh = SessionResume.freshLaunch(original: command, sessionId: id) {
+            return fresh
+        }
         return SessionResume.resumeCommand(original: command, sessionId: id) ?? command
+    }
+
+    static func claudeTranscriptExists(_ id: String) -> Bool {
+        let projects = NSHomeDirectory() + "/.claude/projects"
+        let dirs = (try? FileManager.default.contentsOfDirectory(atPath: projects)) ?? []
+        return dirs.contains { FileManager.default.fileExists(atPath: "\(projects)/\($0)/\(id).jsonl") }
     }
 
     /// Shown on a shut-down tile: what Resume will run.
     public var resumeHint: String {
         guard let command, !command.isEmpty else { return "Resume opens a shell in \(cwd.abbreviatingHome)" }
-        let next = sessionId != nil || mayContinueLatest
-            ? SessionResume.resumeCommand(original: command, sessionId: sessionId) ?? command
-            : command
-        return "Resume runs: \(next)"
+        return "Resume runs: \(resumeLine(for: command))"
     }
 
     public func start() {

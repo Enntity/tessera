@@ -32,11 +32,11 @@ public final class HostServer {
             Keychain.set(fresh, account: "pairing-code")
             pairingCode = fresh
         }
-        if let id = UserDefaults.standard.string(forKey: "tessera.hostId") {
+        if let id = Preferences.store.string(forKey: "tessera.hostId") {
             hostId = id
         } else {
             hostId = UUID().uuidString
-            UserDefaults.standard.set(hostId, forKey: "tessera.hostId")
+            Preferences.store.set(hostId, forKey: "tessera.hostId")
         }
         workspace.onTilesChanged = { [weak self] in self?.broadcastTiles() }
     }

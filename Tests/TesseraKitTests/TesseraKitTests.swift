@@ -419,6 +419,12 @@ final class SessionResumeTests: XCTestCase {
         XCTAssertEqual(SessionResume.resumeCommand(original: "claude", sessionId: "x; rm -rf ~"), "claude --continue")
     }
 
+    func testFreshLaunchReclaimsUnsavedId() {
+        XCTAssertEqual(SessionResume.freshLaunch(original: "claude --model opus --resume x", sessionId: fixedId),
+                       "claude --model opus --session-id \(fixedId)")
+        XCTAssertNil(SessionResume.freshLaunch(original: "codex", sessionId: fixedId))
+    }
+
     func testShellWordsRoundTrip() {
         let words = ShellWords.split(#"claude --append-system-prompt "be brief, it's fine" -x 'a b'"#)
         XCTAssertEqual(words, ["claude", "--append-system-prompt", "be brief, it's fine", "-x", "a b"])
