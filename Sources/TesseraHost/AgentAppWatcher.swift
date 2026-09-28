@@ -91,7 +91,7 @@ final class TranscriptScanner: @unchecked Sendable {
     private let home = URL(fileURLWithPath: NSHomeDirectory())
     private var tails: [String: Tail] = [:]
     private var claudeTranscriptIndex: [String: String] = [:]
-    private var codexHeads: [String: (originator: String, id: String, cwd: String, isSubagent: Bool)] = [:]
+    private var codexHeads: [String: CodexRolloutHead] = [:]
     private var codexTitles: [String: String] = [:]
     private var codexIndexModified: Date = .distantPast
     private var lastRateLimitScan: Date = .distantPast
@@ -184,29 +184,11 @@ final class TranscriptScanner: @unchecked Sendable {
 
     // MARK: Codex desktop
 
-    private func recentCodexFiles(lookback: TimeInterval, now: Date) -> [(path: String, modified: Date)] {
-        let root = home.appendingPathComponent(".codex/sessions")
-        let cal = Calendar.current
-        let days = max(1, Int(lookback / 86_400) + 1)
-        var files: [(String, Date)] = []
-        for back in 0...days {
-            guard let day = cal.date(byAdding: .day, value: -back, to: now) else { continue }
-            let c = cal.dateComponents([.year, .month, .day], from: day)
-            let dir = root.appendingPathComponent(String(format: "%04d/%02d/%02d", c.year!, c.month!, c.day!))
-            for name in (try? fm.contentsOfDirectory(atPath: dir.path)) ?? [] where name.hasSuffix(".jsonl") {
-                let path = dir.appendingPathComponent(name).path
-                let modified = ((try? fm.attributesOfItem(atPath: path))?[.modificationDate] as? Date) ?? .distantPast
-                if now.timeIntervalSince(modified) < lookback { files.append((path, modified)) }
-            }
-        }
-        return files.sorted { $0.1 > $1.1 }
-    }
-
     private func scanCodexDesktop(lookback: TimeInterval, now: Date) -> [AgentAppSession] {
         refreshCodexTitles()
         var out: [AgentAppSession] = []
-        for (path, _) in recentCodexFiles(lookback: lookback, now: now) {
-            guard let head = codexHead(path), head.originator.localizedCaseInsensitiveContains("desktop"), !head.isSubagent,
+        for (path, _) in CodexRollouts.recentFiles(lookback: lookback, now: now) {
+            guard let head = codexHead(path), head.isDesktop, !head.isSubagent,
                   Self.isSafeId(head.id) else { continue }
             let tail = tails[path] ?? Tail(parser: .codex(CodexTranscriptParser()))
             tails[path] = tail
@@ -224,17 +206,9 @@ final class TranscriptScanner: @unchecked Sendable {
         return out
     }
 
-    /// The first line (session_meta) identifies which app wrote the rollout. It can be large, so cap the read.
-    private func codexHead(_ path: String) -> (originator: String, id: String, cwd: String, isSubagent: Bool)? {
+    private func codexHead(_ path: String) -> CodexRolloutHead? {
         if let hit = codexHeads[path] { return hit }
-        guard let handle = FileHandle(forReadingAtPath: path) else { return nil }
-        defer { try? handle.close() }
-        let data = handle.readData(ofLength: 512 * 1024)
-        guard let newline = data.firstIndex(of: 0x0A) else { return nil }
-        var parser = CodexTranscriptParser()
-        parser.ingest(line: Substring(String(decoding: data[..<newline], as: UTF8.self)))
-        guard let originator = parser.originator, let id = parser.sessionId else { return nil }
-        let head = (originator, id, parser.cwd ?? "", parser.isSubagent)
+        guard let head = CodexRollouts.readHead(path) else { return nil }
         codexHeads[path] = head
         return head
     }
@@ -254,7 +228,7 @@ final class TranscriptScanner: @unchecked Sendable {
 
     /// ChatGPT-plan limits are only present in sessions signed in with ChatGPT; take the newest one that has them.
     private func scanCodexRateLimits(now: Date) -> CodexRateLimits? {
-        for (path, _) in recentCodexFiles(lookback: 7 * 86_400, now: now).prefix(12) {
+        for (path, _) in CodexRollouts.recentFiles(lookback: 7 * 86_400, now: now).prefix(12) {
             guard let handle = FileHandle(forReadingAtPath: path) else { continue }
             defer { try? handle.close() }
             let size = (try? handle.seekToEnd()) ?? 0

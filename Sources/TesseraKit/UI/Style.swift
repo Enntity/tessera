@@ -75,3 +75,24 @@ public extension Int {
         }
     }
 }
+
+private struct PrivacyKey: EnvironmentKey {
+    static let defaultValue = false
+}
+
+public extension EnvironmentValues {
+    /// Privacy mode: content keeps its shape and motion but can't be read (for screenshots and video).
+    var tesseraPrivacy: Bool {
+        get { self[PrivacyKey.self] }
+        set { self[PrivacyKey.self] = newValue }
+    }
+}
+
+public extension String {
+    /// Privacy mode: every word becomes a solid bar of the same length, keeping the shape and color
+    /// of the text but none of its content — the same look as a terminal minimap.
+    func obscured(_ on: Bool) -> String {
+        guard on else { return self }
+        return String(map { $0.isWhitespace ? $0 : "▆" })
+    }
+}

@@ -46,6 +46,10 @@ final class AppModel {
     @ObservationIgnored lazy var server = HostServer(workspace: workspace)
     var showPalette = false
     var showSidebar = true
+    /// Screenshot-safe: terminals, conversations and pages stay lively but unreadable.
+    var privacyMode = UserDefaults.standard.bool(forKey: "tessera.privacy") {
+        didSet { UserDefaults.standard.set(privacyMode, forKey: "tessera.privacy") }
+    }
     /// The "connect an account" sheet in Settings; the sidebar's + opens it directly.
     var showAddAccount = false
     /// The "watch a machine" sheet in Settings → Machines.
@@ -67,7 +71,11 @@ final class AppModel {
         if UserDefaults.standard.bool(forKey: "tessera.remoteEnabled") { server.start() }
         // UNUserNotificationCenter requires an app bundle; a bare `swift run` binary goes without.
         if Bundle.main.bundleIdentifier != nil {
-            notifier = AttentionNotifier { [weak self] id in self?.open(id) }
+            // Record every terminal's folder and conversation, then stop them, so next launch resumes.
+        NotificationCenter.default.addObserver(forName: NSApplication.willTerminateNotification, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.workspace.prepareForQuit() }
+        }
+        notifier = AttentionNotifier { [weak self] id in self?.open(id) }
         }
         Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated {
@@ -100,6 +108,7 @@ final class AppModel {
             case "launch": workspace.launch(command: parts.count > 1 ? parts[1] : nil)
             case "url": if parts.count > 1 { workspace.openBrowser(parts[1]) }
             case "palette": showPalette = true
+            case "privacy": privacyMode = true
             case "machine": if parts.count > 1 { workspace.machines.add(host: parts[1], name: nil) }
             case "remote": server.start() // not persisted: normal launches keep the user's setting
             case "pairurl":
@@ -216,10 +225,19 @@ struct BoardCommands: Commands {
             Button("Previous Tile") { model.cycle(-1) }
                 .keyboardShortcut("[")
             Divider()
-            Button(model.showSidebar ? "Hide Accounts" : "Show Accounts") {
+            Button(model.privacyMode ? "Turn Off Privacy Mode" : "Privacy Mode") {
+                withAnimation(.easeInOut(duration: 0.25)) { model.privacyMode.toggle() }
+            }
+            .keyboardShortcut("p", modifiers: [.command, .shift])
+                        Button(model.showSidebar ? "Hide Accounts" : "Show Accounts") {
                 withAnimation(.spring(duration: 0.3)) { model.showSidebar.toggle() }
             }
             .keyboardShortcut("\\")
+            Divider()
+            Button("Shut Down All Terminals") { model.workspace.shutDownAll() }
+                .keyboardShortcut("w", modifiers: [.command, .option, .shift])
+            Button("Resume All Terminals") { model.workspace.resumeAll() }
+                .keyboardShortcut("r", modifiers: [.command, .option, .shift])
             Divider()
             Button("Show All") { show(.all) }.keyboardShortcut("1")
             Button("Show Needs You") { show(.attention) }.keyboardShortcut("2")

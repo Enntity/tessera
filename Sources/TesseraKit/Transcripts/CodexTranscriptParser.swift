@@ -13,6 +13,7 @@ public struct CodexTranscriptParser: TranscriptParser {
     public private(set) var sessionId: String?
     /// Guardian reviews and spawned helpers are threads too, but not ones the user started.
     public private(set) var isSubagent = false
+    public private(set) var startedAt: Date?
     public private(set) var rateLimits: CodexRateLimits?
 
     private var turnOpen = false
@@ -34,6 +35,7 @@ public struct CodexTranscriptParser: TranscriptParser {
             cwd = payload["cwd"] as? String
             originator = payload["originator"] as? String
             sessionId = payload["id"] as? String ?? payload["session_id"] as? String
+            startedAt = TranscriptSupport.date(payload["timestamp"]) ?? ts
             let threadSource = payload["thread_source"] as? String
             isSubagent = (threadSource != nil && threadSource != "user") || (payload["source"] as? [String: Any])?["subagent"] != nil
         case "turn_context":

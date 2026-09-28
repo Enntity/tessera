@@ -3,6 +3,7 @@ import SwiftUI
 /// The chrome around every tile: identity, state, and an attention signal you can catch in
 /// peripheral vision across a large screen.
 public struct TileCard<Content: View>: View {
+    @Environment(\.tesseraPrivacy) private var privacy
     let info: TileInfo
     let isSelected: Bool
     let compact: Bool
@@ -63,7 +64,7 @@ public struct TileCard<Content: View>: View {
 
     private var footer: some View {
         HStack(spacing: 6) {
-            Text(info.detail ?? info.subtitle)
+            Text(info.detail.map { $0.obscured(privacy) } ?? info.subtitle)
                 .font(Style.mono(9.5))
                 .foregroundStyle(info.detail != nil && info.activity.isAttention ? Style.state(info.activity) : Style.dim)
                 .lineLimit(1)

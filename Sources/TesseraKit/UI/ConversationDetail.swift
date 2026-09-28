@@ -12,6 +12,7 @@ public struct Tag: View {
 }
 
 public struct ConversationDetail: View {
+    @Environment(\.tesseraPrivacy) private var privacy
     let snapshot: ConversationSnapshot?
     let flavor: AgentFlavor
 
@@ -48,19 +49,19 @@ public struct ConversationDetail: View {
         case .user:
             HStack {
                 Spacer(minLength: 80)
-                Text(item.text).font(Style.ui(13)).foregroundStyle(Style.ink).textSelection(.enabled)
+                Text(item.text.obscured(privacy)).font(Style.ui(13)).foregroundStyle(Style.ink).textSelection(.enabled)
                     .padding(.horizontal, 12).padding(.vertical, 8)
                     .background(Style.accent(flavor).opacity(0.16), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
             }
         case .assistant:
-            Text(LocalizedStringKey(item.text)).font(Style.ui(13)).foregroundStyle(Style.ink.opacity(0.92)).textSelection(.enabled)
+            (privacy ? Text(item.text.obscured(true)) : Text(LocalizedStringKey(item.text))).font(Style.ui(13)).foregroundStyle(Style.ink.opacity(0.92)).textSelection(.enabled)
         case .tool, .toolResult:
             HStack(alignment: .firstTextBaseline, spacing: 6) {
                 Image(systemName: item.role == .tool ? "chevron.right.2" : (item.isError ? "exclamationmark.triangle" : "arrow.turn.down.right"))
                     .font(.system(size: 9, weight: .bold))
                     .foregroundStyle(item.isError ? Style.coral : Style.accent(flavor))
                 if let name = item.toolName { Text(name).font(Style.mono(11, .semibold)).foregroundStyle(Style.dim) }
-                Text(item.text).font(Style.mono(11)).foregroundStyle(Style.faint).lineLimit(2).textSelection(.enabled)
+                Text(item.text.obscured(privacy)).font(Style.mono(11)).foregroundStyle(Style.faint).lineLimit(2).textSelection(.enabled)
             }
         case .thinking, .system:
             EmptyView()

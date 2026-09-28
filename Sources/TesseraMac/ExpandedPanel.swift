@@ -60,6 +60,12 @@ struct PanelContent: View {
                 case .terminal:
                     if let session = workspace.terminals[id] {
                         ReparentHost(view: session.view, focus: true)
+                            .overlay {
+                                // Same minimap look as the tiles; the live terminal underneath keeps the keyboard.
+                                if model.privacyMode {
+                                    TerminalTileContent(session: session).allowsHitTesting(false)
+                                }
+                            }
                             .padding(.horizontal, 8)
                             .padding(.vertical, 6)
                             .background(Style.terminalBackground)
@@ -67,6 +73,7 @@ struct PanelContent: View {
                 case .browser:
                     if let browser = workspace.browsers[id] {
                         ReparentHost(view: browser.webView, focus: true)
+                            .overlay { if model.privacyMode { PrivateWebCover(browser: browser) } }
                     }
                 case .agentSession:
                     AgentPanel(id: id, frame: frame)
@@ -113,7 +120,12 @@ struct PanelHeader: View {
                 Text("\(cols)×\(rows)").font(Style.mono(10)).foregroundStyle(Style.faint)
             }
             if info.kind == .terminal {
-                headerButton("arrow.clockwise", "Restart") { workspace.restart(info.id) }
+                if workspace.terminals[info.id]?.isSuspended == true {
+                    headerButton("play.fill", "Resume") { workspace.resume(info.id) }
+                } else {
+                    headerButton("power", "Shut down (keeps the conversation for Resume)") { workspace.shutDown(info.id) }
+                    headerButton("arrow.clockwise", "Restart") { workspace.restart(info.id) }
+                }
             }
             if info.kind == .browser, let url = workspace.browsers[info.id]?.url {
                 headerButton("safari", "Open in default browser") { NSWorkspace.shared.open(url) }

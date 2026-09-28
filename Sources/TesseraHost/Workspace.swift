@@ -26,6 +26,8 @@ public final class Workspace {
     public private(set) var groups = TileGroups()
     /// Snap the Claude / Codex window onto the tile when an app session is opened.
     public var placeNativeWindows = true
+    /// Bring terminals back into their conversations when Tessera opens (else they wait, shut down).
+    public var resumeOnLaunch = true
     public var defaultDirectory: String = NSHomeDirectory()
 
     /// Emits whenever tile membership, order, or any tile's metadata changes (for remote clients).
@@ -182,6 +184,33 @@ public final class Workspace {
         save()
     }
 
+    /// Stop a terminal but keep its tile and conversation for later.
+    public func shutDown(_ id: String) {
+        terminals[id]?.shutDown()
+        save()
+    }
+
+    public func resume(_ id: String) {
+        terminals[id]?.resume()
+        save()
+    }
+
+    public func shutDownAll() {
+        for t in terminals.values where !t.isSuspended { t.shutDown() }
+        save()
+    }
+
+    public func resumeAll() {
+        for id in order { if let t = terminals[id], t.isSuspended { t.resume() } }
+        save()
+    }
+
+    /// On quit: record every terminal's folder and conversation, then stop them cleanly.
+    public func prepareForQuit() {
+        save()
+        for t in terminals.values { t.terminate() }
+    }
+
     public func restart(_ id: String) {
         terminals[id]?.restart()
         browsers[id]?.webView.reload()
@@ -280,6 +309,7 @@ public final class Workspace {
         tickCount &+= 1
         let now = Date()
         for t in terminals.values { t.tick(now: now) }
+        if tickCount % 30 == 0 { bindCodexSessions(now: now) }
         if tickCount % 5 == 0 {
             syncAgents()
             if usage.codexRateLimits != agents.codexRateLimits { usage.codexRateLimits = agents.codexRateLimits }
@@ -287,6 +317,33 @@ public final class Workspace {
             if tiles != lastPublished {
                 lastPublished = tiles
                 onTilesChanged?()
+            }
+        }
+    }
+
+    // MARK: Session binding
+
+    @ObservationIgnored private var binding = false
+
+    /// Codex can't be told a session id at launch, so adopt the rollout a new Codex tile writes.
+    private func bindCodexSessions(now: Date) {
+        guard !binding else { return }
+        let waiting = terminals.values.filter {
+            $0.isRunning && $0.sessionId == nil && now.timeIntervalSince($0.launchedAt) < 600
+                && $0.command.flatMap(SessionResume.tool(for:)) == .codex
+        }
+        guard !waiting.isEmpty else { return }
+        let candidates = waiting.map { CodexRollouts.Candidate(tileId: $0.id, cwd: $0.cwd, launchedAt: $0.launchedAt) }
+        let claimed = Set(terminals.values.compactMap(\.sessionId))
+        binding = true
+        DispatchQueue.global(qos: .utility).async {
+            let found = CodexRollouts.bind(candidates, claimed: claimed)
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    self.binding = false
+                    for (tile, session) in found { self.terminals[tile]?.bind(sessionId: session) }
+                    if !found.isEmpty { self.save() }
+                }
             }
         }
     }
@@ -301,22 +358,29 @@ public final class Workspace {
             var cwd: String?
             var title: String?
             var url: String?
+            var sessionId: String?
+            var suspended: Bool?
         }
         var tiles: [Tile]
         var defaultDirectory: String?
         var placeNativeWindows: Bool?
         var groups: [TileGroup]?
+        var resumeOnLaunch: Bool?
     }
 
     private var saveURL: URL { directory.appendingPathComponent("workspace.json") }
 
     public func save() {
         let tiles: [Saved.Tile] = order.compactMap { id in
-            if let t = terminals[id] { return .init(id: id, kind: .terminal, command: t.command, cwd: t.cwd, title: t.customTitle) }
+            if let t = terminals[id] {
+                return .init(id: id, kind: .terminal, command: t.command, cwd: t.liveDirectory() ?? t.cwd, title: t.customTitle,
+                             sessionId: t.sessionId, suspended: t.isSuspended)
+            }
             if let b = browsers[id] { return .init(id: id, kind: .browser, url: b.url?.absoluteString) }
             return nil
         }
-        let saved = Saved(tiles: tiles, defaultDirectory: defaultDirectory, placeNativeWindows: placeNativeWindows, groups: groups.list)
+        let saved = Saved(tiles: tiles, defaultDirectory: defaultDirectory, placeNativeWindows: placeNativeWindows,
+                          groups: groups.list, resumeOnLaunch: resumeOnLaunch)
         if let data = try? JSONEncoder().encode(saved) { try? data.write(to: saveURL, options: .atomic) }
     }
 
@@ -325,17 +389,19 @@ public final class Workspace {
         defaultDirectory = saved.defaultDirectory ?? defaultDirectory
         placeNativeWindows = saved.placeNativeWindows ?? true
         groups = TileGroups(saved.groups ?? [])
-        // "Continue the latest conversation" only makes sense for one tile per tool and folder;
-        // any others start fresh rather than all attaching to the same session.
-        var resumed: Set<String> = []
+        resumeOnLaunch = saved.resumeOnLaunch ?? true
+        // Tiles without a known session id may fall back to "continue the latest", but only one per
+        // tool and folder — otherwise they'd all attach to the same conversation.
+        var continuing: Set<String> = []
         for tile in saved.tiles {
             switch tile.kind {
             case .terminal:
                 let cwd = tile.cwd.flatMap { FileManager.default.fileExists(atPath: $0) ? $0 : nil } ?? defaultDirectory
-                var command = tile.command
-                if let c = command, resumed.insert(c + "@" + cwd).inserted { command = Self.resumeCommand(c) }
-                // Title by what the user launched, not the resume flags added here.
-                let s = TerminalSession(id: tile.id, command: command, cwd: cwd, title: tile.title, label: tile.command)
+                let known = tile.sessionId ?? tile.command.flatMap(SessionResume.sessionId(in:))
+                let mayContinue = known != nil || tile.command.map { continuing.insert($0 + "@" + cwd).inserted } ?? true
+                let s = TerminalSession(id: tile.id, command: tile.command, cwd: cwd, title: tile.title, label: tile.command,
+                                        sessionId: known, resuming: true, mayContinueLatest: mayContinue,
+                                        startSuspended: tile.suspended == true || !resumeOnLaunch)
                 terminals[s.id] = s
                 order.append(s.id)
             case .browser:
@@ -349,16 +415,6 @@ public final class Workspace {
             }
         }
         selectedId = order.first
-    }
-
-    /// Relaunching an agent CLI should pick the conversation back up rather than start blank.
-    static func resumeCommand(_ command: String?) -> String? {
-        guard let command else { return nil }
-        switch command.trimmingCharacters(in: .whitespaces) {
-        case "claude": return "claude --continue"
-        case "codex": return "codex resume --last"
-        default: return command
-        }
     }
 
     static func normalizeURL(_ raw: String) -> URL? {

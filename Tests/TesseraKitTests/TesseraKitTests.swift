@@ -384,3 +384,44 @@ final class RemoteVitalsTests: XCTestCase {
         XCTAssertTrue(MachineConfig.isValidHost("me@10.0.0.4"))
     }
 }
+
+final class SessionResumeTests: XCTestCase {
+    let fixedId = "11111111-2222-3333-4444-555555555555"
+
+    func testClaudeGetsAssignedIdAndResumesIt() {
+        let (run, id) = SessionResume.prepareLaunch("claude --model opus", newId: { self.fixedId })
+        XCTAssertEqual(run, "claude --model opus --session-id \(fixedId)")
+        XCTAssertEqual(id, fixedId)
+        XCTAssertEqual(SessionResume.resumeCommand(original: "claude --model opus", sessionId: fixedId),
+                       "claude --model opus --resume \(fixedId)")
+        XCTAssertEqual(SessionResume.resumeCommand(original: "claude -c", sessionId: nil), "claude --continue")
+    }
+
+    func testCommandsThatAlreadyPickASessionAreLeftAlone() {
+        XCTAssertEqual(SessionResume.prepareLaunch("claude --continue").command, "claude --continue")
+        XCTAssertNil(SessionResume.prepareLaunch("claude -p hi").sessionId)
+        XCTAssertEqual(SessionResume.prepareLaunch("claude --resume abc-1").sessionId, "abc-1")
+        XCTAssertNil(SessionResume.sessionId(in: "claude --resume abc --fork-session"))
+        XCTAssertEqual(SessionResume.prepareLaunch("npm test").command, "npm test")
+    }
+
+    func testCodexResumeKeepsFlagsAndSkipsNonSessionSubcommands() {
+        XCTAssertEqual(SessionResume.resumeCommand(original: "codex -m gpt-6", sessionId: "01a0-x"), "codex resume 01a0-x -m gpt-6")
+        XCTAssertEqual(SessionResume.resumeCommand(original: "codex resume old --last", sessionId: nil), "codex resume --last")
+        XCTAssertEqual(SessionResume.sessionId(in: "codex resume 01a0-x"), "01a0-x")
+        XCTAssertNil(SessionResume.resumeCommand(original: "codex exec 'do it'", sessionId: "x"))
+    }
+
+    func testOtherToolsAndUnsafeIds() {
+        XCTAssertEqual(SessionResume.resumeCommand(original: "opencode", sessionId: "ses_1"), "opencode -s ses_1")
+        XCTAssertEqual(SessionResume.resumeCommand(original: "omp", sessionId: nil), "omp -c")
+        XCTAssertNil(SessionResume.resumeCommand(original: "gemini", sessionId: nil))
+        XCTAssertEqual(SessionResume.resumeCommand(original: "claude", sessionId: "x; rm -rf ~"), "claude --continue")
+    }
+
+    func testShellWordsRoundTrip() {
+        let words = ShellWords.split(#"claude --append-system-prompt "be brief, it's fine" -x 'a b'"#)
+        XCTAssertEqual(words, ["claude", "--append-system-prompt", "be brief, it's fine", "-x", "a b"])
+        XCTAssertEqual(ShellWords.split(ShellWords.join(words)), words)
+    }
+}

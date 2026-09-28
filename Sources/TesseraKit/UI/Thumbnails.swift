@@ -6,21 +6,23 @@ public struct TerminalThumbnail: View, Equatable {
     let terminal: Terminal
     let revision: Int
     var showCursor: Bool
+    var obscured: Bool
 
-    public init(terminal: Terminal, revision: Int, showCursor: Bool = true) {
+    public init(terminal: Terminal, revision: Int, showCursor: Bool = true, obscured: Bool = false) {
         self.terminal = terminal
         self.revision = revision
         self.showCursor = showCursor
+        self.obscured = obscured
     }
 
     public static func == (a: Self, b: Self) -> Bool {
-        a.terminal === b.terminal && a.revision == b.revision && a.showCursor == b.showCursor
+        a.terminal === b.terminal && a.revision == b.revision && a.showCursor == b.showCursor && a.obscured == b.obscured
     }
 
     public var body: some View {
         Canvas(rendersAsynchronously: false) { ctx, size in
             ctx.withCGContext { cg in
-                SharedRenderer.instance.draw(terminal, in: cg, size: size, showCursor: showCursor)
+                SharedRenderer.instance.draw(terminal, in: cg, size: size, showCursor: showCursor, obscured: obscured)
             }
         }
         .background(Style.terminalBackground)
@@ -35,6 +37,7 @@ enum SharedRenderer {
 /// A desktop-app conversation as a living card: latest exchange, tool activity, and a typing
 /// indicator while the agent works.
 public struct ConversationThumbnail: View {
+    @Environment(\.tesseraPrivacy) private var privacy
     let snapshot: ConversationSnapshot?
     let flavor: AgentFlavor
     var maxItems: Int
@@ -74,7 +77,7 @@ public struct ConversationThumbnail: View {
         case .user:
             HStack {
                 Spacer(minLength: 24 * fontScale)
-                Text(item.text.preview(220))
+                Text(item.text.preview(220).obscured(privacy))
                     .font(Style.ui(10 * fontScale))
                     .foregroundStyle(Style.ink)
                     .lineLimit(3)
@@ -83,7 +86,7 @@ public struct ConversationThumbnail: View {
                     .background(Style.accent(flavor).opacity(0.18), in: RoundedRectangle(cornerRadius: 7 * fontScale, style: .continuous))
             }
         case .assistant:
-            Text(item.text.preview(400))
+            Text(item.text.preview(400).obscured(privacy))
                 .font(Style.ui(10 * fontScale))
                 .foregroundStyle(Style.ink.opacity(0.9))
                 .lineLimit(4)
@@ -95,7 +98,7 @@ public struct ConversationThumbnail: View {
                 Text(item.toolName ?? "tool")
                     .font(Style.mono(8.5 * fontScale, .semibold))
                     .foregroundStyle(Style.dim)
-                Text(item.text)
+                Text(item.text.obscured(privacy))
                     .font(Style.mono(8.5 * fontScale))
                     .foregroundStyle(Style.faint)
                     .lineLimit(1)

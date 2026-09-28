@@ -48,6 +48,7 @@ public struct MachineChip: View {
             if let m = vitals.memory, let total = vitals.memoryTotalGB {
                 parts.append("\(Int((m * total).rounded()))/\(Int(total.rounded()))G")
             }
+            if let w = vitals.gpuPowerW { parts.append("\(Int(w.rounded()))W") }
             if compact, let c = vitals.cpu { parts.append("\(Int((c * 100).rounded()))%") }
             return parts.joined(separator: " · ")
         }
@@ -69,7 +70,7 @@ public struct MachineChip: View {
         lines.append(cpu)
         var gpu = "GPU \(pct(vitals.gpu))"
         if let name = vitals.gpuName { gpu += " · \(name)" }
-        if let w = vitals.gpuPowerW { gpu += String(format: " · %.1f W", w) }
+        if let w = vitals.gpuPowerW { gpu += String(format: " · %.1f W GPU power", w) }
         lines.append(gpu)
         if let m = vitals.memory, let total = vitals.memoryTotalGB {
             lines.append(String(format: "Memory %@ · %.1f of %.0f GB", pct(m), m * total, total))

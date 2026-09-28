@@ -75,6 +75,14 @@ public struct TerminalActivityTracker: Sendable {
         if activity == .failed, !isBeingViewed { attention = true }
     }
 
+    /// Deliberately stopped: quiet, no attention, and a note on how it comes back.
+    public mutating func noteSuspended(resumeHint: String) {
+        exited = true
+        activity = .exited
+        attention = false
+        detail = resumeHint
+    }
+
     public mutating func restart() {
         self = TerminalActivityTracker()
     }

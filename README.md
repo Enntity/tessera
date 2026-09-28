@@ -25,7 +25,15 @@ Native macOS app, with a focused iOS companion built on the same core.
   DeepSeek, Moonshot, OpenAI and Anthropic (admin-key spend vs. budget), xAI, ChatGPT/Codex plan
   limits (from local Codex logs), Claude plan limits (opt-in, uses Claude Code's sign-in), and a
   custom provider for any JSON balance endpoint. Keys live in the login Keychain.
-- **HUD.** Counts of working / done / needs-you, filters, CPU and memory sparkline, clock.
+- **Tabs.** All · Needs you · your own tabs. Drag tiles onto a tab (or Move to Tab); new tiles land
+  in the tab you're viewing; each tab shows a count and an attention dot. ⌘1…9 switch.
+- **Machines.** Top-bar chips for this Mac and any SSH hosts (e.g. DGX Sparks): CPU / GPU / memory
+  bars, hottest temperature, GPU watts; hover for details, click a remote to open an ssh tile.
+- **Shut down & resume.** Claude Code and Grok tiles launch with an assigned `--session-id`; Codex
+  tiles are matched to the session log they write; opencode/omp continue their latest. Shut a tile
+  down (or all, ⌥⇧⌘W) and Resume brings back the same conversation — also after quitting Tessera.
+- **Privacy mode (⇧⌘P).** For screenshots and video: terminals draw as colored block minimaps,
+  conversation text becomes word-length bars, web pages a coarse mosaic. Everything keeps moving.
 - **iPhone / iPad.** Pair by scanning the QR code in Settings → iPhone with the Camera. The phone
   gets a "Needs you" queue, live mini tiles, a terminal view (reader mode that re-wraps text, or
   the exact screen with pinch-zoom), one-tap answers (`1 2 3 y n ⏎`, esc, ^C, arrows), transcripts,

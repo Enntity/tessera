@@ -27,6 +27,7 @@ struct DashboardView: View {
                     .zIndex(20)
             }
         }
+        .environment(\.tesseraPrivacy, model.privacyMode)
         .coordinateSpace(name: "window")
         .background(WindowAccessor { model.window = $0 })
         .ignoresSafeArea()
@@ -122,6 +123,14 @@ struct HUDBar: View {
             }
             .buttonStyle(.plain)
             Button {
+                withAnimation(.easeInOut(duration: 0.25)) { model.privacyMode.toggle() }
+            } label: {
+                Image(systemName: model.privacyMode ? "eye.slash.fill" : "eye")
+                    .foregroundStyle(model.privacyMode ? Style.amber : Style.dim)
+            }
+            .buttonStyle(.plain)
+            .help("Privacy mode (⇧⌘P): terminals and conversations stay lively but unreadable")
+                        Button {
                 withAnimation(.spring(duration: 0.3)) { model.showSidebar.toggle() }
             } label: {
                 Image(systemName: "sidebar.right").foregroundStyle(model.showSidebar ? Style.ink : Style.dim)

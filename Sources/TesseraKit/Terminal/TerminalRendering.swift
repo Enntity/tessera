@@ -63,7 +63,8 @@ public final class MiniTerminalRenderer {
     }
 
     /// `ctx` must be in a top-left-origin, y-down coordinate space (SwiftUI Canvas, flipped NSView, UIView).
-    public func draw(_ terminal: Terminal, in ctx: CGContext, size: CGSize, showCursor: Bool = true) {
+    /// `obscured` always draws the block minimap, however large the cells — privacy mode.
+    public func draw(_ terminal: Terminal, in ctx: CGContext, size: CGSize, showCursor: Bool = true, obscured: Bool = false) {
         ctx.setFillColor(color(theme.background))
         ctx.fill(CGRect(origin: .zero, size: size))
         let cols = terminal.cols, rows = terminal.rows
@@ -71,7 +72,7 @@ public final class MiniTerminalRenderer {
         guard cell.width > 0.2 else { return }
         // Anchor to the bottom: that's where agents print their latest state.
         let yOffset = max(0, size.height - cell.height * CGFloat(rows))
-        let asText = cell.height >= textThreshold
+        let asText = cell.height >= textThreshold && !obscured
         let font = asText ? self.font(size: cell.height * 0.78) : nil
 
         for row in 0..<rows {

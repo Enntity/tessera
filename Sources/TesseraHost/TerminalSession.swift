@@ -11,8 +11,19 @@ import TesseraKit
 @MainActor
 public final class TerminalSession: NSObject {
     public let id: String
+    /// What the user launched (never rewritten with session flags); resume commands derive from it.
     public var command: String?
     public var cwd: String
+    /// The agent conversation this tile is in, when known (assigned at launch, parsed from the
+    /// command, or bound from the tool's session log).
+    public private(set) var sessionId: String?
+    /// Shut down by the user (or restored that way); Resume brings the conversation back.
+    public private(set) var isSuspended = false
+    /// With no known session id, may resuming fall back to the tool's "continue latest"?
+    /// Only one tile per tool and folder should, or they'd all attach to the same conversation.
+    @ObservationIgnored public var mayContinueLatest = true
+    @ObservationIgnored public private(set) var launchedAt = Date()
+    @ObservationIgnored private var hasStarted = false
     public let flavor: AgentFlavor
     public private(set) var title: String
     public var customTitle: String?
@@ -41,10 +52,14 @@ public final class TerminalSession: NSObject {
     /// `label` names the tile until the program sets its own title (defaults to the command);
     /// `title` is a user-chosen name that always wins.
     public init(id: String = UUID().uuidString, command: String?, cwd: String, title: String? = nil, label: String? = nil,
+                sessionId: String? = nil, resuming: Bool = false, mayContinueLatest: Bool = true, startSuspended: Bool = false,
                 initialSize: CGSize = CGSize(width: 1180, height: 740)) {
         self.id = id
         self.command = command
         self.cwd = cwd
+        self.sessionId = sessionId ?? command.flatMap(SessionResume.sessionId(in:))
+        self.hasStarted = resuming
+        self.mayContinueLatest = mayContinueLatest
         self.flavor = AgentFlavor.infer(fromCommand: command)
         let initial = title ?? label ?? command ?? "Shell"
         self.title = initial
@@ -53,7 +68,13 @@ public final class TerminalSession: NSObject {
         self.info = TileInfo(id: id, kind: .terminal, flavor: flavor, title: initial, subtitle: cwd.abbreviatingHome)
         super.init()
         configureView()
-        start()
+        if startSuspended {
+            isSuspended = true
+            tracker.noteSuspended(resumeHint: resumeHint)
+            refreshInfo()
+        } else {
+            start()
+        }
     }
 
     private func configureView() {
@@ -91,8 +112,35 @@ public final class TerminalSession: NSObject {
         refreshInfo()
     }
 
+    /// The command line this tile runs now: a fresh launch (with an assigned session id where the
+    /// tool allows), or — after it has run once — the tool's resume form.
+    private func commandToRun() -> String? {
+        guard let command, !command.isEmpty else { return nil }
+        if !hasStarted, sessionId == nil {
+            let prepared = SessionResume.prepareLaunch(command)
+            sessionId = prepared.sessionId
+            return prepared.command
+        }
+        let id = sessionId
+        if id == nil, !mayContinueLatest { return command }
+        return SessionResume.resumeCommand(original: command, sessionId: id) ?? command
+    }
+
+    /// Shown on a shut-down tile: what Resume will run.
+    public var resumeHint: String {
+        guard let command, !command.isEmpty else { return "Resume opens a shell in \(cwd.abbreviatingHome)" }
+        let next = sessionId != nil || mayContinueLatest
+            ? SessionResume.resumeCommand(original: command, sessionId: sessionId) ?? command
+            : command
+        return "Resume runs: \(next)"
+    }
+
     public func start() {
         tracker.restart()
+        isSuspended = false
+        launchedAt = Date()
+        let run = commandToRun()
+        hasStarted = true
         // Keep scanning through startup even if the program stays silent.
         lastOutputAt = Date()
         settledScanDone = false
@@ -104,9 +152,9 @@ public final class TerminalSession: NSObject {
         let shell = ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"
         let shellName = "-" + (shell as NSString).lastPathComponent
         var args: [String] = []
-        if let command, !command.isEmpty {
+        if let run {
             // Run the tool, then fall back to an interactive shell so the tile stays useful.
-            args = ["-l", "-i", "-c", "\(command); exec \(shell) -l -i"]
+            args = ["-l", "-i", "-c", "\(run); exec \(shell) -l -i"]
         }
         process.startProcess(executable: shell, args: args, environment: Self.environment(tileId: id),
                              execName: args.isEmpty ? shellName : nil, currentDirectory: cwd)
@@ -142,10 +190,43 @@ public final class TerminalSession: NSObject {
         }
     }
 
-    public func restart() {
+    /// Stop the process but keep the tile, its folder and its conversation id for Resume.
+    public func shutDown() {
+        if let dir = liveDirectory() { cwd = dir }
         terminate()
+        isSuspended = true
+        tracker.noteSuspended(resumeHint: resumeHint)
+        refreshInfo()
+    }
+
+    /// Bring a shut-down tile back into the same conversation.
+    public func resume() {
         view.getTerminal().resetToInitialState()
         start()
+    }
+
+    /// Restart keeps the conversation: it's a shut down and resume.
+    public func restart() {
+        terminate()
+        resume()
+    }
+
+    /// Adopt the session a tool reported after launch (e.g. the Codex rollout this tile started).
+    public func bind(sessionId: String) {
+        guard self.sessionId == nil, SessionResume.isSafeId(sessionId) else { return }
+        self.sessionId = sessionId
+    }
+
+    /// The shell's working directory right now (follows `cd`), read from the kernel.
+    public func liveDirectory() -> String? {
+        guard let pid = process?.shellPid, pid > 0 else { return nil }
+        var info = proc_vnodepathinfo()
+        let size = Int32(MemoryLayout<proc_vnodepathinfo>.size)
+        guard proc_pidinfo(pid, PROC_PIDVNODEPATHINFO, 0, &info, size) == size else { return nil }
+        let path = withUnsafePointer(to: &info.pvi_cdir.vip_path) {
+            $0.withMemoryRebound(to: CChar.self, capacity: Int(MAXPATHLEN)) { String(cString: $0) }
+        }
+        return path.isEmpty ? nil : path
     }
 
     public func send(_ bytes: [UInt8]) {

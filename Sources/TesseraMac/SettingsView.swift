@@ -177,6 +177,12 @@ struct GeneralSettings: View {
     var body: some View {
         @Bindable var workspace = model.workspace
         Form {
+            Section("Terminals") {
+                Toggle("Resume terminal sessions when Tessera opens", isOn: $workspace.resumeOnLaunch)
+                    .onChange(of: workspace.resumeOnLaunch) { _, _ in workspace.save() }
+                Text("Claude Code, Codex, Grok, opencode and omp tiles reopen in the same conversation; shells reopen in their last folder. Off: tiles wait, shut down, until you resume them.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
             Section("New tiles") {
                 HStack {
                     Text("Default folder")

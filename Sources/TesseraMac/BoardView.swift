@@ -135,7 +135,11 @@ struct TileView: View {
             if hovering {
                 HStack(spacing: 2) {
                     if info.kind == .terminal {
-                        tileButton("arrow.clockwise") { workspace.restart(info.id) }
+                        if workspace.terminals[info.id]?.isSuspended == true {
+                            tileButton("play.fill") { workspace.resume(info.id) }
+                        } else {
+                            tileButton("power") { workspace.shutDown(info.id) }
+                        }
                     }
                     tileButton("xmark") { withAnimation(.spring(duration: 0.3)) { workspace.close(info.id) } }
                 }
@@ -181,8 +185,10 @@ struct TileView: View {
             if let session = workspace.terminals[info.id] {
                 TerminalTileContent(session: session)
                     .overlay {
-                        if info.activity == .exited || info.activity == .failed {
-                            ExitedOverlay(info: info) { workspace.restart(info.id) }
+                        if session.isSuspended {
+                            ExitedOverlay(info: info, title: "Shut down", action: "Resume") { workspace.resume(info.id) }
+                        } else if info.activity == .exited || info.activity == .failed {
+                            ExitedOverlay(info: info, title: nil, action: "Restart") { workspace.restart(info.id) }
                         }
                     }
             }
@@ -227,7 +233,12 @@ struct TileView: View {
                 draftTitle = info.title
                 renaming = true
             }
-            Button("Restart") { workspace.restart(info.id) }
+            if workspace.terminals[info.id]?.isSuspended == true {
+                Button("Resume") { workspace.resume(info.id) }
+            } else {
+                Button("Shut Down") { workspace.shutDown(info.id) }
+                Button("Restart") { workspace.restart(info.id) }
+            }
         }
         if info.attention { Button("Mark as Seen") { workspace.acknowledge(info.id) } }
         Menu("Move to Tab") {
@@ -280,9 +291,10 @@ struct TileDropDelegate: DropDelegate {
 /// Reads `revision` so only this tile redraws when its screen changes.
 struct TerminalTileContent: View {
     let session: TerminalSession
+    @Environment(\.tesseraPrivacy) private var privacy
 
     var body: some View {
-        TerminalThumbnail(terminal: session.terminal, revision: session.revision)
+        TerminalThumbnail(terminal: session.terminal, revision: session.revision, obscured: privacy)
             .equatable()
     }
 }
@@ -290,31 +302,81 @@ struct TerminalTileContent: View {
 struct BrowserTileContent: View {
     let browser: BrowserSession
     let isExpanded: Bool
+    @Environment(\.tesseraPrivacy) private var privacy
 
     var body: some View {
         if isExpanded {
             if let image = browser.snapshot {
                 Image(nsImage: image).resizable().aspectRatio(contentMode: .fill)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top).clipped()
+                    .overlay { if privacy { PrivateWebCover(browser: browser) } }
             } else {
                 Color.black
             }
         } else {
             ScaledWebHost(webView: browser.webView)
+                .overlay { if privacy { PrivateWebCover(browser: browser) } }
         }
+    }
+}
+
+/// Web pages render out of process and their text can't be re-drawn, so in privacy mode the live
+/// page is covered by a coarse mosaic of itself — colorful and current, but unreadable.
+struct PrivateWebCover: View {
+    let browser: BrowserSession
+
+    var body: some View {
+        ZStack {
+            Style.deck
+            if let image = browser.snapshot.flatMap(Self.mosaic) {
+                Image(nsImage: image).interpolation(.none).resizable().aspectRatio(contentMode: .fill)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                    .clipped()
+            }
+        }
+        .allowsHitTesting(false)
+        .task {
+            while !Task.isCancelled {
+                browser.refreshSnapshot(force: true)
+                try? await Task.sleep(for: .seconds(3))
+            }
+        }
+    }
+
+    /// Downsample to wide, short cells; drawn without interpolation, lines of text become bars —
+    /// the same look as a terminal minimap.
+    static func mosaic(_ image: NSImage) -> NSImage? {
+        guard let cg = image.cgImage(forProposedRect: nil, context: nil, hints: nil) else { return nil }
+        let w = max(1, cg.width / 16), h = max(1, cg.height / 5)
+        guard let ctx = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: 0,
+                                  space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
+        ctx.interpolationQuality = .medium
+        ctx.draw(cg, in: CGRect(x: 0, y: 0, width: w, height: h))
+        return ctx.makeImage().map { NSImage(cgImage: $0, size: NSSize(width: w, height: h)) }
     }
 }
 
 struct ExitedOverlay: View {
     let info: TileInfo
-    let restart: () -> Void
+    /// Headline; nil shows the exit detail alone.
+    let title: String?
+    let action: String
+    let perform: () -> Void
 
     var body: some View {
         ZStack {
-            Color.black.opacity(0.55)
-            VStack(spacing: 8) {
-                Text(info.detail ?? "Exited").font(Style.mono(11)).foregroundStyle(Style.state(info.activity))
-                Button("Restart", action: restart)
+            Color.black.opacity(0.6)
+            VStack(spacing: 6) {
+                if let title {
+                    Label(title, systemImage: "power").font(Style.ui(12, .semibold)).foregroundStyle(Style.ink)
+                }
+                Text(info.detail ?? "Exited")
+                    .font(Style.mono(9.5))
+                    .foregroundStyle(title == nil ? Style.state(info.activity) : Style.dim)
+                    .multilineTextAlignment(.center)
+                    .lineLimit(2)
+                    .padding(.horizontal, 10)
+                Button(action, action: perform)
                     .buttonStyle(.borderedProminent)
                     .tint(Style.cyan.opacity(0.6))
                     .controlSize(.small)

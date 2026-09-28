@@ -22,6 +22,32 @@ final class TerminalSessionTests: XCTestCase {
         XCTAssertTrue(waitUntil { session.terminal.screenTail(40).contains { $0.contains("tessera-first-run") } })
     }
 
+    func testShutDownKeepsTileAndResumeRunsAgain() {
+        let dir = (NSTemporaryDirectory() as NSString).resolvingSymlinksInPath
+        let session = TerminalSession(command: "echo tessera-resume-check", cwd: dir)
+        defer { session.terminate() }
+        XCTAssertTrue(waitUntil { session.terminal.screenTail(40).contains { $0.contains("tessera-resume-check") } })
+        XCTAssertEqual(session.liveDirectory().map { ($0 as NSString).resolvingSymlinksInPath }, dir)
+        session.shutDown()
+        XCTAssertTrue(session.isSuspended)
+        XCTAssertFalse(session.isRunning)
+        XCTAssertEqual(session.info.activity, .exited)
+        XCTAssertTrue(session.info.detail?.contains("echo tessera-resume-check") == true)
+        session.resume()
+        XCTAssertFalse(session.isSuspended)
+        XCTAssertTrue(waitUntil { session.terminal.screenTail(40).contains { $0.contains("tessera-resume-check") } })
+    }
+
+    func testRestoredAgentTileResumesItsSession() {
+        let session = TerminalSession(command: "claude --model opus", cwd: NSTemporaryDirectory(),
+                                      sessionId: "11111111-2222-3333-4444-555555555555", resuming: true, startSuspended: true)
+        XCTAssertTrue(session.isSuspended)
+        XCTAssertEqual(session.resumeHint, "Resume runs: claude --model opus --resume 11111111-2222-3333-4444-555555555555")
+        let duplicate = TerminalSession(command: "claude", cwd: NSTemporaryDirectory(), resuming: true,
+                                        mayContinueLatest: false, startSuspended: true)
+        XCTAssertEqual(duplicate.resumeHint, "Resume runs: claude")
+    }
+
     func testTerminateKillsForegroundProgram() {
         let marker = "tessera-sleep-\(Int.random(in: 100_000...999_999))"
         let session = TerminalSession(command: "exec -a \(marker) sleep 600", cwd: NSTemporaryDirectory())
