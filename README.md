@@ -52,6 +52,8 @@ Native macOS app, with a focused iOS companion built on the same core.
 | ⌘J | Next tile that needs you |
 | ⌥⌘1…5 | Filter: all, needs you, terminals, apps, web |
 | ⌘\ | Toggle the accounts sidebar |
+| ⇧⌘P | Privacy mode |
+| ⌥⇧⌘W / ⌥⇧⌘R | Shut down / resume all terminals |
 | ⌘W | Close tile |
 
 Esc inside an open terminal goes to the program (agents use it to interrupt), so use ⌘⏎ there.
