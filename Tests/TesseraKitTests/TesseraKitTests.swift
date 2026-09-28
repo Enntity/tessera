@@ -339,3 +339,48 @@ final class TileGroupsTests: XCTestCase {
         XCTAssertEqual(back, g)
     }
 }
+
+final class RemoteVitalsTests: XCTestCase {
+    let sample = """
+    @stat cpu  13388591 4655 4582035 301064634 1058763 0 17213 0 0 0
+    @memtotal 127600812
+    @memavail 65669088
+    @load 1.15
+    @ncpu 20
+    @ctemp 59200
+    @gpu NVIDIA GB10, 3, 53, 14.93
+    """
+
+    func testParsesSparkProbe() {
+        let r = RemoteVitals.parse(sample)
+        XCTAssertEqual(r.cores, 20)
+        XCTAssertEqual(r.gpuName, "NVIDIA GB10")
+        XCTAssertEqual(r.gpu!, 0.03, accuracy: 0.0001)
+        XCTAssertEqual(r.cpuTemperature!, 59.2, accuracy: 0.01)
+        XCTAssertEqual(r.temperature!, 59.2, accuracy: 0.01)
+        XCTAssertEqual(r.memory!, 1 - 65669088.0 / 127600812.0, accuracy: 0.0001)
+        XCTAssertEqual(r.memoryTotalGB!, 121.7, accuracy: 0.1)
+    }
+
+    func testCPUUtilizationFromDeltas() {
+        let a = RemoteVitals.parse("@stat cpu 100 0 100 800 0 0 0 0").cpuSample
+        let b = RemoteVitals.parse("@stat cpu 150 0 150 900 0 0 0 0").cpuSample
+        XCTAssertNil(a?.utilization(since: nil))
+        XCTAssertEqual(b!.utilization(since: a)!, 0.5, accuracy: 0.0001)
+    }
+
+    func testHostsFromSSHConfigAndValidation() {
+        let config = """
+        Host *
+          ServerAliveInterval 30
+        Host gpu-box-1 gpu-box-2
+          HostName 100.101.102.103
+        Host=gpu-box-3
+        Host github.com !bad dev-*
+        """
+        XCTAssertEqual(RemoteVitals.configuredHosts(in: config), ["gpu-box-1", "gpu-box-2", "gpu-box-3", "github.com"])
+        XCTAssertFalse(MachineConfig.isValidHost("-oProxyCommand=evil"))
+        XCTAssertFalse(MachineConfig.isValidHost("host; rm -rf /"))
+        XCTAssertTrue(MachineConfig.isValidHost("me@10.0.0.4"))
+    }
+}

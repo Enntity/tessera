@@ -104,7 +104,7 @@ struct HUDBar: View {
             Spacer()
             TabStrip()
             Spacer()
-            MachineVitals()
+            MachineStrip()
             Button {
                 model.paletteMode = .all
                 model.showPalette = true
@@ -180,47 +180,63 @@ struct CountChip: View {
     }
 }
 
-struct MachineVitals: View {
+/// Every watched machine as a chip, then the clock. Falls back to compact chips when space is short.
+struct MachineStrip: View {
     @Environment(AppModel.self) private var model
 
     var body: some View {
-        let stats = model.workspace.stats
-        HStack(spacing: 10) {
-            Sparkline(values: stats.cpuHistory, color: Style.cyan).frame(width: 46, height: 16)
-            VStack(alignment: .leading, spacing: 0) {
-                Text("CPU \(Int(stats.cpu * 100))%").font(Style.mono(9.5, .semibold)).foregroundStyle(Style.ink)
-                Text("MEM \(Int(stats.memoryUsed * 100))% of \(Int(stats.memoryTotalGB))G").font(Style.mono(9)).foregroundStyle(Style.dim)
+        let monitor = model.workspace.machines
+        HStack(spacing: 6) {
+            ViewThatFits(in: .horizontal) {
+                chips(monitor, compact: false)
+                chips(monitor, compact: true)
             }
+            Menu {
+                let known = Set(monitor.remotes.compactMap(\.sshHost))
+                let hosts = MachineMonitor.suggestedHosts().filter { !known.contains($0) }
+                ForEach(hosts, id: \.self) { host in
+                    Button(host) { monitor.add(host: host, name: nil) }
+                }
+                if !hosts.isEmpty { Divider() }
+                Button("Other Host…") {
+                    model.showAddMachine = true
+                    NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
+                }
+            } label: {
+                Image(systemName: "plus").font(.system(size: 9, weight: .bold)).foregroundStyle(Style.dim)
+            }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .fixedSize()
+            .help("Watch another machine over SSH")
             TimelineView(.periodic(from: .now, by: 1)) { ctx in
                 Text(ctx.date, format: .dateTime.hour().minute())
                     .font(Style.mono(13, .semibold))
                     .foregroundStyle(Style.ink)
+                    .padding(.leading, 4)
+            }
+        }
+    }
+
+    private func chips(_ monitor: MachineMonitor, compact: Bool) -> some View {
+        HStack(spacing: 5) {
+            ForEach(monitor.ordered) { vitals in
+                MachineChip(vitals: vitals, compact: compact)
+                    .onTapGesture {
+                        guard let host = monitor.config(vitals.id)?.sshHost else { return }
+                        model.workspace.launch(command: "ssh \(host)", title: vitals.name)
+                    }
+                    .contextMenu {
+                        if let host = monitor.config(vitals.id)?.sshHost {
+                            Button("Open Terminal on \(vitals.name)") { model.workspace.launch(command: "ssh \(host)", title: vitals.name) }
+                            Button("Stop Watching", role: .destructive) { monitor.remove(id: vitals.id) }
+                        }
+                    }
             }
         }
     }
 }
 
-struct Sparkline: View {
-    let values: [Double]
-    let color: Color
-
-    var body: some View {
-        Canvas { ctx, size in
-            guard values.count > 1 else { return }
-            var path = Path()
-            for (i, v) in values.enumerated() {
-                let p = CGPoint(x: size.width * CGFloat(i) / CGFloat(values.count - 1), y: size.height * (1 - CGFloat(v)))
-                i == 0 ? path.move(to: p) : path.addLine(to: p)
-            }
-            ctx.stroke(path, with: .color(color), lineWidth: 1.2)
-            var fill = path
-            fill.addLine(to: CGPoint(x: size.width, y: size.height))
-            fill.addLine(to: CGPoint(x: 0, y: size.height))
-            ctx.fill(fill, with: .linearGradient(Gradient(colors: [color.opacity(0.3), .clear]),
-                                                 startPoint: .zero, endPoint: CGPoint(x: 0, y: size.height)))
-        }
-    }
-}
 
 /// All · Needs you · the user's own tabs · +. Tiles can be dropped onto a tab to file them.
 struct TabStrip: View {

@@ -7,6 +7,7 @@ struct SettingsView: View {
     var body: some View {
         TabView {
             ProvidersSettings().tabItem { Label("Accounts", systemImage: "creditcard") }
+            MachinesSettings().tabItem { Label("Machines", systemImage: "server.rack") }
             RemoteSettings().tabItem { Label("iPhone", systemImage: "iphone") }
             GeneralSettings().tabItem { Label("General", systemImage: "gearshape") }
         }
@@ -217,5 +218,85 @@ struct GeneralSettings: View {
             model.workspace.defaultDirectory = url.path
             model.workspace.save()
         }
+    }
+}
+
+/// Machines watched in the top bar. Remote hosts are polled over the user's own SSH config.
+struct MachinesSettings: View {
+    @Environment(AppModel.self) private var model
+    @State private var host = ""
+    @State private var name = ""
+
+    var body: some View {
+        let monitor = model.workspace.machines
+        VStack(alignment: .leading, spacing: 12) {
+            List {
+                ForEach(monitor.ordered) { v in
+                    HStack {
+                        Image(systemName: v.isLocal ? "laptopcomputer" : "server.rack").frame(width: 20)
+                        VStack(alignment: .leading) {
+                            Text(v.name)
+                            Text(v.isLocal ? "This Mac" : (monitor.config(v.id)?.sshHost ?? "") + " · " + (v.message ?? v.status.rawValue))
+                                .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                        }
+                        Spacer()
+                        if !v.isLocal {
+                            Button(role: .destructive) { monitor.remove(id: v.id) } label: { Image(systemName: "trash") }
+                                .buttonStyle(.borderless)
+                        }
+                    }
+                }
+            }
+            .frame(maxHeight: .infinity)
+            HStack {
+                Text("Linux hosts reached with your SSH keys (no password prompts). Reports CPU, NVIDIA GPU, memory and temperature.")
+                    .font(.caption).foregroundStyle(.secondary)
+                Spacer()
+                Button("Add Machine…") { model.showAddMachine = true }
+            }
+        }
+        .padding(18)
+        .sheet(isPresented: Bindable(model).showAddMachine) { addSheet(monitor) }
+    }
+
+    private func addSheet(_ monitor: MachineMonitor) -> some View {
+        let known = Set(monitor.remotes.compactMap(\.sshHost))
+        let suggestions = MachineMonitor.suggestedHosts().filter { !known.contains($0) }
+        return VStack(alignment: .leading, spacing: 14) {
+            Text("Watch a Machine").font(.title3.weight(.semibold))
+            if !suggestions.isEmpty {
+                Text("From your SSH config").font(.caption).foregroundStyle(.secondary)
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack {
+                        ForEach(suggestions, id: \.self) { h in
+                            Button(h) { host = h }.buttonStyle(.bordered)
+                        }
+                    }
+                }
+            }
+            Form {
+                TextField("SSH host", text: $host, prompt: Text("gpu-box-1 or user@10.0.0.4"))
+                TextField("Name", text: $name, prompt: Text(host.isEmpty ? "optional" : host))
+            }
+            .formStyle(.columns)
+            HStack {
+                Spacer()
+                Button("Cancel", role: .cancel) { close() }.keyboardShortcut(.cancelAction)
+                Button("Add") {
+                    monitor.add(host: host, name: name)
+                    close()
+                }
+                .keyboardShortcut(.defaultAction)
+                .disabled(!MachineConfig.isValidHost(host.trimmingCharacters(in: .whitespaces)))
+            }
+        }
+        .padding(22)
+        .frame(width: 480)
+    }
+
+    private func close() {
+        model.showAddMachine = false
+        host = ""
+        name = ""
     }
 }

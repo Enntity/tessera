@@ -39,3 +39,14 @@ final class TerminalSessionTests: XCTestCase {
         XCTAssertTrue(waitUntil { !running() })
     }
 }
+
+final class LocalSamplerTests: XCTestCase {
+    /// Regression: sensor reads after init must not touch a released HID client.
+    func testRepeatedSamplesAreSafe() {
+        let sampler = LocalSampler()
+        var last: LocalSampler.Sample?
+        for _ in 0..<5 { last = sampler.sample() }
+        XCTAssertNotNil(last?.memory)
+        if let t = last?.temperature { XCTAssert((10...120).contains(t)) }
+    }
+}

@@ -48,6 +48,8 @@ final class AppModel {
     var showSidebar = true
     /// The "connect an account" sheet in Settings; the sidebar's + opens it directly.
     var showAddAccount = false
+    /// The "watch a machine" sheet in Settings → Machines.
+    var showAddMachine = false
     var paletteMode: PaletteMode = .all
     /// Where each visible tile is, in window coordinates; used to open panels and native windows in place.
     @ObservationIgnored var tileFrames: [String: CGRect] = [:]
@@ -87,7 +89,7 @@ final class AppModel {
     }
 
     #if DEBUG
-    /// Development aid: `launch=<cmd>`, `url=<url>`, `open=terminal|app|web`, `palette`, `remote`, `pairurl=<file>`,
+    /// Development aid: `launch=<cmd>`, `url=<url>`, `open=terminal|app|web`, `palette`, `remote`, `machine=<ssh host>`, `pairurl=<file>`,
     /// `filter=<name>`, `wait=<s>`, separated by `;`. Only read from the TESSERA_DEBUG_ACTIONS environment variable.
     private func runDebugActions(_ actions: [String], after delay: Double = 2) {
         guard let first = actions.first else { return }
@@ -98,6 +100,7 @@ final class AppModel {
             case "launch": workspace.launch(command: parts.count > 1 ? parts[1] : nil)
             case "url": if parts.count > 1 { workspace.openBrowser(parts[1]) }
             case "palette": showPalette = true
+            case "machine": if parts.count > 1 { workspace.machines.add(host: parts[1], name: nil) }
             case "remote": server.start() // not persisted: normal launches keep the user's setting
             case "pairurl":
                 if parts.count > 1 { try? server.pairingURL?.absoluteString.write(toFile: parts[1], atomically: true, encoding: .utf8) }

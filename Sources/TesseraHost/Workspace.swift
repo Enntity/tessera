@@ -17,7 +17,7 @@ public final class Workspace {
     public private(set) var browsers: [String: BrowserSession] = [:]
     public let agents = AgentAppWatcher()
     public let usage: UsageService
-    public let stats = SystemStats()
+    public let machines: MachineMonitor
     public private(set) var presets: [LaunchPreset] = LaunchCatalog.known
 
     public var selectedId: String?
@@ -47,13 +47,14 @@ public final class Workspace {
         directory = dir
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         usage = UsageService(directory: directory)
+        machines = MachineMonitor(directory: directory)
     }
 
     public func start() {
         restore()
         agents.start()
         usage.start()
-        stats.start()
+        machines.start()
         DispatchQueue.global(qos: .utility).async {
             let found = LaunchCatalog.detectInstalled()
             DispatchQueue.main.async { MainActor.assumeIsolated { self.presets = found } }
