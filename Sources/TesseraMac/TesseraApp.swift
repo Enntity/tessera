@@ -109,6 +109,8 @@ final class AppModel {
             case "url": if parts.count > 1 { workspace.openBrowser(parts[1]) }
             case "palette": showPalette = true
             case "privacy": privacyMode = true
+            case "opendsh":
+                if let tile = workspace.allTiles.first(where: { $0.flavor == .dsh }) { open(tile.id) }
             case "machine": if parts.count > 1 { workspace.machines.add(host: parts[1], name: nil) }
             case "remote": server.start() // not persisted: normal launches keep the user's setting
             case "pairurl":

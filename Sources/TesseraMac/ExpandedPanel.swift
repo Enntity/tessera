@@ -184,6 +184,9 @@ struct AgentPanel: View {
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 8)
+            if session?.flavor == .dsh {
+                DshServerStatus(server: workspace.dsh)
+            }
             ConversationDetail(snapshot: session?.snapshot, flavor: session?.flavor ?? .claudeDesktop)
         }
         .onAppear {
@@ -283,5 +286,27 @@ struct ScaledWebHost: NSViewRepresentable {
         }
 
         override func hitTest(_ point: NSPoint) -> NSView? { nil }
+    }
+}
+
+/// Shown on a dsh session's panel while Tessera's dsh web server starts, or if it can't.
+struct DshServerStatus: View {
+    let server: DshWebServer
+
+    var body: some View {
+        switch server.state {
+        case .starting:
+            HStack(spacing: 8) {
+                ProgressView().controlSize(.small)
+                Text("Starting dsh web…").font(Style.mono(11)).foregroundStyle(Style.dim)
+            }
+            .padding(.horizontal, 14).padding(.bottom, 6)
+        case .failed(let message):
+            Label(message, systemImage: "exclamationmark.triangle")
+                .font(Style.mono(11)).foregroundStyle(Style.amber)
+                .padding(.horizontal, 14).padding(.bottom, 6)
+        case .stopped, .running:
+            EmptyView()
+        }
     }
 }

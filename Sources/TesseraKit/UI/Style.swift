@@ -25,6 +25,7 @@ public enum Style {
         case .codex, .codexDesktop: Color(red: 0.62, green: 0.78, blue: 1.00)
         case .grok: Color(red: 0.80, green: 0.82, blue: 0.86)
         case .gemini: sky
+        case .dsh: Color(red: 0.36, green: 0.49, blue: 1.00)
         case .omp: violet
         case .opencode, .aider, .custom: Color(red: 0.95, green: 0.60, blue: 0.85)
         case .shell: cyan

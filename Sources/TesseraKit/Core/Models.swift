@@ -11,6 +11,8 @@ public enum TileKind: String, Codable, Sendable {
 public enum AgentFlavor: String, Codable, Sendable, CaseIterable {
     case shell, claude, codex, grok, gemini, omp, opencode, aider, custom
     case claudeDesktop, codexDesktop
+    /// DeepSeek Harness (`dsh`) sessions.
+    case dsh
     case web
 
     public var displayName: String {
@@ -26,6 +28,7 @@ public enum AgentFlavor: String, Codable, Sendable, CaseIterable {
         case .custom: "Command"
         case .claudeDesktop: "Claude"
         case .codexDesktop: "Codex"
+        case .dsh: "DeepSeek"
         case .web: "Web"
         }
     }
@@ -42,6 +45,7 @@ public enum AgentFlavor: String, Codable, Sendable, CaseIterable {
         case .opencode: "curlybraces"
         case .aider: "wand.and.stars"
         case .custom: "gearshape.2"
+        case .dsh: "water.waves"
         case .web: "globe"
         }
     }
@@ -67,6 +71,7 @@ public enum AgentFlavor: String, Codable, Sendable, CaseIterable {
         case "omp": return .omp
         case "opencode": return .opencode
         case "aider": return .aider
+        case "dsh": return .dsh
         case "zsh", "bash", "fish", "sh": return .shell
         default: return .custom
         }

@@ -112,6 +112,7 @@ final class TranscriptScanner: @unchecked Sendable {
         touched.removeAll(keepingCapacity: true)
         for s in scanClaudeDesktop(lookback: lookback, now: now) { sessions[s.id] = s }
         for s in scanCodexDesktop(lookback: lookback, now: now) { sessions[s.id] = s }
+        for s in scanDsh(lookback: lookback, now: now) { sessions[s.id] = s }
         // Drop parsers for transcripts that aged out.
         for path in tails.keys where !touched.contains(path) { tails[path] = nil }
         if now.timeIntervalSince(lastRateLimitScan) > 60 {
@@ -180,6 +181,82 @@ final class TranscriptScanner: @unchecked Sendable {
             }
         }
         return nil
+    }
+
+    // MARK: DeepSeek Harness (dsh)
+
+    private final class DshTail {
+        let zstd = ZstdTail()
+        var parser = DshTranscriptParser()
+        var remainder = ""
+    }
+
+    private var dshTails: [String: DshTail] = [:]
+
+    static var dshHome: URL {
+        if let custom = ProcessInfo.processInfo.environment["DSH_HOME"], !custom.isEmpty { return URL(fileURLWithPath: custom) }
+        return URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent(".dsh")
+    }
+
+    /// Each top-level dsh session with recent activity. Logs are zstd JSONL; only newly appended
+    /// frames are decoded on each pass.
+    private func scanDsh(lookback: TimeInterval, now: Date) -> [AgentAppSession] {
+        let root = Self.dshHome.appendingPathComponent("sessions")
+        var out: [AgentAppSession] = []
+        var seen: Set<String> = []
+        for workspace in (try? fm.contentsOfDirectory(atPath: root.path)) ?? [] {
+            let wsURL = root.appendingPathComponent(workspace)
+            for session in (try? fm.contentsOfDirectory(atPath: wsURL.path)) ?? [] {
+                let dir = wsURL.appendingPathComponent(session)
+                // A migrated session may hold several formats; the newest version is the live log.
+                let logs = ((try? fm.contentsOfDirectory(atPath: dir.path)) ?? [])
+                    .filter { $0.hasPrefix("session.v") && $0.hasSuffix(".jsonl.zstd") }
+                guard let log = logs.max(by: { Self.dshVersion($0) < Self.dshVersion($1) }) else { continue }
+                let path = dir.appendingPathComponent(log).path
+                guard let modified = (try? fm.attributesOfItem(atPath: path))?[.modificationDate] as? Date,
+                      now.timeIntervalSince(modified) < lookback else { continue }
+                seen.insert(path)
+                let tail = dshTails[path] ?? DshTail()
+                dshTails[path] = tail
+                if let decoded = tail.zstd.readAppended(path: path) {
+                    let text = tail.remainder + String(decoding: decoded, as: UTF8.self)
+                    if let last = text.lastIndex(of: "\n") {
+                        tail.parser.ingest(text: String(text[..<last]))
+                        tail.remainder = String(text[text.index(after: last)...])
+                    } else {
+                        tail.remainder = text
+                    }
+                }
+                let parser = tail.parser
+                guard let id = parser.sessionId, !parser.isDelegated, Self.isSafeId(id) else { continue }
+                let snapshot = parser.snapshot(now: now)
+                // Sessions that never got a message aren't worth a tile.
+                guard snapshot.items.contains(where: { $0.role == .user }) else { continue }
+                let title = parser.title ?? Self.dshCachedTitle(id)
+                    ?? snapshot.items.first(where: { $0.role == .user })?.text.preview(60) ?? "DeepSeek session"
+                out.append(AgentAppSession(
+                    id: "dsh:" + id, flavor: .dsh, title: title, cwd: parser.cwd ?? "",
+                    openURL: nil, bundleID: "", resumeCommand: nil,
+                    snapshot: snapshot, summary: nil, needsAction: nil,
+                    lastActivityAt: parser.lastEventAt ?? modified))
+            }
+        }
+        for path in dshTails.keys where !seen.contains(path) { dshTails[path] = nil }
+        return out
+    }
+
+    static func dshVersion(_ name: String) -> Int {
+        Int(name.dropFirst("session.v".count).prefix { $0.isNumber }) ?? 0
+    }
+
+    /// dsh's projection cache holds the generated title even before it's in the log we've read.
+    static func dshCachedTitle(_ id: String) -> String? {
+        let url = dshHome.appendingPathComponent("storages/session_projcache/sessions/\(id).json")
+        guard let data = try? Data(contentsOf: url),
+              let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+              let rows = (obj["record"] as? [String: Any])?["rows"] as? [String: Any],
+              let title = (rows["title"] as? [String: Any])?["val"] as? String, !title.isEmpty else { return nil }
+        return title
     }
 
     // MARK: Codex desktop

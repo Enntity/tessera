@@ -16,6 +16,12 @@ Native macOS app, with a focused iOS companion built on the same core.
   Opening one snaps the real app window onto the tile's rectangle (Accessibility permission) and
   deep-links to that conversation (`claude://code/continue?session=…`, `codex://threads/…`).
   "Continue in Terminal" forks it into a CLI tile.
+- **DeepSeek Harness (dsh) sessions as tiles.** Each recent top-level dsh conversation in
+  `~/.dsh/sessions` (or `$DSH_HOME`) is its own live card — title, latest messages and tool calls,
+  working while a turn runs, *Needs you* on a pending approval (with its reason). Opening one starts
+  Tessera's own `dsh web` (via `dsh`, or `npx @deepseek-ai/dsh`, on a free port with `--no-open`),
+  signs the web tile in with its one-time token, and selects that session. The server stops when
+  Tessera quits — or crashes.
 - **Attention.** Output-then-silence → *Done* (green breathing ring). Permission prompts, `(y/n)`,
   "Do you want to…", OSC 9/777 notifications, Claude's own "needs action" turn summaries, and
   Codex approval events → *Needs you* (amber comet ring), plus a Dock badge and system

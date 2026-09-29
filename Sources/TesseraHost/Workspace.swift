@@ -16,6 +16,8 @@ public final class Workspace {
     public private(set) var terminals: [String: TerminalSession] = [:]
     public private(set) var browsers: [String: BrowserSession] = [:]
     public let agents = AgentAppWatcher()
+    /// The DeepSeek Harness web server used to open dsh sessions.
+    public let dsh = DshWebServer()
     public let usage: UsageService
     public let machines: MachineMonitor
     public private(set) var presets: [LaunchPreset] = LaunchCatalog.known
@@ -208,6 +210,7 @@ public final class Workspace {
     /// On quit: record every terminal's folder and conversation, then stop them cleanly.
     public func prepareForQuit() {
         save()
+        dsh.stop()
         for t in terminals.values { t.terminate() }
     }
 
@@ -262,7 +265,48 @@ public final class Workspace {
     public func openNative(_ id: String, at rect: CGRect?) {
         guard let a = agents.sessions[id] else { return }
         agentAcknowledged[id] = Date()
+        if a.flavor == .dsh { return openDsh(a) }
         WindowPlacer.open(a.openURL, bundleID: a.bundleID, placeAt: placeNativeWindows ? rect : nil)
+    }
+
+    // MARK: DeepSeek Harness
+
+    /// Opens a dsh session in the dsh web UI, as a web tile beside the session's tile. The first
+    /// open uses the server's token URL, which signs the tile in; the session is then selected by title.
+    private func openDsh(_ session: AgentAppSession) {
+        dsh.ensureRunning { [weak self] result in
+            guard let self, case .success(let launch) = result else { return }
+            let base = self.dsh.baseURL
+            let tile: BrowserSession
+            if let existing = self.browsers.values.first(where: { $0.url?.host == base?.host && $0.url?.port == base?.port }) {
+                tile = existing
+            } else {
+                self.selectedId = session.id
+                guard let id = self.openBrowser(launch.absoluteString), let created = self.browsers[id] else { return }
+                tile = created
+            }
+            tile.evaluateWhenLoaded(Self.selectDshSessionScript(title: session.title))
+            self.expand(tile.id)
+        }
+    }
+
+    /// dsh web has no per-session URL; pick the session in its sidebar by its visible title,
+    /// retrying briefly while the list loads. Harmless if it isn't found.
+    nonisolated static func selectDshSessionScript(title: String) -> String {
+        let quoted = (try? JSONSerialization.data(withJSONObject: [title])).map { String(decoding: $0, as: UTF8.self) } ?? "[\"\"]"
+        return """
+        (function(title){
+          var tries = 0;
+          function attempt(){
+            var hit = Array.prototype.find.call(document.querySelectorAll('body *'), function(e){
+              return e.children.length === 0 && (e.textContent || '').trim() === title;
+            });
+            if (hit) { (hit.closest('a,button,[role="button"],[role="option"],[role="link"],[role="treeitem"],li') || hit).click(); return; }
+            if (++tries < 40) setTimeout(attempt, 250);
+          }
+          attempt();
+        })(\(quoted)[0]);
+        """
     }
 
     // MARK: Agent sessions

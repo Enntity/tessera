@@ -16,6 +16,7 @@ public final class BrowserSession: NSObject {
     @ObservationIgnored private var lastBadge = 0
     @ObservationIgnored private var viewed = false
     @ObservationIgnored private var lastSnapshotAt: Date = .distantPast
+    @ObservationIgnored private var pendingScript: String?
 
 
     public init(id: String = UUID().uuidString, url: URL) {
@@ -98,6 +99,15 @@ public final class BrowserSession: NSObject {
         }
     }
 
+    /// Runs `script` once the page has loaded (now, if it already has).
+    public func evaluateWhenLoaded(_ script: String) {
+        if webView.isLoading || webView.url == nil {
+            pendingScript = script
+        } else {
+            webView.evaluateJavaScript(script)
+        }
+    }
+
     public func load(_ url: URL) {
         webView.load(URLRequest(url: url))
     }
@@ -108,6 +118,10 @@ extension BrowserSession: WKNavigationDelegate {
         MainActor.assumeIsolated {
             if info.activity == .working || info.activity == .starting { info.activity = .idle }
             info.lastActivityAt = Date()
+            if let script = pendingScript {
+                pendingScript = nil
+                webView.evaluateJavaScript(script)
+            }
             refreshSnapshot(force: true)
         }
     }
