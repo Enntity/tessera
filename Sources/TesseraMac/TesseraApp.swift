@@ -109,6 +109,29 @@ final class AppModel {
             case "url": if parts.count > 1 { workspace.openBrowser(parts[1]) }
             case "palette": showPalette = true
             case "privacy": privacyMode = true
+            case "responder":
+                let r = window?.firstResponder.map { String(describing: type(of: $0)) } ?? "nil"
+                if parts.count > 1 { try? r.write(toFile: parts[1], atomically: true, encoding: .utf8) }
+            case "openlast":
+                if let id = workspace.selectedId { open(id) }
+            case "key":
+                // Synthesizes key presses (up,down,left,right,esc) into the window.
+                let keys: [String: (UInt16, Int)] = ["up": (126, NSUpArrowFunctionKey), "down": (125, NSDownArrowFunctionKey),
+                                                     "left": (123, NSLeftArrowFunctionKey), "right": (124, NSRightArrowFunctionKey),
+                                                     "esc": (53, 0x1B)]
+                for name in (parts.count > 1 ? parts[1] : "").split(separator: ",").map(String.init) {
+                    guard let (code, char) = keys[name], let window else { continue }
+                    let chars = String(UnicodeScalar(UInt32(char)).map(Character.init) ?? " ")
+                    let flags: NSEvent.ModifierFlags = char > 0xF000 ? [.function, .numericPad] : []
+                    for type in [NSEvent.EventType.keyDown, .keyUp] {
+                        if let e = NSEvent.keyEvent(with: type, location: .zero, modifierFlags: flags, timestamp: ProcessInfo.processInfo.systemUptime,
+                                                    windowNumber: window.windowNumber, context: nil, characters: chars,
+                                                    charactersIgnoringModifiers: chars, isARepeat: false, keyCode: code) {
+                            // Straight to the window: works while the test copy is in the background.
+                            window.sendEvent(e)
+                        }
+                    }
+                }
             case "opendsh":
                 if let tile = workspace.allTiles.first(where: { $0.flavor == .dsh }) { open(tile.id) }
             case "machine": if parts.count > 1 { workspace.machines.add(host: parts[1], name: nil) }

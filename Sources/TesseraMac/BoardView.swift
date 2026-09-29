@@ -46,32 +46,40 @@ struct BoardView: View {
         .focused($focused)
         .focusEffectDisabled()
         .onAppear { focused = true }
-        .onKeyPress(.leftArrow) { move(-1); return .handled }
-        .onKeyPress(.rightArrow) { move(1); return .handled }
-        .onKeyPress(.upArrow) { moveRow(-1); return .handled }
-        .onKeyPress(.downArrow) { moveRow(1); return .handled }
+        // An open tile owns the keyboard: the board lets go of focus so its shortcuts can't
+        // intercept keys meant for a terminal or page, and takes it back on close.
+        .onChange(of: model.workspace.expandedId) { _, open in focused = open == nil }
+        .onKeyPress(.leftArrow) { move(-1) }
+        .onKeyPress(.rightArrow) { move(1) }
+        .onKeyPress(.upArrow) { moveRow(-1) }
+        .onKeyPress(.downArrow) { moveRow(1) }
         .onKeyPress(.return) {
             guard model.workspace.expandedId == nil, let id = model.workspace.selectedId else { return .ignored }
             model.open(id)
             return .handled
         }
         .onKeyPress(.escape) {
-            guard model.workspace.expandedId != nil else { return .ignored }
+            // Terminals and pages use Esc themselves (agents: interrupt), so it only closes a
+            // conversation transcript; ⌘⏎ closes anything.
+            guard let open = model.workspace.expandedId, model.workspace.info(open)?.kind == .agentSession else { return .ignored }
             model.collapse()
             return .handled
         }
     }
 
-    private func move(_ delta: Int) {
-        guard model.workspace.expandedId == nil else { return }
+    /// Arrow keys move the selection only while the board itself is showing.
+    private func move(_ delta: Int) -> KeyPress.Result {
+        guard model.workspace.expandedId == nil else { return .ignored }
         model.cycle(delta)
+        return .handled
     }
 
-    private func moveRow(_ delta: Int) {
-        guard model.workspace.expandedId == nil, let window = model.window else { return }
+    private func moveRow(_ delta: Int) -> KeyPress.Result {
+        guard model.workspace.expandedId == nil, let window = model.window else { return .ignored }
         let size = window.contentView?.bounds.size ?? .zero
         let cols = GridLayout.fit(count: model.workspace.visibleTiles.count, in: size, spacing: 10, aspect: 16.0 / 10.5, minTileWidth: 230).columns
         model.cycle(delta * max(cols, 1))
+        return .handled
     }
 }
 
