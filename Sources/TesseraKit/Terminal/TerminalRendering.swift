@@ -37,8 +37,9 @@ public struct TerminalTheme: Sendable {
     }
 }
 
-/// Draws a SwiftTerm screen into any CGContext: as text, or in privacy mode as a colored block per
-/// word, which keeps the look of live activity without the content.
+/// Draws a SwiftTerm screen into any CGContext. At thumbnail scale glyphs become a colored
+/// "minimap" of blocks, which reads as live activity and costs almost nothing; once cells are
+/// big enough to read, real text is drawn.
 public final class MiniTerminalRenderer {
     public let theme: TerminalTheme
     private let palette: [RGB]
@@ -62,33 +63,39 @@ public final class MiniTerminalRenderer {
     }
 
     /// `ctx` must be in a top-left-origin, y-down coordinate space (SwiftUI Canvas, flipped NSView, UIView).
-    ///
-    /// With a `textSize`, text is drawn at that size: as many rows and columns as fit, ending at the live
-    /// edge (where agents print their latest output). Without one, the whole screen is fit to `size`.
-    /// `obscured` (privacy mode) draws blocks in place of glyphs and changes nothing else.
-    public func draw(_ terminal: Terminal, in ctx: CGContext, size: CGSize, textSize: CGFloat? = nil,
-                     showCursor: Bool = true, obscured: Bool = false) {
+    /// `obscured` (privacy mode) draws a block per word in place of the text, at the same size and place.
+    /// Cell height used when the whole screen won't fit readably: text at roughly 6 pt.
+    public var focusCellHeight: CGFloat = 8
+
+    /// Draws the terminal into `size`. If the whole screen fits at a readable size it is drawn as
+    /// text; if not, the tile shows a readable crop anchored at the live edge (where agents print
+    /// their latest output).
+    public func draw(_ terminal: Terminal, in ctx: CGContext, size: CGSize, showCursor: Bool = true, obscured: Bool = false) {
         ctx.setFillColor(color(theme.background))
         ctx.fill(CGRect(origin: .zero, size: size))
         let cols = terminal.cols, rows = terminal.rows
-        guard let textSize else {
-            let fit = Self.cellSize(cols: cols, rows: rows, fitting: size)
-            guard fit.width > 0.2 else { return }
+        let fit = Self.cellSize(cols: cols, rows: rows, fitting: size)
+        guard fit.width > 0.2 else { return }
+
+        if fit.height >= textThreshold {
+            // Whole screen, bottom-anchored.
             let yOffset = max(0, size.height - fit.height * CGFloat(rows))
-            let font = obscured || fit.height < textThreshold ? nil : self.font(size: fit.height * 0.78)
+            let font = obscured ? nil : self.font(size: fit.height * 0.78)
             drawRows(terminal, rows: 0..<rows, cols: cols, cell: fit, origin: CGPoint(x: 0, y: yOffset), font: font, in: ctx)
             if showCursor { drawCursor(terminal, firstRow: 0, rows: rows, cell: fit, origin: CGPoint(x: 0, y: yOffset), in: ctx) }
             return
         }
-        // Menlo advances 0.6 em; the font is 0.78 of the cell height.
-        let cell = CGSize(width: textSize * 0.6, height: textSize / 0.78)
+
+        // Readable crop: as many rows and columns as fit at the focus size, ending at the live edge.
+        // Menlo advances ~0.6 em and the font is 0.78 of the cell height.
+        let cell = CGSize(width: focusCellHeight * 0.78 * 0.6, height: focusCellHeight)
         let visibleRows = max(1, Int(size.height / cell.height))
         let visibleCols = max(1, Int(ceil(size.width / cell.width)))
         let edge = max(lastTextRow(terminal), terminal.getCursorLocation().y)
         let first = max(0, min(edge - visibleRows + 1, rows - visibleRows))
         let range = first..<min(rows, first + visibleRows)
         drawRows(terminal, rows: range, cols: min(cols, visibleCols), cell: cell, origin: .zero,
-                 font: obscured ? nil : self.font(size: textSize), in: ctx)
+                 font: obscured ? nil : self.font(size: cell.height * 0.78), in: ctx)
         if showCursor { drawCursor(terminal, firstRow: first, rows: range.upperBound, cell: cell, origin: .zero, in: ctx) }
     }
 

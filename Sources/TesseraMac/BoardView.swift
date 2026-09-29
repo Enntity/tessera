@@ -216,8 +216,8 @@ struct TileView: View {
             }
         case .agentSession:
             ConversationThumbnail(snapshot: workspace.agents.sessions[info.id]?.snapshot, flavor: info.flavor,
-                                  maxItems: size.height > 300 ? 10 : 6,
-                                  fontScale: Style.tileScale(width: size.width))
+                                  maxItems: size.height > 300 ? 20 : 12,
+                                  fontScale: ConversationThumbnail.terminalMatchedScale)
         }
     }
 
@@ -370,7 +370,8 @@ struct PrivateWebCover: View {
                                   space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
         ctx.interpolationQuality = .medium
         ctx.draw(cg, in: CGRect(x: 0, y: 0, width: w, height: h))
-        return ctx.makeImage().map { NSImage(cgImage: $0, size: NSSize(width: w, height: h)) }
+        // Keep the page's shape: stretched back to it, the pixels become the wide, short cells.
+        return ctx.makeImage().map { NSImage(cgImage: $0, size: image.size) }
     }
 }
 

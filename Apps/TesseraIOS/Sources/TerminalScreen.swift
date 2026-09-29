@@ -66,7 +66,7 @@ struct TerminalScreen: View {
             let t: Terminal = mirror.terminal
             let cell = geo.size.width / CGFloat(max(t.cols, 1)) * zoom * pinch
             ScrollView([.horizontal, .vertical]) {
-                TerminalThumbnail(terminal: t, revision: revision, wholeScreen: true)
+                TerminalThumbnail(terminal: t, revision: revision)
                     .equatable()
                     .frame(width: cell * CGFloat(t.cols), height: cell * 2.05 * CGFloat(t.rows))
             }
