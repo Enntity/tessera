@@ -497,3 +497,26 @@ final class SessionResumeTests: XCTestCase {
         XCTAssertEqual(ShellWords.split(ShellWords.join(words)), words)
     }
 }
+
+final class WebAddressTests: XCTestCase {
+    func testLocalAndPrivateHostsGetHTTP() {
+        XCTAssertEqual(WebAddress.normalize("127.0.0.1:3080/?token=abc")?.absoluteString, "http://127.0.0.1:3080/?token=abc")
+        XCTAssertEqual(WebAddress.normalize("localhost:3000")?.absoluteString, "http://localhost:3000")
+        XCTAssertEqual(WebAddress.normalize("100.101.102.103:8080")?.absoluteString, "http://100.101.102.103:8080")
+        XCTAssertEqual(WebAddress.normalize("[::1]:5173/app")?.absoluteString, "http://[::1]:5173/app")
+        XCTAssertEqual(WebAddress.normalize("myhost.local")?.absoluteString, "http://myhost.local")
+    }
+
+    func testPublicHostsGetHTTPSAndSchemesAreKept() {
+        XCTAssertEqual(WebAddress.normalize("github.com/enntity")?.absoluteString, "https://github.com/enntity")
+        XCTAssertEqual(WebAddress.normalize("http://example.com")?.absoluteString, "http://example.com")
+        XCTAssertEqual(WebAddress.normalize("8.8.8.8")?.absoluteString, "https://8.8.8.8")
+    }
+
+    func testSearchesStaySearches() {
+        XCTAssertTrue(WebAddress.normalize("swift concurrency")!.absoluteString.hasPrefix("https://www.google.com/search?q=swift"))
+        XCTAssertFalse(WebAddress.looksLikeAddress("hello"))
+        XCTAssertTrue(WebAddress.looksLikeAddress("localhost:3000"))
+        XCTAssertFalse(WebAddress.looksLikeAddress(".hidden"))
+    }
+}

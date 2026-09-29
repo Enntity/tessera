@@ -106,7 +106,7 @@ struct PanelHeader: View {
                     .onAppear { urlText = info.url ?? "" }
                     .onChange(of: info.url) { _, u in urlText = u ?? "" }
                     .onSubmit {
-                        if let url = URL(string: urlText.contains("://") ? urlText : "https://" + urlText) { browser.load(url) }
+                        if let url = WebAddress.normalize(urlText) { browser.load(url) }
                     }
             } else {
                 VStack(alignment: .leading, spacing: 1) {

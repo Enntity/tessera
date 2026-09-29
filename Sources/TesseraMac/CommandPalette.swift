@@ -112,7 +112,7 @@ struct CommandPalette: View {
             })
         }
         if !q.isEmpty {
-            let looksLikeURL = q.contains("://") || (q.contains(".") && !q.contains(" ") && !q.hasPrefix("."))
+            let looksLikeURL = WebAddress.looksLikeAddress(q)
             if looksLikeURL {
                 out.insert(Item(id: "url", symbol: "globe", color: Style.violet, title: "Open \(q)", subtitle: "New web tile") {
                     workspace.openBrowser(q)

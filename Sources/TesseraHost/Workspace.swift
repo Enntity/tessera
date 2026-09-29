@@ -323,6 +323,13 @@ public final class Workspace {
 
     private func adopt(_ session: TerminalSession) {
         session.onResumableChange = { [weak self] in self?.save() }
+        // A link clicked in a terminal (e.g. the URL a dev server or `dsh web` prints) opens as a
+        // web tile right after that terminal, and comes forward.
+        session.onOpenLink = { [weak self, weak session] url in
+            guard let self, let session else { return }
+            self.selectedId = session.id
+            if let id = self.openBrowser(url.absoluteString) { self.expand(id) }
+        }
         terminals[session.id] = session
     }
 
@@ -431,13 +438,5 @@ public final class Workspace {
         selectedId = order.first
     }
 
-    static func normalizeURL(_ raw: String) -> URL? {
-        let s = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !s.isEmpty else { return nil }
-        if s.contains("://") { return URL(string: s) }
-        if s.contains(".") && !s.contains(" ") { return URL(string: "https://" + s) }
-        var c = URLComponents(string: "https://www.google.com/search")
-        c?.queryItems = [URLQueryItem(name: "q", value: s)]
-        return c?.url
-    }
+    static func normalizeURL(_ raw: String) -> URL? { WebAddress.normalize(raw) }
 }

@@ -51,6 +51,8 @@ public final class TerminalSession: NSObject {
     @ObservationIgnored private var settledScanDone = false
     @ObservationIgnored private var progress: Double?
     @ObservationIgnored public private(set) var isRunning = false
+    /// Opens web links clicked in this terminal (the workspace makes them web tiles).
+    @ObservationIgnored public var onOpenLink: ((URL) -> Void)?
     /// Called when what this tile would resume changes (an agent started or ended), so it can be saved.
     @ObservationIgnored public var onResumableChange: (() -> Void)?
     /// Raw output fan-out for remote clients.
@@ -466,7 +468,14 @@ extension TerminalSession: TerminalViewDelegate {
     nonisolated public func scrolled(source: TerminalView, position: Double) {}
 
     nonisolated public func requestOpenLink(source: TerminalView, link: String, params: [String: String]) {
-        if let url = URL(string: link) { NSWorkspace.shared.open(url) }
+        guard let url = URL(string: link) else { return }
+        MainActor.assumeIsolated {
+            if ["http", "https"].contains(url.scheme?.lowercased() ?? ""), let open = onOpenLink {
+                open(url)
+            } else {
+                NSWorkspace.shared.open(url)
+            }
+        }
     }
 
     nonisolated public func bell(source: TerminalView) {
