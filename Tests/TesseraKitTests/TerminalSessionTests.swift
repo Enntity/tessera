@@ -164,3 +164,42 @@ final class LocalSamplerTests: XCTestCase {
         if let t = last?.temperature { XCTAssert((10...120).contains(t)) }
     }
 }
+
+final class ClaudeLocalUsageTests: XCTestCase {
+    func testCountsEachMessageOnceWithinTheWindow() throws {
+        let root = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("tessera-usage-\(UUID().uuidString.prefix(6))")
+        let project = root.appendingPathComponent("-tmp-proj")
+        try FileManager.default.createDirectory(at: project, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let now = Date()
+        func entry(_ id: String, _ at: Date) -> String {
+            #"{"type":"assistant","timestamp":"\#(f.string(from: at))","message":{"id":"\#(id)","usage":{"input_tokens":100,"output_tokens":50,"cache_creation_input_tokens":10,"cache_read_input_tokens":99999}}}"#
+        }
+        let lines = [
+            entry("m1", now.addingTimeInterval(-600)),
+            entry("m1", now.addingTimeInterval(-600)),          // same message, second content block
+            entry("m2", now.addingTimeInterval(-3 * 86_400)),   // this week, not last 5h
+            entry("m3", now.addingTimeInterval(-9 * 86_400)),   // older than a week
+            #"{"type":"user","message":{"content":"hi"}}"#
+        ]
+        let path = project.appendingPathComponent("s.jsonl")
+        try (lines.joined(separator: "\n") + "\n").write(to: path, atomically: true, encoding: .utf8)
+
+        let usage = ClaudeLocalUsage(root: root)
+        var totals = usage.refresh(now: now)
+        XCTAssertEqual(totals.fiveHours.tokens, 160)
+        XCTAssertEqual(totals.fiveHours.replies, 1)
+        XCTAssertEqual(totals.week.tokens, 320)
+        XCTAssertEqual(totals.week.replies, 2)
+
+        // Appends are picked up incrementally.
+        let handle = try FileHandle(forWritingTo: path)
+        handle.seekToEndOfFile()
+        handle.write(Data((entry("m4", now.addingTimeInterval(-60)) + "\n").utf8))
+        try handle.close()
+        totals = usage.refresh(now: now)
+        XCTAssertEqual(totals.fiveHours.replies, 2)
+    }
+}

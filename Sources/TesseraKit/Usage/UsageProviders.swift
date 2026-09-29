@@ -95,7 +95,7 @@ public extension UsageProviderKind {
                   keyHint: "xai-…", help: "xAI API key. Shows key status; top up in the console.")
         case .claudePlan:
             .init(name: "Claude plan", symbol: "sparkle", topUpURL: "https://claude.ai/settings/usage",
-                  keyHint: nil, help: "Reads the Claude Code sign-in from your Keychain to show 5-hour and weekly plan limits.")
+                  keyHint: nil, help: "Official 5-hour and weekly limits via Claude Code's sign-in when it's current; otherwise usage counted from your local Claude transcripts.")
         case .codexPlan:
             .init(name: "ChatGPT / Codex plan", symbol: "chevron.left.forwardslash.chevron.right", topUpURL: "https://chatgpt.com/codex/settings/usage",
                   keyHint: nil, help: "Reads the rate limits Codex records in ~/.codex/sessions. No key needed.")
@@ -287,6 +287,18 @@ public enum UsageAPI {
         reading.remaining = max(0, 1 - worst / 100)
         reading.lines = parts + (limits.planType.map { ["Plan: \($0)"] } ?? [])
         return reading
+    }
+
+    /// The Claude plan row from locally counted usage, when the official limits aren't available.
+    public static func claudeLocalReading(config: UsageProviderConfig, fiveHours: (tokens: Int, replies: Int),
+                                          week: (tokens: Int, replies: Int), note: String?, now: Date = Date()) -> UsageReading {
+        let spec = config.kind.spec
+        return UsageReading(
+            id: config.id, name: config.name, symbol: spec.symbol,
+            headline: "5h · \(fiveHours.tokens.compactTokens) tokens",
+            remaining: nil,
+            lines: ["Week · \(week.tokens.compactTokens) tokens · \(week.replies) replies", "Counted from local transcripts"],
+            status: .ok, message: note, topUpURL: spec.topUpURL, updatedAt: now)
     }
 
     static func applySpend(_ spent: Double, to reading: inout UsageReading, budget: Double?) {

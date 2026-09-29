@@ -18,6 +18,9 @@ public final class UsageService {
     @ObservationIgnored private var retryAt: [String: Date] = [:]
     @ObservationIgnored private var failures: [String: Int] = [:]
     @ObservationIgnored private var lastGood: [String: Date] = [:]
+    @ObservationIgnored private let claudeLocal = ClaudeLocalUsage()
+    /// When to next try the official Claude plan endpoint after it refused us.
+    @ObservationIgnored private var claudeOfficialRetryAt: Date?
     @ObservationIgnored private let store: URL
     @ObservationIgnored private let session: URLSession = {
         let c = URLSessionConfiguration.ephemeral
@@ -104,7 +107,9 @@ public final class UsageService {
             readings[config.id] = UsageAPI.reading(for: codexRateLimits, config: config)
             return
         case .claudePlan:
-            break
+            lastAttempt[config.id] = now
+            refreshClaudePlan(config, force: force)
+            return
         default:
             if spec.keyHint != nil, config.kind != .custom, !hasKey(config.id) {
                 readings[config.id] = UsageReading(id: config.id, name: config.name, symbol: spec.symbol, status: .needsKey, topUpURL: spec.topUpURL)
@@ -142,6 +147,61 @@ public final class UsageService {
                 self.lastGood[config.id] = Date()
             } catch {
                 self.readings[config.id] = self.failure(config, error.localizedDescription)
+            }
+        }
+    }
+
+    /// Claude plan: the official 5-hour / weekly limits when Claude Code's sign-in works, otherwise
+    /// usage counted from local transcripts plus a hint — never a dead error.
+    private func refreshClaudePlan(_ config: UsageProviderConfig, force: Bool) {
+        if readings[config.id] == nil {
+            readings[config.id] = UsageReading(id: config.id, name: config.name, symbol: config.kind.spec.symbol, status: .loading)
+        }
+        let tryOfficial = force || claudeOfficialRetryAt.map { Date() >= $0 } ?? true
+        let local = claudeLocal
+        Task { [session] in
+            let counted = await Task.detached(priority: .utility) { local.refresh() }.value
+            var official: UsageReading?
+            var note: String?
+            if tryOfficial {
+                if let token = await ClaudeTokenCache.shared.token(), let request = UsageAPI.request(for: config, key: token) {
+                    do {
+                        let (data, response) = try await session.data(for: request)
+                        let http = response as? HTTPURLResponse
+                        switch http?.statusCode ?? 0 {
+                        case 200..<300:
+                            official = try? UsageAPI.parse(data, for: config)
+                            self.claudeOfficialRetryAt = nil
+                        case 401, 403:
+                            await ClaudeTokenCache.shared.invalidate()
+                            note = "Official limits need a fresh Claude Code sign-in — run `claude` once in a terminal."
+                            self.claudeOfficialRetryAt = Date().addingTimeInterval(1800)
+                        case 429:
+                            note = "Official limits are rate-limited right now."
+                            self.claudeOfficialRetryAt = Date().addingTimeInterval(
+                                UsageAPI.backoff(failures: 1, retryAfter: http?.value(forHTTPHeaderField: "Retry-After")))
+                        case let code:
+                            note = "Official limits unavailable (HTTP \(code))."
+                            self.claudeOfficialRetryAt = Date().addingTimeInterval(900)
+                        }
+                    } catch {
+                        note = "Official limits unreachable: \(error.localizedDescription)"
+                        self.claudeOfficialRetryAt = Date().addingTimeInterval(300)
+                    }
+                } else {
+                    note = "Sign in to Claude Code (run `claude`) for official plan limits."
+                    self.claudeOfficialRetryAt = Date().addingTimeInterval(1800)
+                }
+            } else {
+                note = self.readings[config.id]?.message
+            }
+            if var reading = official {
+                reading.lines.append("Local · 5h \(counted.fiveHours.tokens.compactTokens) · week \(counted.week.tokens.compactTokens) tokens")
+                self.readings[config.id] = reading
+            } else {
+                self.readings[config.id] = UsageAPI.claudeLocalReading(
+                    config: config, fiveHours: (counted.fiveHours.tokens, counted.fiveHours.replies),
+                    week: (counted.week.tokens, counted.week.replies), note: note)
             }
         }
     }
