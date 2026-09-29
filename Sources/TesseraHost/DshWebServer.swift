@@ -84,9 +84,9 @@ public final class DshWebServer {
                 MainActor.assumeIsolated {
                     guard let self, self.process === proc else { return }
                     self.process = nil
-                    let tail = self.output.split(separator: "\\n").suffix(2).joined(separator: " ").preview(160)
-                    self.state = .failed("dsh web exited (\\(proc.terminationStatus)). \\(tail)")
-                    self.finish(.failure(DshError(message: "dsh web exited before it was ready. \\(tail)")))
+                    let tail = self.output.split(separator: "\n").suffix(2).joined(separator: " ").preview(160)
+                    self.state = .failed("dsh web exited (\(proc.terminationStatus)). \(tail)")
+                    self.finish(.failure(DshError(message: "dsh web exited before it was ready. \(tail)")))
                 }
             }
         }
