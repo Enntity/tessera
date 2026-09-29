@@ -38,6 +38,13 @@ public enum Keychain {
         guard SecItemCopyMatching(query as CFDictionary, &out) == errSecSuccess, let data = out as? Data else { return nil }
         return String(data: data, encoding: .utf8)
     }
+
+    /// Replaces the value of an existing generic password by service name, keeping its owner's access list.
+    @discardableResult
+    public static func updateGenericPassword(service: String, value: String) -> Bool {
+        let query: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service]
+        return SecItemUpdate(query as CFDictionary, [kSecValueData as String: Data(value.utf8)] as CFDictionary) == errSecSuccess
+    }
 }
 
 public enum Preferences {

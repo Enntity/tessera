@@ -21,6 +21,10 @@ public final class UsageService {
     @ObservationIgnored private let claudeLocal = ClaudeLocalUsage()
     /// When to next try the official Claude plan endpoint after it refused us.
     @ObservationIgnored private var claudeOfficialRetryAt: Date?
+    /// The last official Claude reading and why the latest attempt didn't get one, so a refused
+    /// or skipped attempt keeps showing what's left instead of only local counts.
+    @ObservationIgnored private var claudeOfficial: UsageReading?
+    @ObservationIgnored private var claudeNote: String?
     @ObservationIgnored private let store: URL
     @ObservationIgnored private let session: URLSession = {
         let c = URLSessionConfiguration.ephemeral
@@ -192,10 +196,15 @@ public final class UsageService {
                     note = "Sign in to Claude Code (run `claude`) for official plan limits."
                     self.claudeOfficialRetryAt = Date().addingTimeInterval(1800)
                 }
+                self.claudeNote = note
             } else {
-                note = self.readings[config.id]?.message
+                note = self.claudeNote
             }
-            if var reading = official {
+            if let official { self.claudeOfficial = official }
+            if var reading = self.claudeOfficial {
+                if official == nil {
+                    reading.message = [note, "limits from \(reading.updatedAt.shortAge()) ago"].compactMap { $0 }.joined(separator: " · ")
+                }
                 reading.lines.append("Local · 5h \(counted.fiveHours.tokens.compactTokens) · week \(counted.week.tokens.compactTokens) tokens")
                 self.readings[config.id] = reading
             } else {
@@ -243,21 +252,89 @@ public final class UsageService {
 
 /// Claude Code stores its OAuth sign-in as JSON in the login Keychain. macOS asks the user before
 /// letting Tessera read it, and nothing is read unless the Claude plan provider is added. The token
-/// is only ever sent to api.anthropic.com, and is re-read at most every ten minutes.
+/// is only ever sent to Anthropic. Only the `claude` CLI renews it, so when it has expired Tessera
+/// renews it the same way and writes it back, keeping a single sign-in for both.
 actor ClaudeTokenCache {
     static let shared = ClaudeTokenCache()
-    private var cached: (token: String, at: Date)?
+    private static let service = "Claude Code-credentials"
+    private var cached: (token: ClaudeOAuth.Token, at: Date)?
+    private var renewing: Task<String?, Never>?
 
-    func token() -> String? {
-        if let cached, Date().timeIntervalSince(cached.at) < 600 { return cached.token }
-        guard let raw = Keychain.firstGenericPassword(service: "Claude Code-credentials"),
-              let data = raw.data(using: .utf8),
-              let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
-              let oauth = obj["claudeAiOauth"] as? [String: Any],
-              let token = oauth["accessToken"] as? String else { return nil }
-        cached = (token, Date())
-        return token
+    func token() async -> String? {
+        let now = Date()
+        if let cached, now.timeIntervalSince(cached.at) < 600, cached.token.expiresAt > now.addingTimeInterval(ClaudeOAuth.margin) {
+            return cached.token.value
+        }
+        guard let raw = Keychain.firstGenericPassword(service: Self.service) else { return nil }
+        if let t = ClaudeOAuth.token(in: raw, now: now) {
+            cached = (t, now)
+            return t.value
+        }
+        // One renewal at a time: a second use of the same refresh token would fail once it rotates.
+        if let renewing { return await renewing.value }
+        let task = Task { await renew(raw) }
+        renewing = task
+        defer { renewing = nil }
+        return await task.value
+    }
+
+    private func renew(_ raw: String) async -> String? {
+        guard let request = ClaudeOAuth.refreshRequest(raw),
+              let (data, response) = try? await URLSession.shared.data(for: request),
+              (response as? HTTPURLResponse)?.statusCode == 200,
+              let renewed = ClaudeOAuth.renewed(raw, response: data, now: Date()),
+              let t = ClaudeOAuth.token(in: renewed, now: Date()) else { return nil }
+        Keychain.updateGenericPassword(service: Self.service, value: renewed)
+        cached = (t, Date())
+        return t.value
     }
 
     func invalidate() { cached = nil }
+}
+
+/// Claude Code's sign-in format and token renewal, mirroring its CLI.
+enum ClaudeOAuth {
+    struct Token { var value: String; var expiresAt: Date }
+    static let tokenURL = URL(string: "https://platform.claude.com/v1/oauth/token")!
+    static let clientID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
+    /// Treat a token this close to expiry as expired, so a request never races it.
+    static let margin: TimeInterval = 300
+
+    private static func oauth(_ credentials: String) -> [String: Any]? {
+        (try? JSONSerialization.jsonObject(with: Data(credentials.utf8)) as? [String: Any])?["claudeAiOauth"] as? [String: Any]
+    }
+
+    /// The access token, when present and not about to expire.
+    static func token(in credentials: String, now: Date) -> Token? {
+        guard let o = oauth(credentials), let value = o["accessToken"] as? String,
+              let ms = (o["expiresAt"] as? NSNumber)?.doubleValue else { return nil }
+        let expiresAt = Date(timeIntervalSince1970: ms / 1000)
+        return expiresAt > now.addingTimeInterval(margin) ? Token(value: value, expiresAt: expiresAt) : nil
+    }
+
+    static func refreshRequest(_ credentials: String) -> URLRequest? {
+        guard let o = oauth(credentials), let refresh = o["refreshToken"] as? String else { return nil }
+        var r = URLRequest(url: tokenURL)
+        r.httpMethod = "POST"
+        r.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        // The token endpoint's edge rejects unfamiliar default agents before reading the request.
+        r.setValue("Tessera", forHTTPHeaderField: "User-Agent")
+        r.httpBody = try? JSONSerialization.data(withJSONObject: [
+            "grant_type": "refresh_token", "refresh_token": refresh, "client_id": clientID,
+            "scope": (o["scopes"] as? [String] ?? []).joined(separator: " ")])
+        return r
+    }
+
+    /// The stored credentials with the renewed tokens merged in and every other field kept.
+    static func renewed(_ credentials: String, response: Data, now: Date) -> String? {
+        guard var root = try? JSONSerialization.jsonObject(with: Data(credentials.utf8)) as? [String: Any],
+              var o = root["claudeAiOauth"] as? [String: Any],
+              let r = try? JSONSerialization.jsonObject(with: response) as? [String: Any],
+              let access = r["access_token"] as? String, let expiresIn = (r["expires_in"] as? NSNumber)?.doubleValue else { return nil }
+        o["accessToken"] = access
+        if let refresh = r["refresh_token"] as? String { o["refreshToken"] = refresh }
+        o["expiresAt"] = Int64((now.timeIntervalSince1970 + expiresIn) * 1000)
+        root["claudeAiOauth"] = o
+        return (try? JSONSerialization.data(withJSONObject: root)).map { String(decoding: $0, as: UTF8.self) }
+    }
 }
