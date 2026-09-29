@@ -86,7 +86,9 @@ final class DshWebServerTests: XCTestCase {
     }
 
     func testSessionSelectionScriptQuotesTitles() {
-        let js = Workspace.selectDshSessionScript(title: #"Fix "quotes" & </script>"#)
-        XCTAssertTrue(js.contains(#"["Fix \"quotes\" & <\/script>"][0]"#) || js.contains(#"["Fix \"quotes\" & </script>"][0]"#))
+        let js = Workspace.selectDshSessionScript(title: #"Fix "quotes" & </script>"#, folder: "enn'tity")
+        XCTAssertTrue(js.contains(#"Fix \"quotes\""#))
+        XCTAssertTrue(js.contains(#"["enn'tity"][0]"#))
+        XCTAssertTrue(js.contains("more sessions") && js.contains("aria-expanded"))
     }
 }

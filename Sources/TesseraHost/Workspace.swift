@@ -287,26 +287,44 @@ public final class Workspace {
                 page = BrowserSession(url: launch)
                 self.dshPage = page
             }
-            page.evaluateWhenLoaded(Self.selectDshSessionScript(title: session.title))
+            page.evaluateWhenLoaded(Self.selectDshSessionScript(title: session.title,
+                                                                folder: (session.cwd as NSString).lastPathComponent))
         }
     }
 
-    /// dsh web has no per-session URL; pick the session in its sidebar by its visible title,
-    /// retrying briefly while the list loads. Harmless if it isn't found.
-    nonisolated static func selectDshSessionScript(title: String) -> String {
-        let quoted = (try? JSONSerialization.data(withJSONObject: [title])).map { String(decoding: $0, as: UTF8.self) } ?? "[\"\"]"
+    /// dsh web has no per-session URL, so select the session in its sidebar. Sessions are grouped
+    /// under workspace rows that don't render their sessions while collapsed, and long lists hide
+    /// rows behind "Show N more sessions" — so: wait for the tree, expand the session's workspace
+    /// (by folder name, else every collapsed one), reveal overflow until the title appears, click it.
+    nonisolated static func selectDshSessionScript(title: String, folder: String) -> String {
+        func js(_ s: String) -> String {
+            (try? JSONSerialization.data(withJSONObject: [s])).map { String(decoding: $0, as: UTF8.self) } ?? "[\"\"]"
+        }
         return """
-        (function(title){
-          var tries = 0;
-          function attempt(){
-            var hit = Array.prototype.find.call(document.querySelectorAll('body *'), function(e){
-              return e.children.length === 0 && (e.textContent || '').trim() === title;
-            });
-            if (hit) { (hit.closest('a,button,[role="button"],[role="option"],[role="link"],[role="treeitem"],li') || hit).click(); return; }
-            if (++tries < 40) setTimeout(attempt, 250);
+        (async function(title, folder){
+          const sleep = ms => new Promise(r => setTimeout(r, ms));
+          const rows = () => Array.from(document.querySelectorAll('[role="treeitem"]'));
+          const text = r => ((r.querySelector('[class*="title"]') || r).textContent || '').trim();
+          const sessionRow = () => rows().find(r => /sessionRow/.test(r.className) && text(r) === title);
+          for (let i = 0; i < 40 && !rows().length; i++) await sleep(250);
+          let row = sessionRow();
+          if (!row) {
+            const projects = rows().filter(r => /projectRow/.test(r.className));
+            const own = projects.filter(p => text(p) === folder);
+            for (const p of (own.length ? own : projects)) {
+              if (p.getAttribute('aria-expanded') === 'false') { p.click(); await sleep(300); }
+            }
+            row = sessionRow();
           }
-          attempt();
-        })(\(quoted)[0]);
+          for (let i = 0; !row && i < 25; i++) {
+            const more = Array.from(document.querySelectorAll('button')).filter(b => /more sessions/i.test(b.textContent || ''));
+            if (!more.length) break;
+            more.forEach(b => b.click());
+            await sleep(350);
+            row = sessionRow();
+          }
+          if (row && !/selected/.test(row.className)) { row.scrollIntoView({block: 'center'}); row.click(); }
+        })(\(js(title))[0], \(js(folder))[0]);
         """
     }
 
