@@ -48,7 +48,16 @@ public enum AgentFlavor: String, Codable, Sendable, CaseIterable {
 
     /// Guess the flavor from a command line (`claude --resume x` → .claude).
     public static func infer(fromCommand command: String?) -> AgentFlavor {
-        guard let first = command?.split(separator: " ").first.map(String.init) else { return .shell }
+        guard let command, let first = command.split(separator: " ").first.map(String.init) else { return .shell }
+        // Launchers (`codex-work`) look like their tool.
+        switch SessionResume.tool(for: command) {
+        case .claude: return .claude
+        case .codex: return .codex
+        case .grok: return .grok
+        case .opencode: return .opencode
+        case .omp: return .omp
+        case nil: break
+        }
         let exe = (first as NSString).lastPathComponent.lowercased()
         switch exe {
         case "claude": return .claude

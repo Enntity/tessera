@@ -11,7 +11,8 @@ import TesseraKit
 @MainActor
 public final class TerminalSession: NSObject {
     public let id: String
-    /// What the user launched (never rewritten with session flags); resume commands derive from it.
+    /// The agent (or launched) command this tile would bring back — what the user launched or typed,
+    /// launcher and all, never rewritten with session flags. Nil when the tile is at a shell prompt.
     public var command: String?
     public var cwd: String
     /// The agent conversation this tile is in, when known (assigned at launch, parsed from the
@@ -23,8 +24,12 @@ public final class TerminalSession: NSObject {
     /// Only one tile per tool and folder should, or they'd all attach to the same conversation.
     @ObservationIgnored public var mayContinueLatest = true
     @ObservationIgnored public private(set) var launchedAt = Date()
+    /// Secret the tile's shell hooks include in their reports, so printed output can't forge them.
+    @ObservationIgnored private let shellNonce = ShellEvent.makeNonce()
+    /// The user's login shell (overridable for tests).
+    @ObservationIgnored private let shell: String
     @ObservationIgnored private var hasStarted = false
-    public let flavor: AgentFlavor
+    public private(set) var flavor: AgentFlavor
     public private(set) var title: String
     public var customTitle: String?
     public private(set) var info: TileInfo
@@ -44,6 +49,8 @@ public final class TerminalSession: NSObject {
     @ObservationIgnored private var settledScanDone = false
     @ObservationIgnored private var progress: Double?
     @ObservationIgnored public private(set) var isRunning = false
+    /// Called when what this tile would resume changes (an agent started or ended), so it can be saved.
+    @ObservationIgnored public var onResumableChange: (() -> Void)?
     /// Raw output fan-out for remote clients.
     @ObservationIgnored public var outputObservers: [UUID: ([UInt8]) -> Void] = [:]
 
@@ -53,14 +60,17 @@ public final class TerminalSession: NSObject {
     /// `title` is a user-chosen name that always wins.
     public init(id: String = UUID().uuidString, command: String?, cwd: String, title: String? = nil, label: String? = nil,
                 sessionId: String? = nil, resuming: Bool = false, mayContinueLatest: Bool = true, startSuspended: Bool = false,
+                shell: String? = nil,
                 initialSize: CGSize = CGSize(width: 1180, height: 740)) {
         self.id = id
         self.command = command
         self.cwd = cwd
         self.sessionId = sessionId ?? command.flatMap(SessionResume.sessionId(in:))
         self.hasStarted = resuming
+        self.shell = shell ?? ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"
         self.mayContinueLatest = mayContinueLatest
-        self.flavor = AgentFlavor.infer(fromCommand: command)
+        let flavor = AgentFlavor.infer(fromCommand: command)
+        self.flavor = flavor
         let initial = title ?? label ?? command ?? "Shell"
         self.title = initial
         self.customTitle = title
@@ -91,6 +101,13 @@ public final class TerminalSession: NSObject {
             let text = String(decoding: data, as: UTF8.self)
             Task { @MainActor in self?.handleOsc9(text) }
         }
+        terminal.registerOscHandler(code: ShellEvent.oscCode) { [weak self] data in
+            let payload = String(decoding: data, as: UTF8.self)
+            Task { @MainActor in
+                guard let self, let event = ShellEvent.parse(payload, nonce: self.shellNonce) else { return }
+                self.handle(event)
+            }
+        }
         terminal.registerOscHandler(code: 777) { [weak self] data in
             let parts = String(decoding: data, as: UTF8.self).split(separator: ";", maxSplits: 2).map(String.init)
             guard parts.first == "notify" else { return }
@@ -112,16 +129,19 @@ public final class TerminalSession: NSObject {
         refreshInfo()
     }
 
-    /// The command line this tile runs now: a fresh launch (with an assigned session id where the
-    /// tool allows), or — after it has run once — the resume form.
-    private func commandToRun() -> String? {
+    /// What this tile runs now: the primary command (a fresh launch with an assigned id where the
+    /// tool allows, or — after it has run once — the resume form) and a fresh-start fallback used if
+    /// the primary fails quickly (deleted session, older CLI, launcher with its own session store).
+    private func launchPlan() -> (primary: String, fallback: String?)? {
         guard let command, !command.isEmpty else { return nil }
         if !hasStarted, sessionId == nil {
             let prepared = SessionResume.prepareLaunch(command)
             sessionId = prepared.sessionId
-            return prepared.command
+            return (prepared.command, prepared.command == command ? nil : command)
         }
-        return resumeLine(for: command)
+        let primary = resumeLine(for: command)
+        let fresh = SessionResume.freshLaunch(original: command) ?? command
+        return (primary, primary == fresh ? nil : fresh)
     }
 
     /// How `command` comes back into its conversation.
@@ -131,7 +151,7 @@ public final class TerminalSession: NSObject {
         }
         // Claude only saves a conversation once a message is sent; an assigned id with no transcript
         // can't be resumed, so start it fresh under the same id.
-        if SessionResume.tool(for: command) == .claude, !Self.claudeTranscriptExists(id),
+        if SessionResume.tool(for: command) == .claude, !ClaudeSessions.transcriptExists(id),
            let fresh = SessionResume.freshLaunch(original: command, sessionId: id) {
             return fresh
         }
@@ -147,12 +167,6 @@ public final class TerminalSession: NSObject {
         return String(String.UnicodeScalarView(scalars)).trimmingCharacters(in: .whitespaces)
     }
 
-    static func claudeTranscriptExists(_ id: String) -> Bool {
-        let projects = NSHomeDirectory() + "/.claude/projects"
-        let dirs = (try? FileManager.default.contentsOfDirectory(atPath: projects)) ?? []
-        return dirs.contains { FileManager.default.fileExists(atPath: "\(projects)/\($0)/\(id).jsonl") }
-    }
-
     /// Shown on a shut-down tile: what Resume will run.
     public var resumeHint: String {
         guard let command, !command.isEmpty else { return "Resume opens a shell in \(cwd.abbreviatingHome)" }
@@ -163,7 +177,7 @@ public final class TerminalSession: NSObject {
         tracker.restart()
         isSuspended = false
         launchedAt = Date()
-        let run = commandToRun()
+        let plan = launchPlan()
         hasStarted = true
         // Keep scanning through startup even if the program stays silent.
         lastOutputAt = Date()
@@ -173,15 +187,16 @@ public final class TerminalSession: NSObject {
         self.relay = relay
         let process = LocalProcess(delegate: relay, dispatchQueue: .main)
         self.process = process
-        let shell = ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"
-        let shellName = "-" + (shell as NSString).lastPathComponent
-        var args: [String] = []
-        if let run {
-            // Run the tool, then fall back to an interactive shell so the tile stays useful.
-            args = ["-l", "-i", "-c", "\(run); exec \(shell) -l -i"]
+        var args = ShellIntegration.interactiveArguments(shell, nonce: shellNonce)
+        if let plan {
+            // Run the tool (falling back to a fresh start if resuming fails fast), then an
+            // interactive shell so the tile stays useful.
+            args = ["-l", "-i", "-c", LaunchScript.build(primary: plan.primary, fallback: plan.fallback,
+                                                         followUp: ShellIntegration.followUpShell(shell, nonce: shellNonce),
+                                                         dialect: LaunchScript.dialect(forShell: shell), nonce: shellNonce)]
         }
-        process.startProcess(executable: shell, args: args, environment: Self.environment(tileId: id),
-                             execName: args.isEmpty ? shellName : nil, currentDirectory: cwd)
+        process.startProcess(executable: shell, args: args, environment: Self.environment(tileId: id, shell: shell, nonce: shellNonce),
+                             execName: nil, currentDirectory: cwd)
         isRunning = true
         refreshInfo()
     }
@@ -307,7 +322,43 @@ public final class TerminalSession: NSObject {
         if next != info { info = next }
     }
 
-    static func environment(tileId: String) -> [String] {
+    /// The shell reported a typed command or a return to its prompt.
+    private func handle(_ event: ShellEvent) {
+        switch event {
+        case .command(let typed, let expanded):
+            // Only agent CLIs are worth bringing back; `ls` or `make` are not. Prefer the line as
+            // typed; an alias is recognised through its expansion.
+            guard let line = [typed, expanded].compactMap({ $0 }).first(where: { SessionResume.tool(for: $0) != nil }) else { return }
+            command = line
+            sessionId = SessionResume.sessionId(in: line)
+            // A typed agent without a known id resumes only once its conversation is found;
+            // "continue the latest" could land in someone else's.
+            mayContinueLatest = false
+            hasStarted = true
+            launchedAt = Date()
+            flavor = AgentFlavor.infer(fromCommand: line)
+            if let dir = liveDirectory() { cwd = dir }
+            info.flavor = flavor
+            refreshInfo()
+            onResumableChange?()
+        case .startedFresh:
+            // The resume failed and the fallback started a new conversation: find that one instead.
+            sessionId = nil
+            mayContinueLatest = false
+            launchedAt = Date()
+            onResumableChange?()
+        case .prompt:
+            guard command != nil else { return }
+            command = nil
+            sessionId = nil
+            flavor = .shell
+            info.flavor = .shell
+            refreshInfo()
+            onResumableChange?()
+        }
+    }
+
+    static func environment(tileId: String, shell: String, nonce: String) -> [String] {
         var env = ProcessInfo.processInfo.environment
         // Tessera may itself be launched from an agent; don't leak nesting markers into tiles.
         for key in ["CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", "TERM_SESSION_ID", "ITERM_SESSION_ID"] { env.removeValue(forKey: key) }
@@ -316,6 +367,7 @@ public final class TerminalSession: NSObject {
         env["COLORTERM"] = "truecolor"
         env["TERM_PROGRAM"] = "Tessera"
         env["TESSERA_TILE_ID"] = tileId
+        env.merge(ShellIntegration.environment(shell: shell, base: ProcessInfo.processInfo.environment, nonce: nonce)) { _, new in new }
         if env["LANG"] == nil { env["LANG"] = "en_US.UTF-8" }
         return env.map { "\($0.key)=\($0.value)" }
     }

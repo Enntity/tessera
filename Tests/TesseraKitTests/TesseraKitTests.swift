@@ -368,7 +368,7 @@ final class RemoteVitalsTests: XCTestCase {
         XCTAssertEqual(r.gpuName, "NVIDIA GB10")
         XCTAssertEqual(r.gpu!, 0.03, accuracy: 0.0001)
         XCTAssertEqual(r.cpuTemperature!, 59.2, accuracy: 0.01)
-        XCTAssertEqual(r.temperature!, 59.2, accuracy: 0.01)
+        XCTAssertEqual(r.temperature!, 53, accuracy: 0.01)  // GPU temperature, like nvidia-smi
         XCTAssertEqual(r.memory!, 1 - 65669088.0 / 127600812.0, accuracy: 0.0001)
         XCTAssertEqual(r.memoryTotalGB!, 121.7, accuracy: 0.1)
     }
@@ -430,10 +430,65 @@ final class SessionResumeTests: XCTestCase {
         XCTAssertEqual(SessionResume.resumeCommand(original: "claude", sessionId: "x; rm -rf ~"), "claude --continue")
     }
 
+    func testLaunchersResumeThroughThemselves() {
+        XCTAssertEqual(SessionResume.tool(for: "codex-work"), .codex)
+        XCTAssertEqual(SessionResume.resumeCommand(original: "codex-work", sessionId: "01a0-x"), "codex-work resume 01a0-x")
+        XCTAssertEqual(SessionResume.resumeCommand(original: "/Users/me/.local/bin/claude_work --model opus", sessionId: fixedId),
+                       "/Users/me/.local/bin/claude_work --model opus --resume \(fixedId)")
+        XCTAssertNil(SessionResume.tool(for: "codexify"))
+        XCTAssertNil(SessionResume.tool(for: "ls -la"))
+    }
+
+    func testShellEventParsing() {
+        let n = "abc123"
+        let b64 = Data("codex-work --yolo".utf8).base64EncodedString()
+        XCTAssertEqual(ShellEvent.parse("cmd;\(n);\(b64)", nonce: n), .command(typed: "codex-work --yolo", expanded: nil))
+        let cx = Data("cx".utf8).base64EncodedString()
+        XCTAssertEqual(ShellEvent.parse("cmd;\(n);\(cx);\(b64)", nonce: n), .command(typed: "cx", expanded: "codex-work --yolo"))
+        XCTAssertEqual(ShellEvent.parse("done;\(n);130", nonce: n), .prompt(status: 130))
+        XCTAssertEqual(ShellEvent.parse("fresh;\(n)", nonce: n), .startedFresh)
+        XCTAssertNil(ShellEvent.parse("cmd;\(n);not base64!", nonce: n))
+        XCTAssertNil(ShellEvent.parse("hello", nonce: n))
+    }
+
+    /// Output printed into a tile (a cat'ed file, an ssh session) can't plant a command to resume.
+    func testForgedReportsAreIgnored() {
+        let b64 = Data("claude-evil".utf8).base64EncodedString()
+        XCTAssertNil(ShellEvent.parse("cmd;guess;\(b64)", nonce: "real-secret"))
+        XCTAssertNil(ShellEvent.parse("cmd;;\(b64)", nonce: ""))
+        XCTAssertNil(ShellEvent.parse("cmd;\(b64)", nonce: "real-secret"))
+    }
+
+    func testPrefixesAreKeptAndCompoundLinesRefused() {
+        XCTAssertEqual(SessionResume.tool(for: "FOO=1 env BAR=2 claude --model opus"), .claude)
+        XCTAssertEqual(SessionResume.resumeCommand(original: "FOO=1 codex-work", sessionId: "abc"), "FOO=1 codex-work resume abc")
+        XCTAssertNil(SessionResume.tool(for: "cd work && claude"))
+        XCTAssertNil(SessionResume.tool(for: "claude | tee log"))
+        XCTAssertNil(SessionResume.tool(for: "echo $(claude)"))
+    }
+
+    func testIdsAreOnlyInjectedIntoTheToolItself() {
+        XCTAssertNil(SessionResume.prepareLaunch("claude-work").sessionId)
+        XCTAssertNotNil(SessionResume.prepareLaunch("/opt/bin/claude").sessionId)
+        XCTAssertEqual(SessionResume.freshLaunch(original: "claude-work --resume abc", sessionId: fixedId), "claude-work")
+        XCTAssertEqual(SessionResume.freshLaunch(original: "codex-work resume abc --yolo"), "codex-work --yolo")
+    }
+
+    func testLaunchScriptFallsBackOnlyOnQuickFailure() {
+        let posix = LaunchScript.build(primary: "claude --resume x", fallback: "claude", followUp: "exec zsh -l -i", dialect: .posix, nonce: "n")
+        XCTAssertTrue(posix.hasPrefix("__t=$SECONDS; claude --resume x; __s=$?;"))
+        XCTAssertTrue(posix.contains("then printf"))
+        XCTAssertTrue(posix.hasSuffix("fi; exec zsh -l -i"))
+        XCTAssertEqual(LaunchScript.build(primary: "npm test", fallback: nil, followUp: "exec zsh -l -i", dialect: .posix, nonce: "n"),
+                       "npm test; exec zsh -l -i")
+        let fish = LaunchScript.build(primary: "codex resume x", fallback: "codex", followUp: "exec fish -l -i", dialect: .fish, nonce: "n")
+        XCTAssertTrue(fish.contains("set -l __s $status") && fish.hasSuffix("end; exec fish -l -i"))
+    }
+
     func testFreshLaunchReclaimsUnsavedId() {
         XCTAssertEqual(SessionResume.freshLaunch(original: "claude --model opus --resume x", sessionId: fixedId),
                        "claude --model opus --session-id \(fixedId)")
-        XCTAssertNil(SessionResume.freshLaunch(original: "codex", sessionId: fixedId))
+        XCTAssertEqual(SessionResume.freshLaunch(original: "codex resume abc", sessionId: fixedId), "codex")
     }
 
     func testShellWordsRoundTrip() {

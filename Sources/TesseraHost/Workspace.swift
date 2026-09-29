@@ -102,7 +102,7 @@ public final class Workspace {
     @discardableResult
     public func launch(command: String?, cwd: String? = nil, title: String? = nil) -> String {
         let session = TerminalSession(command: command, cwd: cwd ?? defaultDirectory, title: title)
-        terminals[session.id] = session
+        adopt(session)
         insert(session.id)
         return session.id
     }
@@ -309,7 +309,7 @@ public final class Workspace {
         tickCount &+= 1
         let now = Date()
         for t in terminals.values { t.tick(now: now) }
-        if tickCount % 30 == 0 { bindCodexSessions(now: now) }
+        if tickCount % 30 == 0 { bindAgentSessions(now: now) }
         if tickCount % 5 == 0 {
             syncAgents()
             if usage.codexRateLimits != agents.codexRateLimits { usage.codexRateLimits = agents.codexRateLimits }
@@ -321,23 +321,37 @@ public final class Workspace {
         }
     }
 
+    private func adopt(_ session: TerminalSession) {
+        session.onResumableChange = { [weak self] in self?.save() }
+        terminals[session.id] = session
+    }
+
     // MARK: Session binding
 
     @ObservationIgnored private var binding = false
 
-    /// Codex can't be told a session id at launch, so adopt the rollout a new Codex tile writes.
-    private func bindCodexSessions(now: Date) {
+    /// Agents whose conversation id isn't known yet (Codex, or anything typed into a shell or started
+    /// through a launcher) are matched to the session file their tool writes.
+    private func bindAgentSessions(now: Date) {
         guard !binding else { return }
-        let waiting = terminals.values.filter {
-            $0.isRunning && $0.sessionId == nil && now.timeIntervalSince($0.launchedAt) < 600
-                && $0.command.flatMap(SessionResume.tool(for:)) == .codex
+        let waiting = terminals.values.filter { $0.isRunning && $0.sessionId == nil && now.timeIntervalSince($0.launchedAt) < 600 }
+        func candidates(_ tool: SessionResume.Tool) -> [CodexRollouts.Candidate] {
+            let all = waiting.filter { $0.command.flatMap(SessionResume.tool(for:)) == tool }
+                .map { CodexRollouts.Candidate(tileId: $0.id, cwd: $0.cwd, launchedAt: $0.launchedAt) }
+            // Two unbound agents started in the same folder within a minute can't be told apart by
+            // folder and time; binding the wrong one would resume someone else's conversation, so
+            // leave both unbound (they resume fresh) rather than guess.
+            return all.filter { c in
+                !all.contains { $0.tileId != c.tileId && $0.cwd == c.cwd && abs($0.launchedAt.timeIntervalSince(c.launchedAt)) < 60 }
+            }
         }
-        guard !waiting.isEmpty else { return }
-        let candidates = waiting.map { CodexRollouts.Candidate(tileId: $0.id, cwd: $0.cwd, launchedAt: $0.launchedAt) }
+        let codex = candidates(.codex), claude = candidates(.claude)
+        guard !codex.isEmpty || !claude.isEmpty else { return }
         let claimed = Set(terminals.values.compactMap(\.sessionId))
         binding = true
         DispatchQueue.global(qos: .utility).async {
-            let found = CodexRollouts.bind(candidates, claimed: claimed)
+            var found = codex.isEmpty ? [:] : CodexRollouts.bind(codex, claimed: claimed)
+            if !claude.isEmpty { found.merge(ClaudeSessions.bind(claude, claimed: claimed.union(found.values))) { a, _ in a } }
             DispatchQueue.main.async {
                 MainActor.assumeIsolated {
                     self.binding = false
@@ -402,7 +416,7 @@ public final class Workspace {
                 let s = TerminalSession(id: tile.id, command: tile.command, cwd: cwd, title: tile.title, label: tile.command,
                                         sessionId: known, resuming: true, mayContinueLatest: mayContinue,
                                         startSuspended: tile.suspended == true || !resumeOnLaunch)
-                terminals[s.id] = s
+                adopt(s)
                 order.append(s.id)
             case .browser:
                 if let raw = tile.url, let url = URL(string: raw) {

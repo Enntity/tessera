@@ -1,0 +1,73 @@
+import Foundation
+
+/// What a tile's shell reports to Tessera (OSC 6973): a command line starting (as typed, plus the
+/// alias-expanded form when the shell provides it), a return to the prompt, or that a resume
+/// couldn't pick the old session up and a fresh one was started instead.
+public enum ShellEvent: Equatable, Sendable {
+    case command(typed: String, expanded: String?)
+    case prompt(status: Int32)
+    case startedFresh
+
+    public static let oscCode = 6973
+
+    /// Payloads: `cmd;<nonce>;<b64 typed>[;<b64 expanded>]`, `done;<nonce>;<status>`, `fresh;<nonce>`.
+    /// Reports travel in the terminal's output, so anything printed there (a `cat`ed file, an ssh
+    /// session) could imitate one; only reports carrying the tile's secret nonce are believed.
+    public static func parse(_ payload: String, nonce: String) -> ShellEvent? {
+        let parts = payload.split(separator: ";", omittingEmptySubsequences: false).map(String.init)
+        guard parts.count >= 2, !nonce.isEmpty, parts[1] == nonce else { return nil }
+        switch parts[0] {
+        case "cmd":
+            guard parts.count >= 3, let typed = decode(parts[2]) else { return nil }
+            let expanded = parts.count >= 4 ? decode(parts[3]) : nil
+            return .command(typed: typed, expanded: expanded == typed ? nil : expanded)
+        case "done":
+            return .prompt(status: Int32(parts.count > 2 ? parts[2].trimmingCharacters(in: .whitespaces) : "") ?? 0)
+        case "fresh":
+            return .startedFresh
+        default:
+            return nil
+        }
+    }
+
+    /// A per-tile secret for `parse`.
+    public static func makeNonce() -> String {
+        (0..<16).map { _ in String(format: "%02x", UInt8.random(in: 0...255)) }.joined()
+    }
+
+    private static func decode(_ b64: String) -> String? {
+        guard let data = Data(base64Encoded: b64.trimmingCharacters(in: .whitespacesAndNewlines)),
+              let line = String(data: data, encoding: .utf8) else { return nil }
+        let clean = line.trimmingCharacters(in: .whitespacesAndNewlines)
+        return clean.isEmpty ? nil : clean
+    }
+}
+
+/// Builds the command line a tile's shell runs at start: the primary command (a resume, or a fresh
+/// launch with an assigned id), a fallback if that fails quickly, then an interactive shell.
+public enum LaunchScript {
+    public enum Dialect: Sendable { case posix, fish }
+
+    /// Failing within this many seconds means "couldn't start", not "the user quit".
+    public static let quickFailure = 20
+
+    public static func dialect(forShell shell: String) -> Dialect {
+        (shell as NSString).lastPathComponent == "fish" ? .fish : .posix
+    }
+
+    public static func build(primary: String, fallback: String?, followUp: String, dialect: Dialect, nonce: String) -> String {
+        guard let fallback, fallback != primary else { return "\(primary); \(followUp)" }
+        let note = "\\n\\033[2m[tessera] Could not resume that session; starting a new one.\\033[0m\\n"
+        let fresh = "printf '\\033]\(ShellEvent.oscCode);fresh;\(nonce)\\007'"
+        switch dialect {
+        case .posix:
+            return "__t=$SECONDS; \(primary); __s=$?; "
+                + "if [ $__s -ne 0 ] && [ $((SECONDS - __t)) -lt \(quickFailure) ]; then printf '\(note)'; \(fresh); \(fallback); fi; "
+                + followUp
+        case .fish:
+            return "set -l __t (date +%s); \(primary); set -l __s $status; "
+                + "if test $__s -ne 0 -a (math (date +%s) - $__t) -lt \(quickFailure); printf '\(note)'; \(fresh); \(fallback); end; "
+                + followUp
+        }
+    }
+}

@@ -114,6 +114,7 @@ public final class MachineMonitor {
             v.memory = r.memory
             v.memoryTotalGB = r.memoryTotalGB
             v.temperature = r.temperature
+            v.hottestSensor = r.gpuTemperature != nil ? r.cpuTemperature : nil
             v.gpuName = r.gpuName
             v.gpuPowerW = r.gpuPowerW
             v.load = r.load

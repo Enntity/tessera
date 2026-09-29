@@ -75,7 +75,11 @@ public struct MachineChip: View {
         if let m = vitals.memory, let total = vitals.memoryTotalGB {
             lines.append(String(format: "Memory %@ · %.1f of %.0f GB", pct(m), m * total, total))
         }
-        if let t = vitals.temperature { lines.append(String(format: "Temperature %.0f °C", t)) }
+        if let t = vitals.temperature {
+            var line = String(format: "%@ %.0f °C", vitals.gpuName == nil || vitals.isLocal ? "Temperature" : "GPU", t)
+            if let h = vitals.hottestSensor { line += String(format: " · hottest sensor %.0f °C", h) }
+            lines.append(line)
+        }
         return lines.joined(separator: "\n")
     }
 }

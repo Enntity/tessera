@@ -35,6 +35,8 @@ public struct MachineVitals: Codable, Identifiable, Hashable, Sendable {
     public var memory: Double?
     public var memoryTotalGB: Double?
     public var temperature: Double?
+    /// Hottest board sensor, when it differs from `temperature` (shown in details).
+    public var hottestSensor: Double?
     public var gpuName: String?
     public var gpuPowerW: Double?
     public var load: Double?
@@ -103,8 +105,9 @@ public enum RemoteVitals {
         public var gpuTemperature: Double?
         public var gpuPowerW: Double?
 
-        /// The hotter of CPU and GPU — the number worth watching.
-        public var temperature: Double? { [cpuTemperature, gpuTemperature].compactMap { $0 }.max() }
+        /// The GPU's own temperature when there is one (what nvidia-smi reports); otherwise
+        /// the hottest board sensor, which on GB10 runs well above the GPU.
+        public var temperature: Double? { gpuTemperature ?? cpuTemperature }
     }
 
     public static func parse(_ output: String) -> Reading {
