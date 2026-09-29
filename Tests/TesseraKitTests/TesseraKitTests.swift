@@ -520,3 +520,46 @@ final class WebAddressTests: XCTestCase {
         XCTAssertFalse(WebAddress.looksLikeAddress(".hidden"))
     }
 }
+
+final class RestorePlanTests: XCTestCase {
+    func testDuplicateSessionIdsStartFresh() {
+        let plan = RestorePlan.plan([
+            .init(id: "a", command: "codex-work", cwd: "/w", sessionId: "S1"),
+            .init(id: "b", command: "codex-work resume S1", cwd: "/w", sessionId: nil),
+            .init(id: "c", command: "claude", cwd: "/w", sessionId: "S1")
+        ])
+        XCTAssertEqual(plan["a"]?.sessionId, "S1")
+        XCTAssertNil(plan["b"]?.sessionId)
+        XCTAssertNil(plan["c"]?.sessionId)
+        XCTAssertEqual(plan["b"]?.mayContinueLatest, false)
+    }
+
+    /// The bug seen in the wild: an unbound `resume --last` next to a bound tile in the same folder.
+    func testBindableToolsNeverContinueLatest() {
+        let plan = RestorePlan.plan([
+            .init(id: "bound", command: "codex-work", cwd: "/w", sessionId: "S1"),
+            .init(id: "unbound", command: "codex-work resume --last", cwd: "/w", sessionId: nil),
+            .init(id: "solo", command: "claude", cwd: "/other", sessionId: nil)
+        ])
+        XCTAssertEqual(plan["unbound"], .init(sessionId: nil, mayContinueLatest: false))
+        XCTAssertEqual(plan["solo"], .init(sessionId: nil, mayContinueLatest: false))
+    }
+
+    func testOtherToolsContinueOnlyWhenAloneInTheFolder() {
+        let plan = RestorePlan.plan([
+            .init(id: "g1", command: "grok-work", cwd: "/w", sessionId: nil),
+            .init(id: "o1", command: "opencode", cwd: "/w", sessionId: nil),
+            .init(id: "o2", command: "opencode -m x", cwd: "/w", sessionId: nil)
+        ])
+        XCTAssertEqual(plan["g1"]?.mayContinueLatest, true)
+        XCTAssertEqual(plan["o1"]?.mayContinueLatest, false)
+        XCTAssertEqual(plan["o2"]?.mayContinueLatest, false)
+    }
+
+    func testContinuesLatestDetection() {
+        XCTAssertTrue(SessionResume.continuesLatest("codex-work resume --last"))
+        XCTAssertTrue(SessionResume.continuesLatest("FOO=1 claude --continue"))
+        XCTAssertFalse(SessionResume.continuesLatest("codex resume abc"))
+        XCTAssertFalse(SessionResume.continuesLatest("claude"))
+    }
+}

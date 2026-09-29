@@ -51,24 +51,30 @@ enum CodexRollouts {
         let tileId: String
         let cwd: String
         let launchedAt: Date
+        /// The command continues an existing conversation (`resume --last`, `--continue`), so its
+        /// session file predates the launch; match on being written after it instead.
+        var continuing = false
     }
 
     /// Matches Codex CLI tiles to the rollouts they started: same folder, begun just after the tile
     /// launched, not a desktop or helper thread, and not already someone else's. Earliest wins.
     static func bind(_ candidates: [Candidate], claimed: Set<String>) -> [String: String] {
-        let heads = recentFiles(lookback: 900).compactMap { readHead($0.path) }
-            .filter { !$0.isDesktop && !$0.isSubagent && SessionResume.isSafeId($0.id) && !claimed.contains($0.id) }
+        let earliest = candidates.map(\.launchedAt).min() ?? Date()
+        let heads: [(head: CodexRolloutHead, modified: Date)] = recentFiles(lookback: max(900, Date().timeIntervalSince(earliest) + 60))
+            .compactMap { file in readHead(file.path).map { ($0, file.modified) } }
+            .filter { !$0.head.isDesktop && !$0.head.isSubagent && SessionResume.isSafeId($0.head.id) && !claimed.contains($0.head.id) }
         var taken = claimed
         var result: [String: String] = [:]
         for c in candidates.sorted(by: { $0.launchedAt < $1.launchedAt }) {
             let dir = URL(fileURLWithPath: c.cwd).standardizedFileURL.path
+            let since = c.launchedAt.addingTimeInterval(-3)
             let match = heads
-                .filter { !taken.contains($0.id) && URL(fileURLWithPath: $0.cwd).standardizedFileURL.path == dir }
-                .filter { ($0.startedAt ?? .distantPast) >= c.launchedAt.addingTimeInterval(-3) }
-                .min { ($0.startedAt ?? .distantPast) < ($1.startedAt ?? .distantPast) }
+                .filter { !taken.contains($0.head.id) && URL(fileURLWithPath: $0.head.cwd).standardizedFileURL.path == dir }
+                .filter { ($0.head.startedAt ?? .distantPast) >= since || (c.continuing && $0.modified >= since) }
+                .min { ($0.head.startedAt ?? .distantPast) < ($1.head.startedAt ?? .distantPast) }
             if let match {
-                result[c.tileId] = match.id
-                taken.insert(match.id)
+                result[c.tileId] = match.head.id
+                taken.insert(match.head.id)
             }
         }
         return result

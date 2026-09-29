@@ -12,48 +12,61 @@ enum ClaudeSessions {
         return dirs.contains { fm.fileExists(atPath: projects.appendingPathComponent($0).appendingPathComponent(id + ".jsonl").path) }
     }
 
-    /// The working directory a transcript records (first `"cwd"` within its opening lines).
-    static func recordedDirectory(of path: String) -> String? {
+    /// Claude Code's project folder name for a working directory (every non-alphanumeric → `-`).
+    static func projectFolder(for cwd: String) -> String {
+        String(URL(fileURLWithPath: cwd).standardizedFileURL.path.map { $0.isLetter || $0.isNumber ? $0 : "-" })
+    }
+
+    /// The working directory a transcript records, and whether the desktop app wrote it.
+    static func header(of path: String) -> (cwd: String, desktop: Bool)? {
         guard let handle = FileHandle(forReadingAtPath: path) else { return nil }
         defer { try? handle.close() }
         let text = String(decoding: handle.readData(ofLength: 256 * 1024), as: UTF8.self)
+        var cwd: String?
+        var desktop = false
         for line in text.split(separator: "\n").prefix(200) {
-            guard line.contains("\"cwd\""), let data = line.data(using: .utf8),
-                  let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
-                  let cwd = obj["cwd"] as? String else { continue }
-            return cwd
+            if line.contains("\"entrypoint\":\"claude-desktop\"") { desktop = true }
+            if cwd == nil, line.contains("\"cwd\""), let data = line.data(using: .utf8),
+               let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] {
+                cwd = obj["cwd"] as? String
+            }
+            if cwd != nil, desktop { break }
         }
-        return nil
+        return cwd.map { ($0, desktop) }
     }
 
-    /// Matches Claude tiles started without a known id (typed `claude`, launchers) to the transcript
-    /// they created: same folder, created after the tile's agent started, not already claimed.
+    /// Matches Claude tiles without a known id (typed `claude`, launchers, `--continue`) to their
+    /// transcript: same folder, created after the tile's agent started (or, for a continue, written
+    /// after it), not the desktop app's, not already claimed.
     static func bind(_ candidates: [CodexRollouts.Candidate], claimed: Set<String>) -> [String: String] {
         let fm = FileManager.default
-        guard let earliest = candidates.map(\.launchedAt).min() else { return [:] }
-        var fresh: [(id: String, created: Date, cwd: String)] = []
-        for dir in (try? fm.contentsOfDirectory(atPath: projects.path)) ?? [] {
-            let folder = projects.appendingPathComponent(dir)
-            for name in (try? fm.contentsOfDirectory(atPath: folder.path)) ?? [] where name.hasSuffix(".jsonl") {
-                let id = String(name.dropLast(6))
-                guard SessionResume.isSafeId(id), !claimed.contains(id) else { continue }
-                let path = folder.appendingPathComponent(name).path
-                guard let created = (try? fm.attributesOfItem(atPath: path))?[.creationDate] as? Date,
-                      created >= earliest.addingTimeInterval(-3),
-                      let cwd = recordedDirectory(of: path) else { continue }
-                fresh.append((id, created, URL(fileURLWithPath: cwd).standardizedFileURL.path))
-            }
-        }
         var taken = claimed
         var result: [String: String] = [:]
         for c in candidates.sorted(by: { $0.launchedAt < $1.launchedAt }) {
             let dir = URL(fileURLWithPath: c.cwd).standardizedFileURL.path
-            let match = fresh
-                .filter { !taken.contains($0.id) && $0.cwd == dir && $0.created >= c.launchedAt.addingTimeInterval(-3) }
-                .min { $0.created < $1.created }
-            if let match {
-                result[c.tileId] = match.id
-                taken.insert(match.id)
+            let since = c.launchedAt.addingTimeInterval(-3)
+            // Look in the folder's own project directory first; fall back to all of them.
+            let preferred = projects.appendingPathComponent(projectFolder(for: dir))
+            let folders = fm.fileExists(atPath: preferred.path)
+                ? [preferred]
+                : ((try? fm.contentsOfDirectory(atPath: projects.path)) ?? []).map { projects.appendingPathComponent($0) }
+            var best: (id: String, created: Date)?
+            for folder in folders {
+                for name in (try? fm.contentsOfDirectory(atPath: folder.path)) ?? [] where name.hasSuffix(".jsonl") {
+                    let id = String(name.dropLast(6))
+                    guard SessionResume.isSafeId(id), !taken.contains(id) else { continue }
+                    let path = folder.appendingPathComponent(name).path
+                    guard let attrs = try? fm.attributesOfItem(atPath: path),
+                          let created = attrs[.creationDate] as? Date, let modified = attrs[.modificationDate] as? Date,
+                          created >= since || (c.continuing && modified >= since),
+                          let head = header(of: path), !head.desktop,
+                          URL(fileURLWithPath: head.cwd).standardizedFileURL.path == dir else { continue }
+                    if best == nil || created < best!.created { best = (id, created) }
+                }
+            }
+            if let best {
+                result[c.tileId] = best.id
+                taken.insert(best.id)
             }
         }
         return result

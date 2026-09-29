@@ -152,7 +152,11 @@ public final class TerminalSession: NSObject {
     /// How `command` comes back into its conversation.
     private func resumeLine(for command: String) -> String {
         guard let id = sessionId else {
-            return mayContinueLatest ? SessionResume.resumeCommand(original: command, sessionId: nil) ?? command : command
+            // No known conversation: continue the latest only where that's been judged safe,
+            // otherwise a clean fresh start (never the original `--last`/`--continue`).
+            return mayContinueLatest
+                ? SessionResume.resumeCommand(original: command, sessionId: nil) ?? command
+                : SessionResume.freshLaunch(original: command) ?? command
         }
         // Claude only saves a conversation once a message is sent; an assigned id with no transcript
         // can't be resumed, so start it fresh under the same id.

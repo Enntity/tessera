@@ -77,6 +77,7 @@ struct PanelContent: View {
                     }
                 case .agentSession:
                     AgentPanel(id: id, frame: frame)
+                        .id(id)  // a fresh panel per session, so switching sessions reselects
                 }
             }
             .background(Style.deck)
@@ -156,44 +157,68 @@ struct AgentPanel: View {
     let id: String
     let frame: CGRect
     @State private var opened = false
+    /// dsh sessions: the live dsh web page or Tessera's own transcript.
+    @State private var showLive = true
 
     var body: some View {
         let workspace = model.workspace
         let session = workspace.agents.sessions[id]
+        let isDsh = session?.flavor == .dsh
+        let livePage = isDsh && workspace.dsh.state == .running ? workspace.dshPage : nil
         VStack(spacing: 0) {
             HStack(spacing: 10) {
                 if let model = session?.snapshot.model { Tag(text: model) }
                 if let tokens = session?.snapshot.contextTokens { Tag(text: "\(tokens.compactTokens) ctx") }
                 if let summary = session?.summary { Text(summary).font(Style.mono(10)).foregroundStyle(Style.dim).lineLimit(1) }
                 Spacer()
-                if let resume = session?.resumeCommand {
+                if isDsh {
+                    Picker("", selection: $showLive) {
+                        Text("Live").tag(true)
+                        Text("Transcript").tag(false)
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                    .frame(width: 170)
+                } else {
+                    if let resume = session?.resumeCommand {
+                        Button {
+                            workspace.launch(command: resume, cwd: session?.cwd)
+                            model.collapse()
+                        } label: { Label("Continue in Terminal", systemImage: "terminal") }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                    }
                     Button {
-                        workspace.launch(command: resume, cwd: session?.cwd)
-                        model.collapse()
-                    } label: { Label("Continue in Terminal", systemImage: "terminal") }
-                        .buttonStyle(.bordered)
+                        openNative()
+                    } label: { Label("Open in \(session?.flavor.displayName ?? "App")", systemImage: "arrow.up.forward.app") }
+                        .buttonStyle(.borderedProminent)
+                        .tint(Style.accent(session?.flavor ?? .claudeDesktop).opacity(0.8))
                         .controlSize(.small)
+                        .keyboardShortcut("o")
                 }
-                Button {
-                    openNative()
-                } label: { Label("Open in \(session?.flavor.displayName ?? "App")", systemImage: "arrow.up.forward.app") }
-                    .buttonStyle(.borderedProminent)
-                    .tint(Style.accent(session?.flavor ?? .claudeDesktop).opacity(0.8))
-                    .controlSize(.small)
-                    .keyboardShortcut("o")
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 8)
-            if session?.flavor == .dsh {
+            if isDsh {
                 DshServerStatus(server: workspace.dsh)
             }
-            ConversationDetail(snapshot: session?.snapshot, flavor: session?.flavor ?? .claudeDesktop)
+            if isDsh, showLive, let page = livePage {
+                ReparentHost(view: page.webView, focus: true)
+                    .overlay { if model.privacyMode { PrivateWebCover(browser: page) } }
+            } else {
+                ConversationDetail(snapshot: session?.snapshot, flavor: session?.flavor ?? .claudeDesktop)
+            }
         }
         .onAppear {
-            guard workspace.placeNativeWindows, !opened else { return }
+            guard !opened else { return }
             opened = true
-            // Let the zoom finish first so the app lands on a settled rectangle.
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { openNative() }
+            if isDsh {
+                // Brings up dsh web (if needed) and selects this session in it.
+                workspace.openNative(id, at: nil)
+            } else if workspace.placeNativeWindows {
+                // Let the zoom finish first so the app lands on a settled rectangle.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { openNative() }
+            }
         }
     }
 

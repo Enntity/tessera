@@ -152,6 +152,13 @@ final class TerminalSessionTests: XCTestCase {
         XCTAssertEqual(line, "HIST=\(home.url.path)/.zsh_history")
     }
 
+    /// An unbound `resume --last` that may not continue the latest starts clean, not with `--last`.
+    func testUnboundContinueStartsFresh() {
+        let session = TerminalSession(command: "codex-work resume --last", cwd: NSTemporaryDirectory(), resuming: true,
+                                      mayContinueLatest: false, startSuspended: true)
+        XCTAssertEqual(session.resumeHint, "Resume runs: codex-work")
+    }
+
     func testTerminateKillsForegroundProgram() {
         let marker = "tessera-sleep-\(Int.random(in: 100_000...999_999))"
         let session = TerminalSession(command: "exec -a \(marker) sleep 600", cwd: NSTemporaryDirectory())

@@ -271,22 +271,23 @@ public final class Workspace {
 
     // MARK: DeepSeek Harness
 
-    /// Opens a dsh session in the dsh web UI, as a web tile beside the session's tile. The first
-    /// open uses the server's token URL, which signs the tile in; the session is then selected by title.
+    /// The dsh web UI, shown inside whichever dsh session's panel is open. It's one shared page,
+    /// never a tile of its own, so a session never appears twice on the board.
+    public private(set) var dshPage: BrowserSession?
+
+    /// Brings up dsh web (starting Tessera's server if needed; the first load uses the token URL,
+    /// which signs the page in) and selects this session in it.
     private func openDsh(_ session: AgentAppSession) {
         dsh.ensureRunning { [weak self] result in
             guard let self, case .success(let launch) = result else { return }
-            let base = self.dsh.baseURL
-            let tile: BrowserSession
-            if let existing = self.browsers.values.first(where: { $0.url?.host == base?.host && $0.url?.port == base?.port }) {
-                tile = existing
+            let page: BrowserSession
+            if let existing = self.dshPage, existing.url?.port == self.dsh.baseURL?.port {
+                page = existing
             } else {
-                self.selectedId = session.id
-                guard let id = self.openBrowser(launch.absoluteString), let created = self.browsers[id] else { return }
-                tile = created
+                page = BrowserSession(url: launch)
+                self.dshPage = page
             }
-            tile.evaluateWhenLoaded(Self.selectDshSessionScript(title: session.title))
-            self.expand(tile.id)
+            page.evaluateWhenLoaded(Self.selectDshSessionScript(title: session.title))
         }
     }
 
@@ -353,7 +354,7 @@ public final class Workspace {
         tickCount &+= 1
         let now = Date()
         for t in terminals.values { t.tick(now: now) }
-        if tickCount % 30 == 0 { bindAgentSessions(now: now) }
+        if tickCount % 50 == 0 { bindAgentSessions(now: now) }
         if tickCount % 5 == 0 {
             syncAgents()
             if usage.codexRateLimits != agents.codexRateLimits { usage.codexRateLimits = agents.codexRateLimits }
@@ -385,10 +386,12 @@ public final class Workspace {
     /// through a launcher) are matched to the session file their tool writes.
     private func bindAgentSessions(now: Date) {
         guard !binding else { return }
-        let waiting = terminals.values.filter { $0.isRunning && $0.sessionId == nil && now.timeIntervalSince($0.launchedAt) < 600 }
+        // Keep looking for as long as the agent runs: a conversation may start long after launch.
+        let waiting = terminals.values.filter { $0.isRunning && !$0.isSuspended && $0.sessionId == nil }
         func candidates(_ tool: SessionResume.Tool) -> [CodexRollouts.Candidate] {
             let all = waiting.filter { $0.command.flatMap(SessionResume.tool(for:)) == tool }
-                .map { CodexRollouts.Candidate(tileId: $0.id, cwd: $0.cwd, launchedAt: $0.launchedAt) }
+                .map { CodexRollouts.Candidate(tileId: $0.id, cwd: $0.cwd, launchedAt: $0.launchedAt,
+                                               continuing: $0.command.map(SessionResume.continuesLatest) ?? false) }
             // Two unbound agents started in the same folder within a minute can't be told apart by
             // folder and time; binding the wrong one would resume someone else's conversation, so
             // leave both unbound (they resume fresh) rather than guess.
@@ -436,10 +439,13 @@ public final class Workspace {
     private var saveURL: URL { directory.appendingPathComponent("workspace.json") }
 
     public func save() {
+        var savedIds: Set<String> = []
         let tiles: [Saved.Tile] = order.compactMap { id in
             if let t = terminals[id] {
+                // Never record one conversation for two tiles; the later one will start fresh.
+                let session = t.sessionId.flatMap { savedIds.insert($0).inserted ? $0 : nil }
                 return .init(id: id, kind: .terminal, command: t.command, cwd: t.liveDirectory() ?? t.cwd, title: t.customTitle,
-                             sessionId: t.sessionId, suspended: t.isSuspended)
+                             sessionId: session, suspended: t.isSuspended)
             }
             if let b = browsers[id] { return .init(id: id, kind: .browser, url: b.url?.absoluteString) }
             return nil
@@ -455,17 +461,17 @@ public final class Workspace {
         placeNativeWindows = saved.placeNativeWindows ?? true
         groups = TileGroups(saved.groups ?? [])
         resumeOnLaunch = saved.resumeOnLaunch ?? true
-        // Tiles without a known session id may fall back to "continue the latest", but only one per
-        // tool and folder — otherwise they'd all attach to the same conversation.
-        var continuing: Set<String> = []
+        // One tile per conversation; "continue latest" only where it can't collide (see RestorePlan).
+        let plan = RestorePlan.plan(saved.tiles.filter { $0.kind == .terminal }.map { tile in
+            RestorePlan.Tile(id: tile.id, command: tile.command, cwd: tile.cwd ?? defaultDirectory, sessionId: tile.sessionId)
+        })
         for tile in saved.tiles {
             switch tile.kind {
             case .terminal:
                 let cwd = tile.cwd.flatMap { FileManager.default.fileExists(atPath: $0) ? $0 : nil } ?? defaultDirectory
-                let known = tile.sessionId ?? tile.command.flatMap(SessionResume.sessionId(in:))
-                let mayContinue = known != nil || tile.command.map { continuing.insert($0 + "@" + cwd).inserted } ?? true
+                let decision = plan[tile.id] ?? RestorePlan.Decision(sessionId: nil, mayContinueLatest: false)
                 let s = TerminalSession(id: tile.id, command: tile.command, cwd: cwd, title: tile.title, label: tile.command,
-                                        sessionId: known, resuming: true, mayContinueLatest: mayContinue,
+                                        sessionId: decision.sessionId, resuming: true, mayContinueLatest: decision.mayContinueLatest,
                                         startSuspended: tile.suspended == true || !resumeOnLaunch)
                 adopt(s)
                 order.append(s.id)
