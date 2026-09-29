@@ -41,6 +41,7 @@ struct BoardView: View {
                         .zIndex(10)
                 }
             }
+            .onChange(of: board, initial: true) { _, frame in model.boardFrame = frame }
         }
         .focusable()
         .focused($focused)
@@ -235,11 +236,13 @@ struct TileView: View {
     @ViewBuilder
     private var menu: some View {
         let workspace = model.workspace
-        Button("Open") { model.open(info.id) }
+        if workspace.opensInApp(info.id) {
+            Button("Open in \(info.flavor.displayName)") { model.open(info.id) }
+            Button("Show Transcript") { model.showTranscript(info.id) }
+        } else {
+            Button("Open") { model.open(info.id) }
+        }
         if info.kind == .agentSession {
-            Button("Open in \(info.flavor.displayName)") {
-                workspace.openNative(info.id, at: model.tileFrames[info.id].flatMap(model.screenRect(fromWindow:)))
-            }
             if let resume = workspace.agents.sessions[info.id]?.resumeCommand {
                 Button("Continue in Terminal") {
                     workspace.launch(command: resume, cwd: workspace.agents.sessions[info.id]?.cwd)

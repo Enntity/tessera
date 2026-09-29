@@ -13,11 +13,21 @@ struct ExpandedPanel: View {
     let source: CGRect?
     @State private var settled = false
 
-    var body: some View {
+    /// Where the panel grows from: the tile, or the board's centre.
+    static func origin(from source: CGRect?, board: CGRect) -> CGRect {
+        source ?? CGRect(x: board.midX - 150, y: board.midY - 100, width: 300, height: 200)
+    }
+
+    /// Where the panel settles for a tile at `source`.
+    static func target(from source: CGRect?, board: CGRect) -> CGRect {
         let area = board.insetBy(dx: 10, dy: 6)
-        let origin = source ?? CGRect(x: area.midX - 150, y: area.midY - 100, width: 300, height: 200)
         let preferred = CGSize(width: max(area.width * 0.8, min(area.width, 900)), height: area.height * 0.92)
-        let target = GridLayout.expandedFrame(from: origin, in: area, preferred: preferred)
+        return GridLayout.expandedFrame(from: origin(from: source, board: board), in: area, preferred: preferred)
+    }
+
+    var body: some View {
+        let origin = Self.origin(from: source, board: board)
+        let target = Self.target(from: source, board: board)
         let scaleX = settled ? 1 : origin.width / target.width
         let scaleY = settled ? 1 : origin.height / target.height
         let at = settled ? target.origin : origin.origin
@@ -150,8 +160,8 @@ struct PanelHeader: View {
     }
 }
 
-/// A desktop-app conversation opened: our own readable transcript, with the real app snapped on
-/// top of it at exactly this rectangle.
+/// A desktop-app conversation's transcript in Tessera (dsh: its live page). Claude and Codex
+/// conversations normally open straight in their app instead; see `AppModel.open`.
 struct AgentPanel: View {
     @Environment(AppModel.self) private var model
     let id: String
@@ -212,13 +222,8 @@ struct AgentPanel: View {
         .onAppear {
             guard !opened else { return }
             opened = true
-            if isDsh {
-                // Brings up dsh web (if needed) and selects this session in it.
-                workspace.openNative(id, at: nil)
-            } else if workspace.placeNativeWindows {
-                // Let the zoom finish first so the app lands on a settled rectangle.
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { openNative() }
-            }
+            // Brings up dsh web (if needed) and selects this session in it.
+            if isDsh { workspace.openNative(id, at: nil) }
         }
     }
 

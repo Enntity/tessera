@@ -184,8 +184,29 @@ final class AppModel {
         return window.convertToScreen(flipped)
     }
 
+    /// Opens a tile: in place on the board, or for a Claude or Codex conversation, straight in its
+    /// app, landing where the opened tile would have.
     func open(_ id: String) {
+        guard workspace.opensInApp(id) else {
+            withAnimation(.spring(duration: 0.38, bounce: 0.12)) { workspace.expand(id) }
+            return
+        }
+        if workspace.expandedId != nil { collapse() }
+        workspace.selectedId = id
+        workspace.openNative(id, at: openedRect(from: tileFrames[id]).flatMap(screenRect(fromWindow:)))
+    }
+
+    /// Tessera's own transcript of a desktop-app conversation.
+    func showTranscript(_ id: String) {
         withAnimation(.spring(duration: 0.38, bounce: 0.12)) { workspace.expand(id) }
+    }
+
+    /// Set by the board: its rectangle in the window.
+    @ObservationIgnored var boardFrame: CGRect?
+
+    /// Where a tile opened from `source` settles (window coordinates, top-left origin).
+    func openedRect(from source: CGRect?) -> CGRect? {
+        boardFrame.map { ExpandedPanel.target(from: source, board: $0) }
     }
 
     func collapse() {
@@ -209,15 +230,8 @@ final class AppModel {
     /// Starts a conversation in the Claude or Codex app and lands its window where an opened tile
     /// sits, so the eye doesn't leave the board.
     func newAppConversation(_ app: AgentApp, prompt: String? = nil) {
-        var rect: CGRect?
-        if let content = window?.contentView?.bounds {
-            let board = CGRect(x: 12, y: 44, width: content.width - 24 - (showSidebar ? 290 : 0), height: content.height - 56)
-            let center = CGRect(x: board.midX - 150, y: board.midY - 100, width: 300, height: 200)
-            let target = GridLayout.expandedFrame(from: center, in: board.insetBy(dx: 10, dy: 6),
-                                                  preferred: CGSize(width: board.width * 0.8, height: board.height * 0.92))
-            rect = screenRect(fromWindow: target)
-        }
-        workspace.newAppConversation(app, folder: contextDirectory, prompt: prompt, placeAt: rect)
+        workspace.newAppConversation(app, folder: contextDirectory, prompt: prompt,
+                                     placeAt: openedRect(from: nil).flatMap(screenRect(fromWindow:)))
     }
 
     /// New tiles start where the selected terminal is working.

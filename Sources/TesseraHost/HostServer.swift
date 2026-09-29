@@ -300,8 +300,12 @@ final class RemoteClient {
             case .acknowledge: workspace.acknowledge(action.id)
             case .openOnHost:
                 NSApp.activate()
-                workspace.expand(action.id)
-                if workspace.agents.sessions[action.id] != nil { workspace.openNative(action.id, at: nil) }
+                if workspace.opensInApp(action.id) {
+                    workspace.selectedId = action.id
+                    workspace.openNative(action.id, at: nil)
+                } else {
+                    workspace.expand(action.id)
+                }
             case .restart: workspace.restart(action.id)
             case .close: workspace.close(action.id)
             }

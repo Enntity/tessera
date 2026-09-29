@@ -265,6 +265,13 @@ public final class Workspace {
         return sorted.first?.id
     }
 
+    /// Claude and Codex conversations open straight in their app; Tessera's transcript panel is only
+    /// for when that app isn't installed, or when asked for. (dsh's live page lives in the panel.)
+    public func opensInApp(_ id: String) -> Bool {
+        guard let flavor = agents.sessions[id]?.flavor else { return false }
+        return installedApps.contains { $0.flavor == flavor }
+    }
+
     /// Open a desktop-app conversation in its own app, snapped to `rect` (AppKit screen coordinates).
     public func openNative(_ id: String, at rect: CGRect?) {
         guard let a = agents.sessions[id] else { return }
@@ -294,7 +301,8 @@ public final class Workspace {
         else { return }
         pendingAppConversation = nil
         agentAcknowledged[match.id] = Date()
-        expand(match.id)
+        // The app already shows it; the board just points at its new tile.
+        selectedId = match.id
     }
 
     // MARK: DeepSeek Harness

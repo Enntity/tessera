@@ -13,9 +13,10 @@ Native macOS app, with a focused iOS companion built on the same core.
   to 10 fps: the whole screen when it fits readably, otherwise its latest output. Any CLI works.
 - **Desktop-app sessions as tiles.** Claude desktop Code sessions and Codex desktop threads appear
   automatically, each as its own card with the latest exchange, tool calls and a typing indicator.
-  Opening one snaps the real app window onto the tile's rectangle (Accessibility permission) and
-  deep-links to that conversation (`claude://code/continue?session=…`, `codex://threads/…`).
-  "Continue in Terminal" forks it into a CLI tile.
+  Opening one goes straight to the app, deep-linked to that conversation
+  (`claude://code/continue?session=…`, `codex://threads/…`) and snapped where the opened tile would
+  sit (Accessibility permission); nothing opens on the board, so you can come back and pick the next
+  one. Right-click for Tessera's own transcript, or "Continue in Terminal" to fork it into a CLI tile.
 - **DeepSeek Harness (dsh) sessions as tiles.** Each recent top-level dsh conversation in
   `~/.dsh/sessions` (or `$DSH_HOME`) is its own live card — title, latest messages and tool calls,
   working while a turn runs, *Needs you* on a pending approval (with its reason). Opening one starts
