@@ -19,6 +19,8 @@ enum ShellIntegration {
         if [[ -n "$TESSERA_NONCE" ]]; then typeset -g __tessera_nonce="$TESSERA_NONCE"; unset TESSERA_NONCE; fi
         TESSERA_ZDOTDIR="${TESSERA_ZDOTDIR:-$ZDOTDIR}"
         ZDOTDIR="${TESSERA_USER_ZDOTDIR:-$HOME}"
+        # /etc/zshrc derives HISTFILE from ZDOTDIR while it points here; keep history in the user's file.
+        [[ "$HISTFILE" == "$TESSERA_ZDOTDIR/.zsh_history" ]] && HISTFILE="$ZDOTDIR/.zsh_history"
         [[ -f "$ZDOTDIR/\(name)" ]] && source "$ZDOTDIR/\(name)"
         TESSERA_USER_ZDOTDIR="$ZDOTDIR"
         \(extra)

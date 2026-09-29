@@ -124,6 +124,18 @@ final class TerminalSessionTests: XCTestCase {
         XCTAssertTrue(session.terminal.screenTail(40).contains("LEAKS=0"))
     }
 
+    /// History must stay in the user's own file, not the shim directory.
+    func testZshHistoryStaysInUsersFile() {
+        let session = TerminalSession(command: nil, cwd: NSTemporaryDirectory(), shell: "/bin/zsh")
+        defer { session.terminate() }
+        XCTAssertTrue(waitUntil(20) { session.terminal.screenTail(40).contains { !$0.isEmpty } })
+        RunLoop.main.run(until: Date().addingTimeInterval(1.5))
+        session.send(Array("echo HIST=$HISTFILE\r".utf8))
+        XCTAssertTrue(waitUntil(10) { session.terminal.screenTail(40).contains { $0.hasPrefix("HIST=") } })
+        let line = session.terminal.screenTail(40).first { $0.hasPrefix("HIST=") } ?? ""
+        XCTAssertFalse(line.contains("shell-integration"), line)
+    }
+
     func testTerminateKillsForegroundProgram() {
         let marker = "tessera-sleep-\(Int.random(in: 100_000...999_999))"
         let session = TerminalSession(command: "exec -a \(marker) sleep 600", cwd: NSTemporaryDirectory())
