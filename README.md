@@ -10,7 +10,7 @@ Native macOS app, with a focused iOS companion built on the same core.
 ## What it does
 
 - **Live terminal tiles.** Real PTYs (SwiftTerm). Thumbnails redraw from the terminal buffer at up
-  to 10 fps: a colored minimap when small, real text when there's room. Any CLI works.
+  to 10 fps, in text the same size as conversation tiles, ending at the latest output. Any CLI works.
 - **Desktop-app sessions as tiles.** Claude desktop Code sessions and Codex desktop threads appear
   automatically, each as its own card with the latest exchange, tool calls and a typing indicator.
   Opening one snaps the real app window onto the tile's rectangle (Accessibility permission) and
@@ -48,8 +48,8 @@ Native macOS app, with a focused iOS companion built on the same core.
     tile says so and starts a fresh session instead — you never land on a dead error.
   - Agents you exited come back as a shell in their last folder. bash tiles resume what Tessera
     launched but don't track commands typed into them.
-- **Privacy mode (⇧⌘P).** For screenshots and video: terminals draw as colored block minimaps,
-  conversation text becomes word-length bars, web pages a coarse mosaic. Everything keeps moving.
+- **Privacy mode (⇧⌘P).** For screenshots and video: terminal and conversation text become
+  word-length bars at the same size and place, web pages a coarse mosaic. Everything keeps moving.
 - **iPhone / iPad.** Pair by scanning the QR code in Settings → iPhone with the Camera. The phone
   gets a "Needs you" queue, live mini tiles, a terminal view (reader mode that re-wraps text, or
   the exact screen with pinch-zoom), one-tap answers (`1 2 3 y n ⏎`, esc, ^C, arrows), transcripts,
@@ -102,7 +102,7 @@ captures to the PNG. `swift scripts/make-icons.swift` regenerates the icons.
 Sources/
   TesseraKit/     cross-platform (macOS + iOS)
     Core/         models, attention tracker, grid layout, Keychain
-    Terminal/     minimap/text renderer, snapshot encoder, display-only mirror
+    Terminal/     text/block renderer, snapshot encoder, display-only mirror
     Transcripts/  Claude + Codex JSONL parsers (incremental)
     Usage/        provider request builders and response parsers
     Remote/       wire protocol, TLS-PSK channel + framer, client session

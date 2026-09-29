@@ -7,22 +7,29 @@ public struct TerminalThumbnail: View, Equatable {
     let revision: Int
     var showCursor: Bool
     var obscured: Bool
+    var wholeScreen: Bool
 
-    public init(terminal: Terminal, revision: Int, showCursor: Bool = true, obscured: Bool = false) {
+    /// Tiles draw text at the board's tile type size; `wholeScreen` instead fits the entire grid to
+    /// the view, for a view sized to the grid (the phone's pinch-zoom screen).
+    public init(terminal: Terminal, revision: Int, showCursor: Bool = true, obscured: Bool = false, wholeScreen: Bool = false) {
         self.terminal = terminal
         self.revision = revision
         self.showCursor = showCursor
         self.obscured = obscured
+        self.wholeScreen = wholeScreen
     }
 
     public static func == (a: Self, b: Self) -> Bool {
         a.terminal === b.terminal && a.revision == b.revision && a.showCursor == b.showCursor && a.obscured == b.obscured
+            && a.wholeScreen == b.wholeScreen
     }
 
     public var body: some View {
         Canvas(rendersAsynchronously: false) { ctx, size in
             ctx.withCGContext { cg in
-                SharedRenderer.instance.draw(terminal, in: cg, size: size, showCursor: showCursor, obscured: obscured)
+                SharedRenderer.instance.draw(terminal, in: cg, size: size,
+                                             textSize: wholeScreen ? nil : Style.tileTerminalText(width: size.width),
+                                             showCursor: showCursor, obscured: obscured)
             }
         }
         .background(Style.terminalBackground)

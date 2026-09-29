@@ -217,7 +217,7 @@ struct TileView: View {
         case .agentSession:
             ConversationThumbnail(snapshot: workspace.agents.sessions[info.id]?.snapshot, flavor: info.flavor,
                                   maxItems: size.height > 300 ? 10 : 6,
-                                  fontScale: min(1.5, max(0.8, size.width / 360)))
+                                  fontScale: Style.tileScale(width: size.width))
         }
     }
 

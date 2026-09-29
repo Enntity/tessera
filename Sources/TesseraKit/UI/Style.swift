@@ -45,6 +45,13 @@ public enum Style {
         }
     }
 
+    /// Tile text grows with the tile, the same way for every kind of tile.
+    public static func tileScale(width: CGFloat) -> CGFloat { min(1.5, max(0.8, width / 360)) }
+    /// Tile body text at scale 1.
+    public static let tileText: CGFloat = 10
+    /// Terminal text in tiles: Menlo at the x-height of the body text, so both read the same size.
+    public static func tileTerminalText(width: CGFloat) -> CGFloat { tileText * 0.96 * tileScale(width: width) }
+
     public static func mono(_ size: CGFloat, _ weight: Font.Weight = .regular) -> Font {
         .system(size: size, weight: weight, design: .monospaced)
     }

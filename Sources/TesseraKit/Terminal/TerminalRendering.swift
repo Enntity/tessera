@@ -37,9 +37,8 @@ public struct TerminalTheme: Sendable {
     }
 }
 
-/// Draws a SwiftTerm screen into any CGContext. At thumbnail scale glyphs become a colored
-/// "minimap" of blocks, which reads as live activity and costs almost nothing; once cells are
-/// big enough to read, real text is drawn.
+/// Draws a SwiftTerm screen into any CGContext: as text, or in privacy mode as a colored block per
+/// word, which keeps the look of live activity without the content.
 public final class MiniTerminalRenderer {
     public let theme: TerminalTheme
     private let palette: [RGB]
@@ -63,39 +62,33 @@ public final class MiniTerminalRenderer {
     }
 
     /// `ctx` must be in a top-left-origin, y-down coordinate space (SwiftUI Canvas, flipped NSView, UIView).
-    /// `obscured` always draws the block minimap, however large the cells — privacy mode.
-    /// Cell height used when the whole screen won't fit readably: text at roughly 6 pt.
-    public var focusCellHeight: CGFloat = 8
-
-    /// Draws the terminal into `size`. If the whole screen fits at a readable size it is drawn as
-    /// text; if not, the tile shows a readable crop anchored at the live edge (where agents print
-    /// their latest output). `obscured` (privacy mode) always draws the whole screen as a block minimap.
-    public func draw(_ terminal: Terminal, in ctx: CGContext, size: CGSize, showCursor: Bool = true, obscured: Bool = false) {
+    ///
+    /// With a `textSize`, text is drawn at that size: as many rows and columns as fit, ending at the live
+    /// edge (where agents print their latest output). Without one, the whole screen is fit to `size`.
+    /// `obscured` (privacy mode) draws blocks in place of glyphs and changes nothing else.
+    public func draw(_ terminal: Terminal, in ctx: CGContext, size: CGSize, textSize: CGFloat? = nil,
+                     showCursor: Bool = true, obscured: Bool = false) {
         ctx.setFillColor(color(theme.background))
         ctx.fill(CGRect(origin: .zero, size: size))
         let cols = terminal.cols, rows = terminal.rows
-        let fit = Self.cellSize(cols: cols, rows: rows, fitting: size)
-        guard fit.width > 0.2 else { return }
-
-        if obscured || fit.height >= textThreshold {
-            // Whole screen, bottom-anchored.
+        guard let textSize else {
+            let fit = Self.cellSize(cols: cols, rows: rows, fitting: size)
+            guard fit.width > 0.2 else { return }
             let yOffset = max(0, size.height - fit.height * CGFloat(rows))
-            let font = obscured ? nil : self.font(size: fit.height * 0.78)
+            let font = obscured || fit.height < textThreshold ? nil : self.font(size: fit.height * 0.78)
             drawRows(terminal, rows: 0..<rows, cols: cols, cell: fit, origin: CGPoint(x: 0, y: yOffset), font: font, in: ctx)
             if showCursor { drawCursor(terminal, firstRow: 0, rows: rows, cell: fit, origin: CGPoint(x: 0, y: yOffset), in: ctx) }
             return
         }
-
-        // Readable crop: as many rows and columns as fit at the focus size, ending at the live edge.
-        // Menlo advances ~0.6 em and the font is 0.78 of the cell height.
-        let cell = CGSize(width: focusCellHeight * 0.78 * 0.6, height: focusCellHeight)
+        // Menlo advances 0.6 em; the font is 0.78 of the cell height.
+        let cell = CGSize(width: textSize * 0.6, height: textSize / 0.78)
         let visibleRows = max(1, Int(size.height / cell.height))
         let visibleCols = max(1, Int(ceil(size.width / cell.width)))
         let edge = max(lastTextRow(terminal), terminal.getCursorLocation().y)
         let first = max(0, min(edge - visibleRows + 1, rows - visibleRows))
         let range = first..<min(rows, first + visibleRows)
         drawRows(terminal, rows: range, cols: min(cols, visibleCols), cell: cell, origin: .zero,
-                 font: self.font(size: cell.height * 0.78), in: ctx)
+                 font: obscured ? nil : self.font(size: textSize), in: ctx)
         if showCursor { drawCursor(terminal, firstRow: first, rows: range.upperBound, cell: cell, origin: .zero, in: ctx) }
     }
 
@@ -158,7 +151,7 @@ public final class MiniTerminalRenderer {
     private func drawBlocks(_ text: String, fg: RGB, alpha: CGFloat, origin: CGPoint, cell: CGSize, in ctx: CGContext) {
         ctx.setFillColor(fg.cgColor(alpha: alpha * 0.75))
         var x = origin.x
-        let h = max(cell.height * 0.55, 0.6)
+        let h = max(cell.height * 0.7, 0.6)
         let inset = (cell.height - h) / 2
         var runStart: CGFloat?
         for ch in text {
