@@ -26,6 +26,8 @@ public final class TerminalSession: NSObject {
     @ObservationIgnored public private(set) var launchedAt = Date()
     /// Secret the tile's shell hooks include in their reports, so printed output can't forge them.
     @ObservationIgnored private let shellNonce = ShellEvent.makeNonce()
+    /// Extra environment applied last (tests point HOME somewhere harmless).
+    @ObservationIgnored private let environmentOverrides: [String: String]
     /// The user's login shell (overridable for tests).
     @ObservationIgnored private let shell: String
     @ObservationIgnored private var hasStarted = false
@@ -60,7 +62,7 @@ public final class TerminalSession: NSObject {
     /// `title` is a user-chosen name that always wins.
     public init(id: String = UUID().uuidString, command: String?, cwd: String, title: String? = nil, label: String? = nil,
                 sessionId: String? = nil, resuming: Bool = false, mayContinueLatest: Bool = true, startSuspended: Bool = false,
-                shell: String? = nil,
+                shell: String? = nil, environmentOverrides: [String: String] = [:],
                 initialSize: CGSize = CGSize(width: 1180, height: 740)) {
         self.id = id
         self.command = command
@@ -68,6 +70,7 @@ public final class TerminalSession: NSObject {
         self.sessionId = sessionId ?? command.flatMap(SessionResume.sessionId(in:))
         self.hasStarted = resuming
         self.shell = shell ?? ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"
+        self.environmentOverrides = environmentOverrides
         self.mayContinueLatest = mayContinueLatest
         let flavor = AgentFlavor.infer(fromCommand: command)
         self.flavor = flavor
@@ -195,7 +198,7 @@ public final class TerminalSession: NSObject {
                                                          followUp: ShellIntegration.followUpShell(shell, nonce: shellNonce),
                                                          dialect: LaunchScript.dialect(forShell: shell), nonce: shellNonce)]
         }
-        process.startProcess(executable: shell, args: args, environment: Self.environment(tileId: id, shell: shell, nonce: shellNonce),
+        process.startProcess(executable: shell, args: args, environment: Self.environment(tileId: id, shell: shell, nonce: shellNonce, overrides: environmentOverrides),
                              execName: nil, currentDirectory: cwd)
         isRunning = true
         refreshInfo()
@@ -358,7 +361,7 @@ public final class TerminalSession: NSObject {
         }
     }
 
-    static func environment(tileId: String, shell: String, nonce: String) -> [String] {
+    static func environment(tileId: String, shell: String, nonce: String, overrides: [String: String] = [:]) -> [String] {
         var env = ProcessInfo.processInfo.environment
         // Tessera may itself be launched from an agent; don't leak nesting markers into tiles.
         for key in ["CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", "TERM_SESSION_ID", "ITERM_SESSION_ID"] { env.removeValue(forKey: key) }
@@ -368,6 +371,7 @@ public final class TerminalSession: NSObject {
         env["TERM_PROGRAM"] = "Tessera"
         env["TESSERA_TILE_ID"] = tileId
         env.merge(ShellIntegration.environment(shell: shell, base: ProcessInfo.processInfo.environment, nonce: nonce)) { _, new in new }
+        env.merge(overrides) { _, new in new }
         if env["LANG"] == nil { env["LANG"] = "en_US.UTF-8" }
         return env.map { "\($0.key)=\($0.value)" }
     }

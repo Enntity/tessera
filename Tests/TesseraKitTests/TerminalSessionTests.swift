@@ -5,6 +5,17 @@ import XCTest
 /// Spawns real PTYs: output must reach the screen, and closing must kill the whole session.
 @MainActor
 final class TerminalSessionTests: XCTestCase {
+    /// Interactive test shells get a throwaway home: the user's startup files and history are never
+    /// read or written.
+    private func isolatedHome() throws -> (url: URL, env: [String: String]) {
+        let home = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("tessera-home-\(UUID().uuidString.prefix(6))")
+        try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: home) }
+        return (home, ["HOME": home.path, "TESSERA_USER_ZDOTDIR": home.path, "ZDOTDIR": ShellIntegration.directory.path,
+                       "XDG_CONFIG_HOME": home.appendingPathComponent(".config").path,
+                       "XDG_DATA_HOME": home.appendingPathComponent(".local/share").path])
+    }
+
     private func waitUntil(_ timeout: TimeInterval = 10, _ condition: () -> Bool) -> Bool {
         let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline {
@@ -59,7 +70,8 @@ final class TerminalSessionTests: XCTestCase {
         try "#!/bin/sh\necho probe-running\nexec sleep 30\n".write(to: launcher, atomically: true, encoding: .utf8)
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: launcher.path)
 
-        let session = TerminalSession(command: nil, cwd: dir.path)
+        let home = try isolatedHome()
+        let session = TerminalSession(command: nil, cwd: dir.path, shell: "/bin/zsh", environmentOverrides: home.env)
         defer { session.terminate() }
         // Wait for the shell to finish starting (the prompt report arrives with the first prompt).
         XCTAssertTrue(waitUntil(20) { session.terminal.screenTail(40).contains { !$0.isEmpty } })
@@ -103,7 +115,8 @@ final class TerminalSessionTests: XCTestCase {
         guard let fish else { throw XCTSkip("fish not installed") }
         let tool = try fakeTool("claude-tessera-fish", body: "echo probe; exec sleep 30")
         defer { try? FileManager.default.removeItem(at: tool.deletingLastPathComponent()) }
-        let session = TerminalSession(command: nil, cwd: tool.deletingLastPathComponent().path, shell: fish)
+        let home = try isolatedHome()
+        let session = TerminalSession(command: nil, cwd: tool.deletingLastPathComponent().path, shell: fish, environmentOverrides: home.env)
         defer { session.terminate() }
         XCTAssertTrue(waitUntil(20) { session.terminal.screenTail(40).contains { !$0.isEmpty } })
         RunLoop.main.run(until: Date().addingTimeInterval(1.5))
@@ -114,8 +127,9 @@ final class TerminalSessionTests: XCTestCase {
     }
 
     /// The tile's report secret must not leak to programs run from the shell.
-    func testNonceIsNotExportedToChildren() {
-        let session = TerminalSession(command: nil, cwd: NSTemporaryDirectory(), shell: "/bin/zsh")
+    func testNonceIsNotExportedToChildren() throws {
+        let home = try isolatedHome()
+        let session = TerminalSession(command: nil, cwd: NSTemporaryDirectory(), shell: "/bin/zsh", environmentOverrides: home.env)
         defer { session.terminate() }
         XCTAssertTrue(waitUntil(20) { session.terminal.screenTail(40).contains { !$0.isEmpty } })
         RunLoop.main.run(until: Date().addingTimeInterval(1.5))
@@ -125,8 +139,9 @@ final class TerminalSessionTests: XCTestCase {
     }
 
     /// History must stay in the user's own file, not the shim directory.
-    func testZshHistoryStaysInUsersFile() {
-        let session = TerminalSession(command: nil, cwd: NSTemporaryDirectory(), shell: "/bin/zsh")
+    func testZshHistoryStaysInUsersFile() throws {
+        let home = try isolatedHome()
+        let session = TerminalSession(command: nil, cwd: NSTemporaryDirectory(), shell: "/bin/zsh", environmentOverrides: home.env)
         defer { session.terminate() }
         XCTAssertTrue(waitUntil(20) { session.terminal.screenTail(40).contains { !$0.isEmpty } })
         RunLoop.main.run(until: Date().addingTimeInterval(1.5))
@@ -134,6 +149,7 @@ final class TerminalSessionTests: XCTestCase {
         XCTAssertTrue(waitUntil(10) { session.terminal.screenTail(40).contains { $0.hasPrefix("HIST=") } })
         let line = session.terminal.screenTail(40).first { $0.hasPrefix("HIST=") } ?? ""
         XCTAssertFalse(line.contains("shell-integration"), line)
+        XCTAssertEqual(line, "HIST=\(home.url.path)/.zsh_history")
     }
 
     func testTerminateKillsForegroundProgram() {
