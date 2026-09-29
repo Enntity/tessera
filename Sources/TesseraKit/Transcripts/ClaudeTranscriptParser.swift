@@ -13,6 +13,8 @@ public struct ClaudeTranscriptParser: TranscriptParser {
     private var pending: [String: (name: String, since: Date)] = [:]
     private var turnOpen = false
     private var lastStop: String?
+    /// Background subagents launched and not yet reported finished, in launch order.
+    private var subagents: [(id: String, description: String)] = []
 
     /// Tools that only ever block on a human.
     static let userDirectedTools: Set<String> = ["AskUserQuestion", "ExitPlanMode"]
@@ -49,7 +51,12 @@ public struct ClaudeTranscriptParser: TranscriptParser {
     private mutating func ingestUser(_ obj: [String: Any], ts: Date?) {
         guard let message = obj["message"] as? [String: Any] else { return }
         let uuid = obj["uuid"] as? String ?? UUID().uuidString
+        if let launch = obj["toolUseResult"] as? [String: Any], launch["status"] as? String == "async_launched",
+           let id = launch["agentId"] as? String, !subagents.contains(where: { $0.id == id }) {
+            subagents.append((id, launch["description"] as? String ?? "subagent"))
+        }
         if let text = message["content"] as? String {
+            noteTaskNotification(text)
             guard obj["isMeta"] as? Bool != true, !TranscriptSupport.isInjectedUserText(text) else { return }
             beginTurn()
             TranscriptSupport.append(.init(id: uuid, role: .user, text: text, timestamp: ts), to: &items)
@@ -66,6 +73,7 @@ public struct ClaudeTranscriptParser: TranscriptParser {
                                                isError: block["is_error"] as? Bool ?? false, timestamp: ts), to: &items)
             case "text":
                 let text = block["text"] as? String ?? ""
+                noteTaskNotification(text)
                 guard obj["isMeta"] as? Bool != true, !TranscriptSupport.isInjectedUserText(text) else { continue }
                 beginTurn()
                 TranscriptSupport.append(.init(id: "\(uuid)-\(i)", role: .user, text: text, timestamp: ts), to: &items)
@@ -110,6 +118,19 @@ public struct ClaudeTranscriptParser: TranscriptParser {
         }
     }
 
+    /// `<task-notification>` reports a background task stopping; any status but running means done.
+    private mutating func noteTaskNotification(_ text: String) {
+        guard !subagents.isEmpty, text.hasPrefix("<task-notification>"),
+              let id = Self.tag("task-id", in: text), Self.tag("status", in: text) != "running" else { return }
+        subagents.removeAll { $0.id == id }
+    }
+
+    private static func tag(_ name: String, in text: String) -> String? {
+        guard let open = text.range(of: "<\(name)>"),
+              let close = text.range(of: "</\(name)>", range: open.upperBound..<text.endIndex) else { return nil }
+        return String(text[open.upperBound..<close.lowerBound])
+    }
+
     private mutating func beginTurn() {
         turnOpen = true
         lastStop = nil
@@ -123,7 +144,11 @@ public struct ClaudeTranscriptParser: TranscriptParser {
         return ""
     }
 
-    public func snapshot(now: Date) -> ConversationSnapshot {
+    public func snapshot(now: Date) -> ConversationSnapshot { snapshot(now: now, subagentActivity: nil) }
+
+    /// `subagentActivity` is when a background subagent last wrote its own transcript, which keeps
+    /// a session with long-running subagents alive after its main transcript goes quiet.
+    public func snapshot(now: Date, subagentActivity: Date?) -> ConversationSnapshot {
         var activity: TileActivity = .idle
         var detail: String?
         if let (name, since) = pending.values.min(by: { $0.since < $1.since }),
@@ -142,6 +167,15 @@ public struct ClaudeTranscriptParser: TranscriptParser {
         } else if turnOpen {
             let stale = lastEventAt.map { now.timeIntervalSince($0) > 600 } ?? true
             activity = stale ? .idle : .working
+        } else if !subagents.isEmpty,
+                  let last = [lastEventAt, subagentActivity].compactMap({ $0 }).max(),
+                  now.timeIntervalSince(last) < Self.abandonedAfter {
+            activity = .working
+            detail = "Waiting on " + (subagents.count == 1 ? subagents[0].description : "\(subagents.count) subagents")
+        } else if let sub = subagentActivity, sub > lastEventAt ?? .distantPast, now.timeIntervalSince(sub) < 120 {
+            // A subagent launched before the part of the transcript we read is still writing.
+            activity = .working
+            detail = "Waiting on subagents"
         } else if lastStop != nil {
             activity = .done
         }

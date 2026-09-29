@@ -144,7 +144,7 @@ final class TranscriptScanner: @unchecked Sendable {
             advance(tail, path: path)
             guard case .claude(let parser) = tail.parser else { continue }
 
-            var snapshot = parser.snapshot(now: now)
+            var snapshot = parser.snapshot(now: now, subagentActivity: subagentActivity(path))
             let post = meta["postTurnSummary"] as? [String: Any]
             let summary = (post?["status_detail"] as? String).flatMap { $0.isEmpty ? nil : $0 }
             let needsAction = (post?["needs_action"] as? String).flatMap { $0.isEmpty ? nil : $0 }
@@ -168,6 +168,15 @@ final class TranscriptScanner: @unchecked Sendable {
                 lastActivityAt: max(lastActivity, parser.lastEventAt ?? .distantPast)))
         }
         return out
+    }
+
+    /// Background subagents write `<session>/subagents/agent-<id>.jsonl` beside the transcript.
+    private func subagentActivity(_ transcriptPath: String) -> Date? {
+        let dir = URL(fileURLWithPath: String(transcriptPath.dropLast(".jsonl".count))).appendingPathComponent("subagents")
+        let files = (try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: [.contentModificationDateKey])) ?? []
+        return files.filter { $0.pathExtension == "jsonl" }
+            .compactMap { try? $0.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate }
+            .max()
     }
 
     private func claudeTranscriptPath(_ cliId: String) -> String? {
