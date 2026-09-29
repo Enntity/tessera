@@ -183,6 +183,20 @@ final class AppModel {
         if workspace.expandedId != nil { open(next) } else { workspace.selectedId = next }
     }
 
+    /// Starts a conversation in the Claude or Codex app and lands its window where an opened tile
+    /// sits, so the eye doesn't leave the board.
+    func newAppConversation(_ app: AgentApp, prompt: String? = nil) {
+        var rect: CGRect?
+        if let content = window?.contentView?.bounds {
+            let board = CGRect(x: 12, y: 44, width: content.width - 24 - (showSidebar ? 290 : 0), height: content.height - 56)
+            let center = CGRect(x: board.midX - 150, y: board.midY - 100, width: 300, height: 200)
+            let target = GridLayout.expandedFrame(from: center, in: board.insetBy(dx: 10, dy: 6),
+                                                  preferred: CGSize(width: board.width * 0.8, height: board.height * 0.92))
+            rect = screenRect(fromWindow: target)
+        }
+        workspace.newAppConversation(app, folder: contextDirectory, prompt: prompt, placeAt: rect)
+    }
+
     /// New tiles start where the selected terminal is working.
     var contextDirectory: String {
         if let sel = workspace.selectedId, let t = workspace.terminals[sel] { return t.cwd }
@@ -205,6 +219,9 @@ struct BoardCommands: Commands {
                 .keyboardShortcut("t", modifiers: [.command, .shift])
             Button("New Codex") { model.workspace.launch(command: "codex", cwd: model.contextDirectory) }
                 .keyboardShortcut("t", modifiers: [.command, .option])
+            ForEach(model.workspace.installedApps, id: \.self) { app in
+                Button(app == .claude ? "New Claude App Session" : "New Codex App Thread") { model.newAppConversation(app) }
+            }
             Button("Open Web Tile…") { model.paletteMode = .url; model.showPalette = true }
                 .keyboardShortcut("l")
             Divider()

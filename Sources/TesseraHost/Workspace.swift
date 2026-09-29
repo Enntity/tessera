@@ -21,6 +21,10 @@ public final class Workspace {
     public let usage: UsageService
     public let machines: MachineMonitor
     public private(set) var presets: [LaunchPreset] = LaunchCatalog.known
+    /// Desktop agent apps on this Mac that can start conversations from Tessera.
+    public let installedApps: [AgentApp] = AgentApp.allCases.filter {
+        NSWorkspace.shared.urlForApplication(withBundleIdentifier: $0.bundleID) != nil
+    }
 
     public var selectedId: String?
     public private(set) var expandedId: String?
@@ -269,6 +273,30 @@ public final class Workspace {
         WindowPlacer.open(a.openURL, bundleID: a.bundleID, placeAt: placeNativeWindows ? rect : nil)
     }
 
+    // MARK: New app conversations
+
+    /// A conversation just started in a desktop app: when its tile appears, open it in place.
+    @ObservationIgnored private var pendingAppConversation: (app: AgentApp, since: Date)?
+
+    /// Starts a new conversation in the Claude or Codex app (in `folder`, with `prompt` placed in its
+    /// composer), snapping the app window onto `rect` (AppKit screen coordinates) when allowed.
+    public func newAppConversation(_ app: AgentApp, folder: String?, prompt: String? = nil, placeAt rect: CGRect? = nil) {
+        guard let url = app.newConversationURL(folder: folder, prompt: prompt) else { return }
+        pendingAppConversation = (app, Date())
+        WindowPlacer.open(url, bundleID: app.bundleID, placeAt: placeNativeWindows ? rect : nil)
+    }
+
+    /// The new conversation's tile shows up once the app saves it (after the first message).
+    private func openPendingAppConversation(newlyAdded: [AgentAppSession]) {
+        guard let pending = pendingAppConversation else { return }
+        if Date().timeIntervalSince(pending.since) > 900 { pendingAppConversation = nil; return }
+        guard let match = newlyAdded.first(where: { $0.flavor == pending.app.flavor && $0.lastActivityAt >= pending.since.addingTimeInterval(-5) })
+        else { return }
+        pendingAppConversation = nil
+        agentAcknowledged[match.id] = Date()
+        expand(match.id)
+    }
+
     // MARK: DeepSeek Harness
 
     /// The dsh web UI, shown inside whichever dsh session's panel is open. It's one shared page,
@@ -353,12 +381,15 @@ public final class Workspace {
             for id in live.keys { agentAcknowledged[id] = now }
         }
         let newest = live.values.sorted { $0.lastActivityAt > $1.lastActivityAt }
+        var added: [AgentAppSession] = []
         for a in newest where !order.contains(a.id) {
             if let hidden = hiddenAgents[a.id], a.lastActivityAt <= hidden { continue }
             hiddenAgents[a.id] = nil
             if agentAcknowledged[a.id] == nil { agentAcknowledged[a.id] = .distantPast }
             order.append(a.id)
+            added.append(a)
         }
+        openPendingAppConversation(newlyAdded: added)
         let before = order.count
         order.removeAll { id in id.contains(":") && live[id] == nil && terminals[id] == nil && browsers[id] == nil }
         if order.count != before, let e = expandedId, !order.contains(e) { expandedId = nil }

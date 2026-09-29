@@ -563,3 +563,15 @@ final class RestorePlanTests: XCTestCase {
         XCTAssertFalse(SessionResume.continuesLatest("claude"))
     }
 }
+
+final class AgentAppTests: XCTestCase {
+    func testNewConversationLinks() {
+        XCTAssertEqual(AgentApp.claude.newConversationURL(folder: "/Users/me/my proj", prompt: "fix the build")?.absoluteString,
+                       "claude://code/new?folder=/Users/me/my%20proj&q=fix%20the%20build")
+        XCTAssertEqual(AgentApp.codex.newConversationURL(folder: "/w", prompt: nil)?.absoluteString, "codex://threads/new?path=/w")
+        XCTAssertEqual(AgentApp.codex.newConversationURL(folder: nil, prompt: "  ")?.absoluteString, "codex://threads/new")
+        // Characters meaningful in a query stay inside their parameter.
+        let url = AgentApp.claude.newConversationURL(folder: nil, prompt: "a&b=c?d#e C++")!
+        XCTAssertEqual(url.absoluteString, "claude://code/new?q=a%26b%3Dc%3Fd%23e%20C%2B%2B")
+    }
+}

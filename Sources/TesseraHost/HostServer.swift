@@ -277,7 +277,9 @@ final class RemoteClient {
             deviceName = String(h.deviceName.prefix(64))
             authenticated = true
             send(.hello(hello))
-            send(.launchers(workspace.presets))
+            send(.launchers(workspace.presets + workspace.installedApps.map {
+                LaunchPreset(name: $0 == .claude ? "Claude app" : "Codex app", command: nil, flavor: $0.flavor)
+            }))
             sendTiles()
             send(.usage(workspace.usage.orderedReadings))
             onHello?()
@@ -304,7 +306,9 @@ final class RemoteClient {
             case .close: workspace.close(action.id)
             }
         case .launch(let request):
-            if let url = request.url {
+            if let app = request.app {
+                workspace.newAppConversation(app, folder: request.cwd ?? workspace.defaultDirectory, prompt: request.prompt)
+            } else if let url = request.url {
                 workspace.openBrowser(url)
             } else {
                 workspace.launch(command: request.command, cwd: request.cwd)

@@ -107,10 +107,30 @@ struct CommandPalette: View {
         let presets = workspace.presets.filter { q.isEmpty || $0.name.localizedCaseInsensitiveContains(q) || ($0.command ?? "").hasPrefix(q) }
         for p in presets {
             out.append(Item(id: "preset-\(p.name)", symbol: p.flavor.symbol, color: Style.accent(p.flavor),
-                            title: "New \(p.name)", subtitle: (p.command ?? "login shell") + " · " + cwd.abbreviatingHome) {
+                            title: "New \(p.name)", subtitle: "Terminal · " + (p.command ?? "login shell") + " · " + cwd.abbreviatingHome) {
                 workspace.launch(command: p.command, cwd: cwd)
             })
         }
+        // Desktop agent apps: a blank conversation, or one seeded with what's been typed. They lead
+        // the list: starting a Claude or Codex app conversation is the common case.
+        let seed = q.isEmpty || WebAddress.looksLikeAddress(q) ? nil : q
+        var appItems: [Item] = []
+        for app in workspace.installedApps {
+            let flavor = app.flavor
+            if let seed {
+                appItems.append(Item(id: "ask-\(app.rawValue)", symbol: flavor.symbol, color: Style.accent(flavor),
+                                title: "Ask \(flavor.displayName) app: “\(seed.preview(50))”",
+                                subtitle: "New conversation in the \(flavor.displayName) app · " + cwd.abbreviatingHome) {
+                    model.newAppConversation(app, prompt: seed)
+                })
+            } else {
+                appItems.append(Item(id: "app-\(app.rawValue)", symbol: flavor.symbol, color: Style.accent(flavor),
+                                title: app.newLabel, subtitle: "Opens in the \(flavor.displayName) app · " + cwd.abbreviatingHome) {
+                    model.newAppConversation(app)
+                })
+            }
+        }
+        out.insert(contentsOf: appItems, at: 0)
         if !q.isEmpty {
             let looksLikeURL = WebAddress.looksLikeAddress(q)
             if looksLikeURL {

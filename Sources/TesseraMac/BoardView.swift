@@ -96,6 +96,16 @@ struct EmptyBoard: View {
             }
             if filter == .all {
                 HStack(spacing: 10) {
+                    ForEach(model.workspace.installedApps, id: \.self) { app in
+                        Button { model.newAppConversation(app) } label: {
+                            Label(app.flavor.displayName + " app", systemImage: app.flavor.symbol)
+                                .font(Style.ui(12, .semibold))
+                                .padding(.horizontal, 12).padding(.vertical, 7)
+                                .background(Style.accent(app.flavor).opacity(0.14), in: Capsule())
+                                .foregroundStyle(Style.accent(app.flavor))
+                        }
+                        .buttonStyle(.plain)
+                    }
                     ForEach(model.workspace.presets.prefix(4)) { preset in
                         Button {
                             model.workspace.launch(command: preset.command, cwd: model.contextDirectory)

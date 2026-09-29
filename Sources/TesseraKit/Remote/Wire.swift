@@ -105,10 +105,15 @@ public struct LaunchRequest: Codable, Sendable {
     public var command: String?
     public var cwd: String?
     public var url: String?
-    public init(command: String? = nil, cwd: String? = nil, url: String? = nil) {
+    /// Start a new conversation in a desktop agent app instead of a terminal.
+    public var app: AgentApp?
+    public var prompt: String?
+    public init(command: String? = nil, cwd: String? = nil, url: String? = nil, app: AgentApp? = nil, prompt: String? = nil) {
         self.command = command
         self.cwd = cwd
         self.url = url
+        self.app = app
+        self.prompt = prompt
     }
 }
 
