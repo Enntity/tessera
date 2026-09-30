@@ -77,8 +77,9 @@ struct BoardView: View {
         .focusEffectDisabled()
         .onAppear { focused = true }
         // An open tile owns the keyboard: its terminal or page becomes first responder, which takes
-        // focus from the board, and the board takes it back on close (see `AppModel.restoreFocus`).
-        .onChange(of: model.workspace.expandedId) { _, open in if open == nil { focused = true } }
+        // focus from the board, and the board takes it back on close (see `AppModel.restoreFocus`)
+        // unless the filter field closed the tile to be typed in.
+        .onChange(of: model.workspace.expandedId) { _, open in if open == nil, !model.isFiltering { focused = true } }
         .onChange(of: model.boardFocus) { focused = true }
         .onKeyPress(.leftArrow) { move(.left) }
         .onKeyPress(.rightArrow) { move(.right) }

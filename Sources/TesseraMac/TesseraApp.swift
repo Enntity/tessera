@@ -276,10 +276,11 @@ final class AppModel {
         onBoard { $0.query.chips.formSymmetricDifference([chip]) }
     }
 
-    /// Esc: the whole tab again, and the keyboard back on the board.
+    /// Esc: the whole tab again, and the keyboard back where it was (with nothing to clear, that is
+    /// all: a panel left open under the field stays open).
     func clearFilter() {
         isFiltering = false
-        onBoard { $0.query = BoardQuery() }
+        if workspace.query.isEmpty { restoreFocus() } else { onBoard { $0.query = BoardQuery() } }
     }
 
     /// A one-tap answer from the lane, typed into the terminal unopened. Its row leaves as it is
