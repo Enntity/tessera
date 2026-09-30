@@ -50,9 +50,10 @@ Native macOS app, with a focused iOS companion built on the same core.
   Codex conversation's transcript, all live while the board carries on. Each has a compact header:
   what it is, its state, its menu, open full size, undock. A terminal or page is in one place at a
   time, so opening a docked tile (a click on it, ⏎, ⌘J, a row in the lane) puts the keyboard in
-  its dock panel, whose edge lights up; ⌘W or ⌘⏎ go back to the board. Its tile on the board wears
-  a small mark. Drag the dock's edge to resize it; a third tile docked lets the oldest go; closing
-  a docked tile undocks it. What is docked and how wide are kept with the board. In a small
+  its dock panel, whose edge lights up; ⌘W or ⌘⏎ goes back to the board. Its tile on the board wears
+  a small mark. A docked terminal is drawn a little smaller, and the dock starts wide enough for
+  its 80 columns; drag the dock's edge to resize it. A third tile docked lets the oldest go;
+  closing a docked tile undocks it. What is docked and how wide are kept with the board. In a small
   window the accounts, then the lane, make way for it.
 - **Tile size.** ⌘- shows more of a busy board at once, ⌘= makes tiles larger, ⌘0 is the standard
   size again: the board scrolls only when tiles would get smaller than the size you chose.
@@ -233,7 +234,7 @@ ask first.
 - If you scroll back in a Mac terminal, the phone's snapshot and prompt detection follow the scrolled view.
 - No push notifications to the phone yet (needs an APNs relay); the phone updates while open.
 - Tiles are one size, stepped for the whole board (⌘= ⌘-); a tile can be docked, not pinned in place.
-- A docked terminal takes the dock's width, so the program in it reflows; a third tile replaces the oldest.
+- A docked terminal takes the dock's size, so the program in it reflows as it is docked and undocked.
 
 ## License
 
