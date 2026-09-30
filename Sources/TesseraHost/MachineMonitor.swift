@@ -21,8 +21,6 @@ public final class MachineMonitor {
     @ObservationIgnored private let local = LocalSampler()
     /// Sensor and IORegistry reads take tens of milliseconds, so they never run on the main thread.
     @ObservationIgnored private let sampler = DispatchQueue(label: "tessera.vitals", qos: .utility)
-    /// One probe at a time: with a shared ssh connection each is quick, and a slow host holds one thread, not one per host.
-    @ObservationIgnored private let probes = DispatchQueue(label: "tessera.ssh-probes", qos: .utility)
     @ObservationIgnored private var sampling = false
     @ObservationIgnored private var hostsCache: (modified: Date?, hosts: [String])?
     @ObservationIgnored private var inFlight: Set<String> = []
@@ -123,8 +121,7 @@ public final class MachineMonitor {
     private func pollRemote(_ config: MachineConfig) {
         guard let host = config.sshHost, !inFlight.contains(config.id) else { return }
         inFlight.insert(config.id)
-        probes.async {
-            let result = SSHProbe.run(host: host, command: RemoteVitals.script)
+        SSHProbe.run(host: host, command: RemoteVitals.script) { result in
             DispatchQueue.main.async {
                 MainActor.assumeIsolated { self.apply(result, to: config) }
             }
@@ -164,8 +161,11 @@ public final class MachineMonitor {
 enum SSHProbe {
     struct Failure: Error { let message: String }
 
-    static func run(host: String, command: String, timeout: TimeInterval = 8) -> Result<String, Failure> {
-        guard MachineConfig.isValidHost(host) else { return .failure(Failure(message: "Invalid host")) }
+    /// Calls `done` (on a background queue) once ssh exits. Nothing waits in the meantime, so a slow or
+    /// unreachable host holds up neither a thread nor the other hosts.
+    static func run(host: String, command: String, timeout: TimeInterval = 8,
+                    done: @escaping @Sendable (Result<String, Failure>) -> Void) {
+        guard MachineConfig.isValidHost(host) else { return done(.failure(Failure(message: "Invalid host"))) }
         let p = Process()
         p.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
         p.arguments = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=5", "-o", "ServerAliveInterval=10",
@@ -175,18 +175,18 @@ enum SSHProbe {
         p.standardOutput = out
         p.standardError = err
         p.standardInput = FileHandle.nullDevice
-        do { try p.run() } catch { return .failure(Failure(message: error.localizedDescription)) }
-        let killer = DispatchWorkItem { if p.isRunning { p.terminate() } }
-        DispatchQueue.global().asyncAfter(deadline: .now() + timeout, execute: killer)
-        let data = out.fileHandleForReading.readDataToEndOfFile()
-        let errData = err.fileHandleForReading.readDataToEndOfFile()
-        p.waitUntilExit()
-        killer.cancel()
-        guard p.terminationStatus == 0 else {
-            let msg = String(decoding: errData, as: UTF8.self).split(separator: "\n").last.map(String.init) ?? "ssh exited \(p.terminationStatus)"
-            return .failure(Failure(message: msg.preview(90)))
+        p.terminationHandler = { p in
+            // The reply is a few short lines, well within a pipe's buffer, so it's all there once ssh exits.
+            let data = out.fileHandleForReading.readDataToEndOfFile()
+            let errData = err.fileHandleForReading.readDataToEndOfFile()
+            guard p.terminationStatus == 0 else {
+                let msg = String(decoding: errData, as: UTF8.self).split(separator: "\n").last.map(String.init) ?? "ssh exited \(p.terminationStatus)"
+                return done(.failure(Failure(message: msg.preview(90))))
+            }
+            done(.success(String(decoding: data, as: UTF8.self)))
         }
-        return .success(String(decoding: data, as: UTF8.self))
+        do { try p.run() } catch { return done(.failure(Failure(message: error.localizedDescription))) }
+        DispatchQueue.global().asyncAfter(deadline: .now() + timeout) { if p.isRunning { p.terminate() } }
     }
 }
 
