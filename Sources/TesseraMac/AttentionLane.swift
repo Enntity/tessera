@@ -79,7 +79,7 @@ struct LaneRow: View {
                             Age(of: info.lastActivityAt).font(Style.caption).foregroundStyle(Style.muted)
                         }
                         HStack(alignment: .firstTextBaseline, spacing: Style.Space.xs) {
-                            Text(privacy ? AttributedString(info.reason.obscured(true)) : info.reason.markdownPreview(120))
+                            Text(hidden(info) ? AttributedString(info.reason.obscured(true)) : info.reason.markdownPreview(120))
                                 .foregroundStyle(info.activity == .done ? Style.muted : Style.state(info.activity))
                                 // All of it under the pointer, where an answer may be about to be given.
                                 .lineLimit(hovering ? 6 : 2)
@@ -105,10 +105,16 @@ struct LaneRow: View {
             .background(model.workspace.selectedId == id ? Style.Neutral.selected : hovering ? Style.Neutral.hover : .clear,
                         in: Style.shape(Style.Radius.m))
             .cardSurface()
-            .help([info.title, privacy ? nil : info.reason].compactMap { $0 }.joined(separator: "\n"))
+            .help([info.title, hidden(info) ? nil : info.reason].compactMap { $0 }.joined(separator: "\n"))
             .onHover { self.hovering = $0 }
             .animation(Style.Motion.quick, value: hovering)
         }
+    }
+
+    /// In privacy mode, what a tile said (its question, its summary) is kept off the screen here as
+    /// it is on the tile; how it failed is on show in both.
+    private func hidden(_ info: TileInfo) -> Bool {
+        privacy && info.detail != nil && info.activity != .failed
     }
 
     private var answers: some View {
