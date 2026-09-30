@@ -79,35 +79,58 @@ struct PanelContent: View {
         if let info = workspace.info(id) {
             VStack(spacing: 0) {
                 PanelHeader(info: info)
-                switch info.kind {
-                case .terminal:
-                    if let session = workspace.terminals[id] {
-                        ReparentHost(view: session.view, focus: !info.activity.hasEnded)
-                            .overlay {
-                                // Same word blocks as the tiles; the live terminal underneath keeps the keyboard.
-                                if model.privacyMode {
-                                    TerminalTileContent(session: session).allowsHitTesting(false)
-                                }
-                            }
-                            .overlay { EndedOverlay(info: info, inPanel: true) }
-                            .padding(.horizontal, Style.Space.m)
-                            .padding(.vertical, Style.Space.s)
-                            .background(Style.terminalBackground)
-                            // The keyboard leaves a terminal that ends while open, and returns once it runs again.
-                            .onChange(of: info.activity.hasEnded) { model.restoreFocus() }
-                    }
-                case .browser:
-                    if let browser = workspace.browsers[id] {
-                        ReparentHost(view: browser.webView, focus: true)
-                            // The page is back on its tile the moment the panel closes; its last
-                            // still stands in here while the panel goes.
-                            .background { PageStill(browser: browser) }
-                            .overlay { if model.privacyMode { PrivateWebCover(browser: browser) } }
-                    }
-                case .agentSession:
-                    AgentPanel(id: id)
-                }
+                LiveContent(info: info)
             }
+        }
+    }
+}
+
+/// A tile's content, live: a terminal to type into, a page, a conversation. It is in one place at
+/// a time, the open panel or (`docked`) the dock, where no key is taken that isn't typed into it.
+struct LiveContent: View {
+    @Environment(AppModel.self) private var model
+    let info: TileInfo
+    var docked = false
+
+    var body: some View {
+        let workspace = model.workspace
+        switch info.kind {
+        case .terminal:
+            if let session = workspace.terminals[info.id] {
+                host(session.view, focus: !info.activity.hasEnded)
+                    .overlay {
+                        // Same word blocks as the tiles; the live terminal underneath keeps the keyboard.
+                        if model.privacyMode {
+                            TerminalTileContent(session: session).allowsHitTesting(false)
+                        }
+                    }
+                    .overlay { EndedOverlay(info: info, inPanel: true, keys: !docked) }
+                    .padding(.horizontal, Style.Space.m)
+                    .padding(.vertical, Style.Space.s)
+                    .background(Style.terminalBackground)
+                    // The keyboard leaves a terminal that ends while open, and returns once it runs again.
+                    .onChange(of: info.activity.hasEnded) { model.restoreFocus() }
+            }
+        case .browser:
+            if let browser = workspace.browsers[info.id] {
+                host(browser.webView, focus: true)
+                    // The page is back on its tile the moment the panel closes; its last
+                    // still stands in here while the panel goes.
+                    .background { PageStill(browser: browser) }
+                    .overlay { if model.privacyMode { PrivateWebCover(browser: browser) } }
+            }
+        case .agentSession:
+            AgentPanel(id: info.id, docked: docked, host: host)
+        }
+    }
+
+    /// An open panel's terminal or page takes the keyboard as it appears. A docked one takes it
+    /// when it is given it (see `AppModel.keyboardDock`), and says when a click gives or takes it.
+    private func host(_ view: NSView, focus: Bool) -> ReparentHost {
+        let id = info.id
+        guard docked else { return ReparentHost(view: view, focus: focus) }
+        return ReparentHost(view: view, focus: focus && model.keyboardDock == id, take: model.dockFocus) { [model] in
+            model.dockKeyboard(id, has: $0)
         }
     }
 }
@@ -152,6 +175,7 @@ struct PanelHeader: View {
                 Text("\(cols)×\(rows)").font(Style.caption).foregroundStyle(Style.muted)
             }
             ForEach(model.actions(for: info)) { headerButton($0) }
+            headerButton(model.dockAction(for: info))
             Menu {
                 TileMenu(info: info, inPanel: true) { renaming = true }
             } label: {
@@ -189,6 +213,10 @@ struct PanelHeader: View {
 struct AgentPanel: View {
     @Environment(AppModel.self) private var model
     let id: String
+    /// In the dock there is less room, and no key of its own: what its buttons do is in its menu.
+    var docked = false
+    /// Hosts the live page (see `LiveContent.host`).
+    let host: (NSView, Bool) -> ReparentHost
     @State private var opened = false
     /// dsh sessions: the live dsh web page or Tessera's own transcript.
     @State private var showLive = true
@@ -197,7 +225,8 @@ struct AgentPanel: View {
         let workspace = model.workspace
         let session = workspace.agents.session(id)
         let isDsh = session?.flavor == .dsh
-        let livePage = isDsh && workspace.dsh.state == .running ? workspace.dshPage : nil
+        // dsh web is one page: it shows the session last opened in it, and lives in that one's panel.
+        let livePage = isDsh && workspace.dsh.state == .running && workspace.dshSession == id ? workspace.dshPage : nil
         VStack(spacing: 0) {
             HStack(spacing: Style.Space.gutter) {
                 if let model = session?.snapshot.model { Tag(text: model) }
@@ -207,14 +236,18 @@ struct AgentPanel: View {
                 }
                 Spacer()
                 if isDsh {
-                    Picker("", selection: $showLive) {
+                    // Choosing Live brings the page here from whichever session had it.
+                    Picker("", selection: Binding(get: { showLive && livePage != nil }, set: { live in
+                        showLive = live
+                        if live { workspace.openNative(id, at: nil) }
+                    })) {
                         Text("Live").tag(true)
                         Text("Transcript").tag(false)
                     }
                     .pickerStyle(.segmented)
                     .labelsHidden()
                     .frame(width: 170)
-                } else {
+                } else if !docked {
                     if let resume = session?.resumeCommand {
                         Button {
                             model.create { $0.launch(command: resume, cwd: session?.cwd) }
@@ -238,11 +271,11 @@ struct AgentPanel: View {
                 DshServerStatus(server: workspace.dsh)
             }
             if isDsh, showLive, let page = livePage {
-                ReparentHost(view: page.webView, focus: true)
+                host(page.webView, true)
                     .overlay { if model.privacyMode { PrivateWebCover(browser: page) } }
             } else {
                 ConversationDetail(snapshot: session?.snapshot)
-                    .background { EscToBoard() }
+                    .background { if !docked { EscToBoard() } }
             }
         }
         .onAppear {
@@ -256,19 +289,41 @@ struct AgentPanel: View {
 
 // MARK: - AppKit hosts
 
-/// Hosts a long-lived NSView (terminal, web view) that moves between containers without being recreated.
+/// Hosts a long-lived NSView (terminal, web view) that moves between containers without being
+/// recreated. The view is in one container at a time: the one made for it last. A host it was
+/// taken from never takes it back (it may still be on screen, on its way out, and two hosts that
+/// each took the view whenever they were updated would hand it back and forth without end).
 struct ReparentHost: NSViewRepresentable {
     let view: NSView
+    /// Takes the keyboard as it comes to host the view.
     var focus = false
+    /// Bumped to take the keyboard again (while `focus`).
+    var take = 0
+    /// Told when the view gets the keyboard, and when it loses it.
+    var keyboard: ((Bool) -> Void)?
+
+    final class Coordinator {
+        var take = 0
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
 
     func makeNSView(context: Context) -> HostContainer {
         let container = HostContainer()
+        container.keyboard = keyboard
         container.adopt(view, focus: focus)
+        context.coordinator.take = take
         return container
     }
 
     func updateNSView(_ container: HostContainer, context: Context) {
-        if view.superview !== container { container.adopt(view, focus: focus) }
+        container.keyboard = keyboard
+        if container.hosted !== view {
+            container.adopt(view, focus: focus)
+        } else if focus, view.superview === container, context.coordinator.take != take {
+            container.takeKeyboard()
+        }
+        context.coordinator.take = take
     }
 
     static func dismantleNSView(_ container: HostContainer, coordinator: ()) {
@@ -276,11 +331,17 @@ struct ReparentHost: NSViewRepresentable {
     }
 
     final class HostContainer: NSView {
-        private weak var hosted: NSView?
+        /// The view it was made for, which may have moved on to another host since.
+        private(set) weak var hosted: NSView?
+        /// That view, while it is here.
+        private var held: NSView? { hosted?.superview === self ? hosted : nil }
         private var focus = false
+        var keyboard: ((Bool) -> Void)?
+        private var hasKeyboard = false
+        private var watch: NSKeyValueObservation?
 
         func adopt(_ view: NSView, focus: Bool) {
-            // Switching tiles while open reuses this container: evict the previous view.
+            // Asked to host another view, it lets go of the one it had.
             for sub in subviews where sub !== view { sub.removeFromSuperview() }
             view.removeFromSuperview()
             view.autoresizingMask = []
@@ -288,18 +349,30 @@ struct ReparentHost: NSViewRepresentable {
             hosted = view
             needsLayout = true
             self.focus = focus
-            takeFocus()
+            if focus { takeKeyboard() }
         }
 
         /// A panel that has just been created may reach its window only after `adopt`.
-        override func viewDidMoveToWindow() { takeFocus() }
-
-        private func takeFocus() {
-            guard focus else { return }
-            DispatchQueue.main.async { [weak self] in
-                guard let self, let hosted else { return }
-                window?.makeFirstResponder(hosted)
+        override func viewDidMoveToWindow() {
+            if focus { takeKeyboard() }
+            watch = keyboard == nil ? nil : window?.observe(\.firstResponder) { [weak self] window, _ in
+                MainActor.assumeIsolated { self?.keyboardMoved(to: window.firstResponder) }
             }
+        }
+
+        func takeKeyboard() {
+            DispatchQueue.main.async { [weak self] in
+                guard let self, let held else { return }
+                window?.makeFirstResponder(held)
+            }
+        }
+
+        /// Says so when the keyboard comes to the hosted view (a click in it does that) or leaves it.
+        private func keyboardMoved(to responder: NSResponder?) {
+            let has = held.map { (responder as? NSView)?.isDescendant(of: $0) ?? false } ?? false
+            guard has != hasKeyboard else { return }
+            hasKeyboard = has
+            DispatchQueue.main.async { [weak self] in self?.keyboard?(has) }
         }
 
         /// Only hand the hosted view a real size: a terminal given a zero frame would shrink its PTY
@@ -307,7 +380,7 @@ struct ReparentHost: NSViewRepresentable {
         override func layout() {
             super.layout()
             guard bounds.width > 40, bounds.height > 40 else { return }
-            hosted?.frame = bounds
+            held?.frame = bounds
         }
     }
 }

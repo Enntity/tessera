@@ -10,28 +10,41 @@ struct DashboardView: View {
             Backdrop()
             VStack(spacing: 0) {
                 HUDBar()
-                HStack(spacing: 0) {
-                    if model.showLane {
-                        AttentionLane()
-                            .frame(width: Style.Metrics.lane)
-                            .transition(.move(edge: .leading).combined(with: .opacity))
-                    }
-                    VStack(spacing: 0) {
-                        TabStrip()
-                        BoardView()
-                    }
-                    .overlay(alignment: .bottom) {
-                        if let toast = model.closedToast {
-                            UndoToast(toast: toast)
-                                .padding(.bottom, Style.Space.xxl)
-                                .transition(.move(edge: .bottom).combined(with: .opacity))
+                // The columns: what needs you · the board · what is being watched · the accounts.
+                GeometryReader { geo in
+                    let columns = BoardColumns(width: geo.size.width, lane: model.showLane ? Style.Metrics.lane : nil,
+                                               accounts: model.showSidebar ? Style.Metrics.sidebar : nil,
+                                               dock: model.workspace.docked.isEmpty ? nil : model.dockWidth,
+                                               dockMin: Style.Metrics.dockMin, boardMin: Style.Metrics.boardMin)
+                    HStack(spacing: 0) {
+                        if columns.lane {
+                            AttentionLane()
+                                .frame(width: Style.Metrics.lane)
+                                .transition(.move(edge: .leading).combined(with: .opacity))
+                        }
+                        VStack(spacing: 0) {
+                            TabStrip()
+                            BoardView()
+                        }
+                        .overlay(alignment: .bottom) {
+                            if let toast = model.closedToast {
+                                UndoToast(toast: toast)
+                                    .padding(.bottom, Style.Space.xxl)
+                                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                            }
+                        }
+                        if let dock = columns.dock {
+                            WatchDockColumn(width: dock, widest: columns.dockMax)
+                                .frame(width: dock)
+                                .transition(.move(edge: .trailing).combined(with: .opacity))
+                        }
+                        if columns.accounts {
+                            AccountsSidebar()
+                                .frame(width: Style.Metrics.sidebar)
+                                .transition(.move(edge: .trailing).combined(with: .opacity))
                         }
                     }
-                    if model.showSidebar {
-                        AccountsSidebar()
-                            .frame(width: Style.Metrics.sidebar)
-                            .transition(.move(edge: .trailing).combined(with: .opacity))
-                    }
+                    .animation(Style.Motion.standard, value: [columns.lane, columns.accounts])
                 }
             }
             if model.showPalette {

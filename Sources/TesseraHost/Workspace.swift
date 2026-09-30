@@ -29,6 +29,11 @@ public final class Workspace {
     /// Always a tile the board shows, or nil on an empty board (see `reconcileSelection`).
     public private(set) var selectedId: String?
     public private(set) var expandedId: String?
+    /// The tiles kept open beside the board. A docked tile's terminal or page lives there, and
+    /// nowhere else: opening it goes to the dock.
+    public private(set) var dock = WatchDock()
+    /// How wide the user made the dock; nil until they have. (Saved with the board: see `save`.)
+    public var dockWidth: CGFloat?
     public var filter: Filter = .all { didSet { reconcileSelection() } }
     /// What the filter field and its chips narrow the board to, in the tab being viewed.
     public var query = BoardQuery() { didSet { queryChanged(from: oldValue) } }
@@ -231,6 +236,7 @@ public final class Workspace {
     public func close(_ id: String) -> ClosedTile? {
         guard exists(id), let info = info(id) else { return nil }
         if expandedId == id { collapse() }
+        setDocked(id, false)
         let visible = visibleIds
         // Read before the terminal ends: its folder comes from the live process.
         let closed = ClosedTile(title: info.title, subtitle: info.subtitle, tile: savedTile(id) ?? .init(id: id, kind: info.kind),
@@ -403,6 +409,11 @@ public final class Workspace {
             collapse()
             select(id)
             openNative(id, at: rect)
+        } else if dock.contains(id) {
+            // It is open already, in the dock: that is where the user is sent.
+            collapse()
+            select(id)
+            acknowledge(id)
         } else {
             if let prev = expandedId, prev != id { setViewed(prev, false) }
             select(id)
@@ -411,14 +422,36 @@ public final class Workspace {
         }
     }
 
+    // MARK: The dock
+
+    /// Docks a tile beside the board, or takes it out again. Docked, it is on show: an open panel
+    /// of it closes, and it counts as being looked at. A full dock lets its oldest tile go.
+    public func setDocked(_ id: String, _ docked: Bool) {
+        guard docked ? exists(id) && !dock.contains(id) : dock.contains(id) else { return }
+        if docked {
+            if expandedId == id { collapse() }
+            if let left = dock.add(id) { setViewed(left, false) }
+        } else {
+            dock.remove(id)
+        }
+        setViewed(id, docked)
+        save()
+    }
+
+    /// Whether the user has the tile's content in front of them: open, or docked.
+    public func isOnShow(_ id: String) -> Bool { expandedId == id || dock.contains(id) }
+
+    /// The docked tiles there are to show, in the dock's order.
+    public var docked: [String] { dock.ids.filter(exists) }
+
     /// Where ⌃Tab goes: the latest tile opened that isn't the one the user is on.
     public var previousTile: String? { opened.previous(from: expandedId ?? selectedId, where: exists) }
 
     /// Back to the board; the tile stays selected.
     public func collapse() {
         guard let id = expandedId else { return }
-        setViewed(id, false)
         expandedId = nil
+        setViewed(id, isOnShow(id))
         reconcileSelection()
     }
 
@@ -493,10 +526,13 @@ public final class Workspace {
     /// The dsh web UI, shown inside whichever dsh session's panel is open. It's one shared page,
     /// never a tile of its own, so a session never appears twice on the board.
     public private(set) var dshPage: BrowserSession?
+    /// The session that page shows: the one last opened in it.
+    public private(set) var dshSession: String?
 
     /// Brings up dsh web (starting Tessera's server if needed; the first load uses the token URL,
     /// which signs the page in) and selects this session in it.
     private func openDsh(_ session: AgentAppSession) {
+        dshSession = session.id
         dsh.ensureRunning { [weak self] result in
             guard let self, case .success(let launch) = result else { return }
             let page: BrowserSession
@@ -554,7 +590,7 @@ public final class Workspace {
         let last = a.snapshot.lastEventAt ?? a.lastActivityAt
         var detail = a.snapshot.detail
         if detail == nil, a.snapshot.activity != .working { detail = a.summary }
-        let unseen = a.snapshot.activity.isAttention && last > ack && expandedId != a.id
+        let unseen = a.snapshot.activity.isAttention && last > ack && !isOnShow(a.id)
         // Finished work the user has already seen is just idle, same as a terminal.
         let activity: TileActivity = a.snapshot.activity == .done && !unseen ? .idle : a.snapshot.activity
         return TileInfo(id: a.id, kind: .agentSession, flavor: a.flavor, title: agentTitles[a.id] ?? a.title,
@@ -591,6 +627,8 @@ public final class Workspace {
             order = kept
             if let e = expandedId, !order.contains(e) { expandedId = nil }
         }
+        // A docked conversation that is gone leaves the dock (one not found yet since launch is waited for).
+        if agents.hasScanned { for id in dock.ids where !order.contains(id) { setDocked(id, false) } }
         reconcileSelection()
     }
 
@@ -663,7 +701,8 @@ public final class Workspace {
         StateFile.save(Saved(tiles: tiles.map(Lossy.init), defaultDirectory: defaultDirectory, placeNativeWindows: placeNativeWindows,
                              groups: groups.list, resumeOnLaunch: resumeOnLaunch, order: savedOrder, hidden: hiddenAgents,
                              agentLookbackHours: agents.lookback / 3600, titles: agentTitles,
-                             closed: recentlyClosed.tiles.map(Lossy.init)), to: saveURL)
+                             closed: recentlyClosed.tiles.map(Lossy.init), dock: dock.ids,
+                             dockWidth: dockWidth.map(Double.init)), to: saveURL)
     }
 
     /// Notes every tile's place. App sessions not on the board now (closed, or not rescanned yet
@@ -730,5 +769,10 @@ public final class Workspace {
             order.append(tile.id)
         }
         selectedId = order.first
+        // The dock as it was left (a docked app conversation is found again after launch); what is
+        // in it is looked at from the start.
+        dock = WatchDock((saved.dock ?? []).filter { order.contains($0) || $0.contains(":") })
+        dockWidth = saved.dockWidth.map { CGFloat($0) }
+        for id in dock.ids { setViewed(id, true) }
     }
 }

@@ -53,10 +53,12 @@ struct BoardCommands: Commands {
                 model.paletteMode = .all
             }
             .keyboardShortcut("k")
-            Button("Open / Close Tile") {
-                if workspace.expandedId != nil { model.collapse() } else if let id = workspace.selectedId { model.open(id) }
+            Button("Open / Close Tile") { model.toggleOpen() }
+                .keyboardShortcut(.return, modifiers: .command)
+            Button("Dock / Undock Tile") {
+                if let id = model.dockTarget { model.setDocked(id, !workspace.dock.contains(id)) }
             }
-            .keyboardShortcut(.return, modifiers: .command)
+            .keyboardShortcut("d")
             Button("Next Tile Needing Me") { model.jump(to: workspace.state.needsUser) }
                 .keyboardShortcut("j")
             Button("Next Tile") { model.move(.next) }

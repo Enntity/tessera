@@ -72,6 +72,11 @@ final class AppModel {
     private(set) var addressFocus = 0
     /// Bumped to put the cursor in the filter field (typing on the board, ⌘F).
     private(set) var filterFocus = 0
+    /// The docked tile whose terminal or page has the keyboard, or is being given it. It keeps it
+    /// through whatever happens on the board, until the keyboard is sent somewhere else.
+    private(set) var keyboardDock: String?
+    /// Bumped to hand the keyboard to that tile's panel in the dock.
+    private(set) var dockFocus = 0
     /// The filter field has the keyboard, and keeps it while the board changes under it.
     @ObservationIgnored var isFiltering = false
     /// The last one-tap answer from the lane (see `answer`).
@@ -138,7 +143,11 @@ final class AppModel {
     /// app, landing where the opened tile would have. `inApp: false` shows such a conversation's
     /// transcript in Tessera instead.
     func open(_ id: String, inApp: Bool = true) {
-        act(Style.Motion.zoom) { workspace.open(id, inApp: inApp, nativeAt: appRect(for: id)) }
+        act(Style.Motion.zoom) {
+            workspace.open(id, inApp: inApp, nativeAt: appRect(for: id))
+            // A docked tile is open where it is: the keyboard goes to it there.
+            if workspace.expandedId == nil, workspace.dock.contains(id), keyView(id) != nil { keyboardDock = id }
+        }
     }
 
     /// Where the app's window goes when tile `id` opens in its app (AppKit screen coordinates).
@@ -247,6 +256,42 @@ final class AppModel {
         }
     }
 
+    // MARK: The dock and the board's density
+
+    /// ⌘D, Dock and Undock in a tile's menu, and the buttons on the open panel and in the dock.
+    /// Docked from its open panel, a tile keeps the keyboard it had there.
+    func setDocked(_ id: String, _ docked: Bool) {
+        let open = workspace.expandedId == id
+        act(open ? Style.Motion.zoom : Style.Motion.standard) {
+            workspace.setDocked(id, docked)
+            if docked, open, keyView(id) != nil { keyboardDock = id }
+        }
+    }
+
+    /// The tile ⌘D is about: the one being typed into or looked at, else the selection.
+    var dockTarget: String? { workspace.expandedId ?? keyboardDock ?? workspace.selectedId }
+
+    /// Out of the dock and open full size (a Claude or Codex conversation: its transcript).
+    func expand(_ id: String) {
+        act(Style.Motion.zoom) {
+            workspace.setDocked(id, false)
+            workspace.open(id, inApp: false)
+        }
+    }
+
+    /// How wide the user made the dock, or how wide it starts.
+    var dockWidth: CGFloat { workspace.dockWidth ?? Style.Metrics.dock }
+
+    /// A docked terminal or page took the keyboard (a click in it), or lost it. The palette only
+    /// borrows it.
+    func dockKeyboard(_ id: String, has: Bool) {
+        if has {
+            if keyboardDock != id { keyboardDock = id }
+        } else if keyboardDock == id, !showPalette {
+            keyboardDock = nil
+        }
+    }
+
     /// ⌘= and ⌘-: larger tiles, or more of them on show (nil: the standard size again, ⌘0).
     func stepDensity(by steps: Int?) {
         guard let next = steps.map(density.stepped) ?? .standard, next != density else { return }
@@ -283,6 +328,7 @@ final class AppModel {
     /// A key typed on the board, and ⌘F: the typing goes on in the filter field.
     func beginFilter(text: String? = nil) {
         isFiltering = true
+        keyboardDock = nil
         onBoard { $0.query.text = text ?? $0.query.text }
         filterFocus &+= 1
     }
@@ -310,48 +356,80 @@ final class AppModel {
 
     /// Puts the keyboard where the user is, after anything that took it away (the palette, a
     /// popover, a panel closing): in the open tile's terminal or page, else in the filter field
-    /// while it is being typed in, else on the board.
+    /// while it is being typed in, else in the docked tile that had it, else on the board.
     func restoreFocus() {
         DispatchQueue.main.async { [self] in
             guard !showPalette, let window else { return }
             guard let id = workspace.expandedId else {
                 if isFiltering { return }
-                window.makeFirstResponder(window.contentView)
-                boardFocus &+= 1
+                if let id = keyboardDock, workspace.dock.contains(id), keyView(id) != nil {
+                    dockFocus &+= 1
+                    return
+                }
+                toBoard()
                 return
             }
-            let view: NSView?
-            if let terminal = workspace.terminals[id] {
-                // A terminal that isn't running takes no typing: the window keeps the keys, so ⏎
-                // and Esc reach its Resume / Restart panel.
-                view = terminal.isRunning ? terminal.view : nil
-            } else {
-                view = workspace.browsers[id]?.webView ?? workspace.dshPage?.webView
-            }
+            if keyboardDock != nil { keyboardDock = nil }
+            // A terminal that isn't running takes no typing: the window keeps the keys, so ⏎
+            // and Esc reach its Resume / Restart panel.
+            let view = keyView(id)
             window.makeFirstResponder(view?.window === window ? view : nil)
         }
     }
 
+    /// The keyboard to the board itself: the arrows move the selection, typing filters.
+    private func toBoard() {
+        if keyboardDock != nil { keyboardDock = nil }
+        window?.makeFirstResponder(window?.contentView)
+        boardFocus &+= 1
+    }
+
+    /// The view that takes typing in a tile's panel, open or docked: a running terminal, a page.
+    private func keyView(_ id: String) -> NSView? {
+        if let terminal = workspace.terminals[id] { return terminal.isRunning ? terminal.view : nil }
+        return workspace.browsers[id]?.webView ?? (workspace.dshSession == id ? workspace.dshPage?.webView : nil)
+    }
+
+    /// ⌘⏎: back to the board from an open panel or from the dock, and on the board, opens the selection.
+    func toggleOpen() {
+        if workspace.expandedId != nil {
+            collapse()
+        } else if keyboardDock != nil {
+            toBoard()
+        } else if let id = workspace.selectedId {
+            open(id)
+        }
+    }
+
     /// ⌘W closes what is in front: another window (Settings), the palette, the open panel (back to
-    /// the board), and on the board itself the selected tile. `key` is the window with the keyboard.
+    /// the board), a docked tile being typed into (back to the board too: it stays docked), and on
+    /// the board itself the selected tile. `key` is the window with the keyboard.
     func closeFront(key: NSWindow?) {
         if let key, key !== window { return key.performClose(nil) }
         if showPalette {
             showPalette = false
         } else if workspace.expandedId != nil {
             collapse()
+        } else if keyboardDock != nil {
+            toBoard()
         } else if let id = workspace.selectedId {
             close(id)
         }
     }
 
     /// Arrow keys and ⌘[ ⌘]. On the board the selection moves; with a panel open the open tile
-    /// changes in place and never leaves Tessera (a Claude or Codex conversation shows its transcript).
+    /// changes in place and never leaves Tessera (a Claude or Codex conversation shows its
+    /// transcript), passing over the docked tiles: those are open already, beside it.
     func move(_ step: GridMove) {
         let ids = workspace.visibleIds
         let layout = grid(count: ids.count, in: boardFrame?.size ?? .zero)
-        guard let i = layout.index(moving: step, from: workspace.selectedId.flatMap(ids.firstIndex(of:)), count: ids.count) else { return }
-        if workspace.expandedId != nil { open(ids[i], inApp: false) } else { workspace.select(ids[i]) }
+        var from = workspace.selectedId.flatMap(ids.firstIndex(of:))
+        for _ in ids {
+            guard let i = layout.index(moving: step, from: from, count: ids.count) else { return }
+            guard workspace.expandedId != nil else { return workspace.select(ids[i]) }
+            if !workspace.dock.contains(ids[i]) { return open(ids[i], inApp: false) }
+            from = i
+        }
     }
 
     /// The HUD counters and ⌘J: opens the next of `ids` in the order they are visited.

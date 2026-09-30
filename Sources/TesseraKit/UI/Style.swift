@@ -117,7 +117,7 @@ public enum Style {
         public static let s: CGFloat = 6
         /// Tiles, cards, chips, rows.
         public static let m: CGFloat = 10
-        /// What floats: the open panel, the palette.
+        /// What floats: the open panel, the palette; a docked tile's panel.
         public static let l: CGFloat = 16
     }
 
@@ -170,6 +170,14 @@ public enum Style {
         public static let sidebar: CGFloat = 290
         /// The Needs-you lane.
         public static let lane: CGFloat = 220
+        /// The watch dock: as wide as it starts, as narrow as it gets, and the least it leaves the board.
+        public static let dock: CGFloat = 480
+        public static let dockMin: CGFloat = 320
+        public static let boardMin: CGFloat = 300
+        /// A docked tile's header.
+        public static let dockHeader: CGFloat = 32
+        /// The grip the dock is resized by: how wide its hold is, and the mark on it.
+        public static let grip = CGSize(width: 10, height: 32)
         /// The least room the tabs keep in their strip when the filter's chips want it.
         public static let tabs: CGFloat = 220
         /// The filter field in the top bar: as wide as it gets, and as narrow.

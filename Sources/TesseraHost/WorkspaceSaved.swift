@@ -40,6 +40,9 @@ extension Workspace {
         var titles: [String: String]?
         /// Tiles closed lately, newest first.
         var closed: [Lossy<ClosedTile>]?
+        /// The tiles in the watch dock, and how wide the user made it.
+        var dock: [String]?
+        var dockWidth: Double?
     }
 
     /// Where a tile that reappears (an app session found again after launch) goes: right after the

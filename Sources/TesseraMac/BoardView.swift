@@ -79,8 +79,11 @@ struct BoardView: View {
         .onAppear { focused = true }
         // An open tile owns the keyboard: its terminal or page becomes first responder, which takes
         // focus from the board, and the board takes it back on close (see `AppModel.restoreFocus`)
-        // unless the filter field closed the tile to be typed in.
-        .onChange(of: model.workspace.expandedId) { _, open in if open == nil, !model.isFiltering { focused = true } }
+        // unless the filter field closed the tile to be typed in, or the tile went to the dock and
+        // kept the keyboard there.
+        .onChange(of: model.workspace.expandedId) { _, open in
+            if open == nil, !model.isFiltering, model.keyboardDock == nil { focused = true }
+        }
         .onChange(of: model.boardFocus) { focused = true }
         .onKeyPress(.leftArrow) { move(.left) }
         .onKeyPress(.rightArrow) { move(.right) }
@@ -205,7 +208,8 @@ struct TileView: View {
     var body: some View {
         let workspace = model.workspace
         let compact = size.width < 280
-        TileCard(info: info, isSelected: workspace.selectedId == info.id, isHovered: hovering, compact: compact) {
+        TileCard(info: info, isSelected: workspace.selectedId == info.id, isHovered: hovering, compact: compact,
+                 mark: workspace.dock.contains(info.id) ? AppModel.dockSymbol : nil) {
             content
         }
         .environment(\.tesseraMotion, onScreen)
@@ -243,7 +247,7 @@ struct TileView: View {
             }
         case .browser:
             if let browser = workspace.browsers[info.id] {
-                BrowserTileContent(browser: browser, isExpanded: workspace.expandedId == info.id)
+                BrowserTileContent(browser: browser, isElsewhere: workspace.isOnShow(info.id))
             }
         case .agentSession:
             ConversationThumbnail(snapshot: workspace.agents.session(info.id)?.snapshot, flavor: info.flavor,
@@ -315,12 +319,13 @@ struct TerminalTileContent: View {
 
 struct BrowserTileContent: View {
     let browser: BrowserSession
-    let isExpanded: Bool
+    /// The live page is in the open panel or the dock: the tile shows its last still.
+    let isElsewhere: Bool
     @Environment(\.tesseraPrivacy) private var privacy
     @Environment(\.tesseraMotion) private var onScreen
 
     var body: some View {
-        if isExpanded {
+        if isElsewhere {
             PageStill(browser: browser)
                 .overlay { if privacy { PrivateWebCover(browser: browser) } else { Style.pageDim } }
         } else if onScreen {
@@ -372,14 +377,16 @@ struct PrivateWebCover: View {
     }
 }
 
-/// Over a terminal that isn't running, on its tile and in its open panel alike: the way back
-/// (Resume after a shut-down, Restart after an exit). On the tile that is all, its pill and footer
-/// saying how it ended; the panel has room for the whole story. There ⏎ presses the button and Esc
-/// goes back to the board; typing has nowhere to go.
+/// Over a terminal that isn't running, on its tile, in its open panel and in the dock alike: the
+/// way back (Resume after a shut-down, Restart after an exit). On the tile that is all, its pill
+/// and footer saying how it ended; a panel has room for the whole story. In the open one ⏎ presses
+/// the button and Esc goes back to the board; typing has nowhere to go.
 struct EndedOverlay: View {
     @Environment(AppModel.self) private var model
     let info: TileInfo
     var inPanel = false
+    /// In the open panel ⏎ and Esc are its own; in the dock they stay whoever's they were.
+    var keys = true
 
     var body: some View {
         if info.activity.hasEnded, let action = model.actions(for: info).first {
@@ -399,10 +406,10 @@ struct EndedOverlay: View {
                             .padding(.horizontal, Style.Space.gutter)
                     }
                     Button(action.title, action: action.run)
-                        .buttonStyle(inPanel ? .capsulePrimary : .capsule)
-                        .keyboardShortcut(inPanel ? .defaultAction : nil)
+                        .buttonStyle(inPanel && keys ? .capsulePrimary : .capsule)
+                        .keyboardShortcut(inPanel && keys ? .defaultAction : nil)
                 }
-                if inPanel { EscToBoard() }
+                if inPanel, keys { EscToBoard() }
             }
         }
     }

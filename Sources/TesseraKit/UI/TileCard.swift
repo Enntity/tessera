@@ -16,14 +16,17 @@ public struct TileCard<Content: View>: View {
     let isSelected: Bool
     let isHovered: Bool
     let compact: Bool
+    /// A quiet symbol in the header for where else the tile is on show (the Mac's dock).
+    let mark: String?
     let content: Content
 
-    public init(info: TileInfo, isSelected: Bool = false, isHovered: Bool = false, compact: Bool = false,
+    public init(info: TileInfo, isSelected: Bool = false, isHovered: Bool = false, compact: Bool = false, mark: String? = nil,
                 @ViewBuilder content: () -> Content) {
         self.info = info
         self.isSelected = isSelected
         self.isHovered = isHovered
         self.compact = compact
+        self.mark = mark
         self.content = content()
     }
 
@@ -88,6 +91,7 @@ public struct TileCard<Content: View>: View {
                 Dot(Style.mint).padding(.leading, Style.Space.xxs)
             }
             Spacer(minLength: Style.Space.xs)
+            if let mark { Image(systemName: mark).font(Style.ui(.caption)).foregroundStyle(Style.muted) }
             StatePill(activity: info.activity)
         }
         .padding(.leading, Style.Space.s)

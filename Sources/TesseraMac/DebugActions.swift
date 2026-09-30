@@ -30,7 +30,8 @@ extension AppModel {
     ///   `ctrl=<key>` (a ⌘ or ⌃ shortcut, through the menu bar; `<key>` may be `return` or `tab`), `undo`
     ///   (Edit ▸ Undo, with the board's window in front), `run=<BoardCommand>`, `closefront=<window title>`,
     ///   `filter=all|<tab>`, `chip=<BoardQuery.Chip>` (a filter chip, toggled), `pane=<label>` (a pane of
-    ///   the open Settings window);
+    ///   the open Settings window), `dock=<title>` and `undock=<title>` (as the tile's menu does),
+    ///   `expand=<title>` (a docked tile's full-size button), `drag=<x>,<y>,<x>,<y>` (from a point to a point);
     /// - `dump=<file>[?<query>]`: what is selected, open, on show, waiting and closed, each tile's state,
     ///   who has the keyboard, and the palette's rows for `<query>`, as JSON;
     /// - `shot=<file>[?<window title>]`: a capture of the board's window (or the window so titled) as it
@@ -117,6 +118,18 @@ extension AppModel {
             case "filter":
                 onBoard { $0.filter = $0.groups.list.first { $0.name == arg }.map { .group($0.id) } ?? .all }
             case "chip": BoardQuery.Chip(rawValue: arg).map(toggle)
+            case "dock", "undock": if let id = debugTile(arg) { setDocked(id, parts[0] == "dock") }
+            case "expand": debugTile(arg).map(expand)
+            case "drag":
+                let xy = arg.split(separator: ",").compactMap { Double($0) }
+                guard xy.count == 4 else { break }
+                let (from, to) = (CGPoint(x: xy[0], y: xy[1]), CGPoint(x: xy[2], y: xy[3]))
+                debugMouse(.leftMouseDown, at: from)
+                for step in 1...4 {
+                    let t = Double(step) / 4
+                    debugMouse(.leftMouseDragged, at: CGPoint(x: from.x + (to.x - from.x) * t, y: from.y + (to.y - from.y) * t))
+                }
+                debugMouse(.leftMouseUp, at: to)
             case "dump": debugDump(to: arg)
             case "shot":
                 let target = arg.split(separator: "?", maxSplits: 1).map(String.init)
@@ -127,11 +140,15 @@ extension AppModel {
         }
     }
 
-    /// The first tile on show of that kind (`terminal`, `web`) or with that text in its title.
+    /// The first tile on show of that kind (`terminal`, `web`, `conversation`: a Claude or Codex one,
+    /// not yet docked) or with that text in its title.
     private func debugTile(_ name: String) -> String? {
-        let kinds: [String: TileKind] = ["terminal": .terminal, "web": .browser]
+        let kinds: [String: TileKind] = ["terminal": .terminal, "web": .browser, "conversation": .agentSession]
         return workspace.visibleIds.first { id in
-            workspace.info(id).map { kinds[name] == $0.kind || $0.title.localizedCaseInsensitiveContains(name) } ?? false
+            guard let tile = workspace.info(id) else { return false }
+            // (A docked dsh session would start its server.)
+            if tile.kind == .agentSession, kinds[name] == tile.kind { return tile.flavor != .dsh && !workspace.dock.contains(id) }
+            return kinds[name] == tile.kind || tile.title.localizedCaseInsensitiveContains(name)
         }
     }
 
@@ -158,15 +175,21 @@ extension AppModel {
     /// `point` is in window coordinates, top-left origin (as `tileFrame`). The test copy is never the
     /// active app, where a first click would only bring its window forward: here every click lands.
     private func debugClick(at point: CGPoint, count: Int) {
+        for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] { debugMouse(type, at: point, count: count) }
+    }
+
+    private func debugMouse(_ type: NSEvent.EventType, at point: CGPoint, count: Int = 1) {
         guard let window, let content = window.contentView else { return }
         let accept: @convention(block) (AnyObject, NSEvent?) -> Bool = { _, _ in true }
-        class_replaceMethod(type(of: content), #selector(NSView.acceptsFirstMouse(for:)), imp_implementationWithBlock(accept), "c@:@")
-        for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
-            if let event = NSEvent.mouseEvent(with: type, location: CGPoint(x: point.x, y: content.bounds.height - point.y), modifierFlags: [],
-                                              timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
-                                              context: nil, eventNumber: 0, clickCount: count, pressure: 1) {
-                window.sendEvent(event)
-            }
+        class_replaceMethod(Swift.type(of: content), #selector(NSView.acceptsFirstMouse(for:)), imp_implementationWithBlock(accept), "c@:@")
+        let at = CGPoint(x: point.x, y: content.bounds.height - point.y)
+        // A click in a terminal or page gives it the keyboard; a window in the background doesn't do that itself.
+        if type == .leftMouseDown, let hit = content.hitTest((content.superview ?? content).convert(at, from: nil)), hit !== content, hit.acceptsFirstResponder {
+            window.makeFirstResponder(hit)
+        }
+        if let event = NSEvent.mouseEvent(with: type, location: at, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                                          windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: count, pressure: 1) {
+            window.sendEvent(event)
         }
     }
 
@@ -187,6 +210,7 @@ extension AppModel {
             "query": workspace.query.text, "chips": Dictionary(uniqueKeysWithValues: BoardQuery.Chip.allCases.map {
                 ($0.rawValue + (workspace.query.chips.contains($0) ? " on" : ""), workspace.count($0))
             }),
+            "dock": workspace.docked.map(title), "dockWidth": workspace.dockWidth ?? 0, "keyboardDock": title(keyboardDock),
             "density": density.minTileWidth, "columns": grid(count: workspace.visibleIds.count, in: boardFrame?.size ?? .zero).columns,
             "lane": showLane, "places": workspace.allTiles.map { "\($0.title): \($0.subtitle)" },
             "palette": showPalette ? "\(paletteMode)" : "",
@@ -201,6 +225,9 @@ extension AppModel {
             "closed": workspace.recentlyClosed.tiles.map(\.title), "hidden": workspace.hiddenTiles.map(\.title),
             "toast": closedToast?.text ?? "", "undo": undo?.canUndo == true ? undo?.undoMenuItemTitle ?? "" : "", "undoMenu": undoTitle,
             "rows": paletteItems(parts.count > 1 ? parts[1] : "").map { "\($0.title) — \($0.subtitle)" },
+            "menus": (NSApp.mainMenu?.items ?? []).flatMap { menu in
+                (menu.submenu?.items ?? []).filter { !$0.keyEquivalent.isEmpty }.map { "\(menu.title) ▸ \($0.title) [\($0.keyEquivalent)]\($0.isEnabled ? "" : " off")" }
+            },
             "wouldOpenInApp": WindowPlacer.dryRun ?? []
         ]
         try? JSONSerialization.data(withJSONObject: state, options: [.prettyPrinted, .sortedKeys]).write(to: URL(fileURLWithPath: path))

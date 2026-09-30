@@ -33,6 +33,15 @@ extension AppModel {
         }
     }
 
+    /// Dock, beside the board, or Undock.
+    func dockAction(for info: TileInfo) -> TileAction {
+        let docked = workspace.dock.contains(info.id)
+        return TileAction(title: docked ? "Undock" : "Dock", symbol: docked ? "xmark" : Self.dockSymbol) { self.setDocked(info.id, !docked) }
+    }
+
+    /// The mark of the dock: on its button, and on a docked tile.
+    static let dockSymbol = "rectangle.righthalf.inset.filled"
+
     /// Close — for an app conversation Hide, which looks and reads differently: nothing is stopped.
     func closeAction(for info: TileInfo) -> TileAction {
         TileAction(title: info.kind.closeLabel, symbol: info.kind.closeSymbol) { self.close(info.id) }
@@ -40,7 +49,7 @@ extension AppModel {
 }
 
 /// A tile's menu, in one order for every kind, leaving out what doesn't apply: shown on right-click,
-/// and as the open panel's ⋯ menu (where there is nothing left to open).
+/// and as the ⋯ menu of the open panel and of a docked tile (where there is nothing left to open).
 struct TileMenu: View {
     @Environment(AppModel.self) private var model
     let info: TileInfo
@@ -58,6 +67,8 @@ struct TileMenu: View {
         if let session = workspace.agents.session(info.id), let resume = session.resumeCommand {
             Button("Continue in Terminal") { model.create { $0.launch(command: resume, cwd: session.cwd) } }
         }
+        let dock = model.dockAction(for: info)
+        Button(dock.title, action: dock.run)
         Button("Rename…", action: rename)
         ForEach(model.actions(for: info)) { action in Button(action.title, action: action.run) }
         if info.attention { Button("Mark as Seen") { workspace.acknowledge(info.id) } }
