@@ -29,7 +29,7 @@ public struct ConversationDetail: View {
                         row(item).id(item.id)
                     }
                     if snapshot?.activity == .working {
-                        TypingIndicator(color: Style.accent(flavor)).id("typing")
+                        TypingDots(color: Style.accent(flavor), size: 6, spacing: 4).id("typing")
                     }
                 }
                 .padding(18)
@@ -66,20 +66,6 @@ public struct ConversationDetail: View {
         case .thinking, .system:
             EmptyView()
         }
-    }
-}
-
-struct TypingIndicator: View {
-    let color: SwiftUI.Color
-    @State private var on = false
-    var body: some View {
-        HStack(spacing: 4) {
-            ForEach(0..<3) { i in
-                Circle().fill(color).frame(width: 6, height: 6).opacity(on ? 1 : 0.2)
-                    .animation(.easeInOut(duration: 0.5).repeatForever().delay(Double(i) * 0.15), value: on)
-            }
-        }
-        .onAppear { on = true }
     }
 }
 

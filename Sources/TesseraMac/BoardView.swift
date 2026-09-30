@@ -143,6 +143,8 @@ struct TileView: View {
     @State private var hovering = false
     @State private var renaming = false
     @State private var draftTitle = ""
+    /// Scrolled out of view, a tile's continuous effects stop.
+    @State private var onScreen = true
 
     var body: some View {
         let workspace = model.workspace
@@ -150,6 +152,10 @@ struct TileView: View {
         TileCard(info: info, isSelected: workspace.selectedId == info.id, compact: compact) {
             content(compact: compact)
         }
+        .environment(\.tesseraMotion, onScreen)
+        .onGeometryChange(for: Bool.self) { g in
+            g.bounds(of: .scrollView).map { CGRect(origin: .zero, size: g.size).intersects($0) } ?? true
+        } action: { onScreen = $0 }
         .overlay(alignment: .topTrailing) {
             if hovering {
                 HStack(spacing: 2) {

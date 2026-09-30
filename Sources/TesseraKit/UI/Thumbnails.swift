@@ -112,22 +112,6 @@ public struct ConversationThumbnail: View {
     }
 }
 
-struct TypingDots: View {
-    let color: SwiftUI.Color
-    @State private var on = false
-
-    var body: some View {
-        HStack(spacing: 3) {
-            ForEach(0..<3) { i in
-                Circle().fill(color).frame(width: 4, height: 4)
-                    .opacity(on ? 1 : 0.25)
-                    .animation(.easeInOut(duration: 0.5).repeatForever().delay(Double(i) * 0.15), value: on)
-            }
-        }
-        .onAppear { on = true }
-    }
-}
-
 /// A ring showing how much is left, colored by urgency.
 public struct UsageRing: View {
     let remaining: Double?

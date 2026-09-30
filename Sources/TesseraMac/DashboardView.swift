@@ -162,7 +162,6 @@ struct CountChip: View {
     let color: Color
     let pulse: Bool
     let action: () -> Void
-    @State private var glow = false
 
     var body: some View {
         Button(action: action) {
@@ -175,17 +174,16 @@ struct CountChip: View {
             .foregroundStyle(value > 0 ? color : Style.faint)
             .padding(.horizontal, 9)
             .padding(.vertical, 4)
-            .background((value > 0 ? color : Style.faint).opacity(glow ? 0.28 : 0.1), in: Capsule())
+            .background {
+                if pulse {
+                    Ambient(.pulse(color, cornerRadius: nil, low: 0.1, high: 0.28, period: 0.9))
+                } else {
+                    Capsule().fill((value > 0 ? color : Style.faint).opacity(0.1))
+                }
+            }
         }
         .buttonStyle(.plain)
         .animation(.spring(duration: 0.3), value: value)
-        .onChange(of: pulse, initial: true) { _, on in
-            if on {
-                withAnimation(.easeInOut(duration: 0.9).repeatForever()) { glow = true }
-            } else {
-                withAnimation(.default) { glow = false }
-            }
-        }
     }
 }
 

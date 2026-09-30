@@ -117,6 +117,11 @@ public struct TileInfo: Codable, Identifiable, Hashable, Sendable {
     /// 0...1 when the program reports progress (OSC 9;4).
     public var progress: Double?
 
+    /// Attention in a state that still wants the user; a tile that went back to work has moved on.
+    public var isUnseen: Bool { attention && activity.isAttention }
+    /// Waiting on the user: an open question or an unseen result.
+    public var needsUser: Bool { isUnseen || activity == .needsInput }
+
     public init(id: String, kind: TileKind, flavor: AgentFlavor, title: String, subtitle: String = "",
                 activity: TileActivity = .starting, attention: Bool = false, lastActivityAt: Date = Date(),
                 detail: String? = nil, cols: Int? = nil, rows: Int? = nil, url: String? = nil, progress: Double? = nil) {

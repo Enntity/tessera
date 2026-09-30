@@ -50,6 +50,43 @@ final class TerminalActivityTrackerTests: XCTestCase {
         XCTAssertFalse(t.attention)
     }
 
+    func testUnseenResultOutlastsABlipOfOutput() {
+        var t = TerminalActivityTracker()
+        for i in 0..<30 { t.noteOutput(bytes: 400, at: t0.addingTimeInterval(Double(i) * 0.1)) }
+        t.tick(now: t0.addingTimeInterval(3.0), screenTail: [])
+        t.tick(now: t0.addingTimeInterval(5.0), screenTail: ["$ "])
+        XCTAssertEqual(t.activity, .done)
+        t.noteOutput(bytes: 80, at: t0.addingTimeInterval(8))
+        t.tick(now: t0.addingTimeInterval(8.1), screenTail: ["$ "])
+        XCTAssertEqual(t.activity, .working)
+        XCTAssertTrue(t.attention)
+        t.tick(now: t0.addingTimeInterval(10), screenTail: ["$ "])
+        XCTAssertEqual(t.activity, .done)
+        XCTAssertTrue(t.attention)
+    }
+
+    func testClearedPromptLeavesNothingWaiting() {
+        var t = TerminalActivityTracker()
+        t.noteOutput(bytes: 100, at: t0)
+        t.tick(now: t0.addingTimeInterval(2), screenTail: ["Do you want to proceed? (y/n)"])
+        XCTAssertTrue(t.attention)
+        t.tick(now: t0.addingTimeInterval(3), screenTail: ["$ "])
+        XCTAssertEqual(t.activity, .idle)
+        XCTAssertFalse(t.attention)
+    }
+
+    func testOnlyAttentionStatesNeedTheUser() {
+        var tile = TileInfo(id: "t", kind: .terminal, flavor: .shell, title: "t", activity: .working, attention: true)
+        XCTAssertFalse(tile.isUnseen)
+        XCTAssertFalse(tile.needsUser)
+        tile.activity = .done
+        XCTAssertTrue(tile.needsUser)
+        tile.attention = false
+        XCTAssertFalse(tile.needsUser)
+        tile.activity = .needsInput
+        XCTAssertTrue(tile.needsUser)
+    }
+
     func testShortBurstIsQuietlyIdle() {
         var t = TerminalActivityTracker()
         t.noteOutput(bytes: 2000, at: t0)

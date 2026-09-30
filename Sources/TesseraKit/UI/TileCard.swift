@@ -17,7 +17,7 @@ public struct TileCard<Content: View>: View {
     }
 
     public var body: some View {
-        let stateColor = Style.state(info.activity)
+        let halo = info.isUnseen ? info.activity : nil
         VStack(spacing: 0) {
             header
             content
@@ -25,19 +25,23 @@ public struct TileCard<Content: View>: View {
                 .clipped()
             if !compact { footer }
         }
-        .background(Style.terminalBackground)
         .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
         .overlay {
             RoundedRectangle(cornerRadius: 10, style: .continuous)
                 .strokeBorder(isSelected ? Style.ink.opacity(0.55) : Style.hairline, lineWidth: isSelected ? 1.5 : 1)
         }
-        .overlay { AttentionHalo(activity: info.activity, active: info.attention, color: stateColor) }
+        .overlay { if let halo { AttentionHalo(activity: halo) } }
         .overlay(alignment: .top) {
             if info.activity == .working {
-                WorkingSweep(color: Style.accent(info.flavor)).padding(.top, compact ? 21 : 25)
+                Ambient(.sweep(Style.accent(info.flavor))).frame(height: 1.5).padding(.top, compact ? 21 : 25)
             }
         }
-        .shadow(color: info.attention ? stateColor.opacity(0.35) : .black.opacity(0.4), radius: info.attention ? 14 : 6, y: 3)
+        // The glow sits on a still shape behind the card, so the effects above never re-render it.
+        .background {
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(Style.terminalBackground)
+                .shadow(color: halo.map { Style.state($0).opacity(0.35) } ?? .black.opacity(0.4), radius: halo != nil ? 14 : 6, y: 3)
+        }
         .contentShape(Rectangle())
     }
 
@@ -108,58 +112,17 @@ public struct StatePill: View {
     }
 }
 
-/// A slow breathing ring for unseen results; a rotating comet for "needs you".
+/// "Needs you" breathes amber; an unseen result (done, failed) holds a calm ring in its color.
 struct AttentionHalo: View {
     let activity: TileActivity
-    let active: Bool
-    let color: Color
-    @State private var phase = false
 
     var body: some View {
-        ZStack {
-            if active {
-                if activity == .needsInput {
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .strokeBorder(
-                            AngularGradient(colors: [color.opacity(0.05), color, color.opacity(0.05), color.opacity(0.05)],
-                                            center: .center, angle: .degrees(phase ? 360 : 0)),
-                            lineWidth: 2.5)
-                } else {
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .strokeBorder(color.opacity(phase ? 0.95 : 0.35), lineWidth: 2)
-                }
-            }
-        }
-        .allowsHitTesting(false)
-        .onAppear { animate() }
-        .onChange(of: active) { _, _ in animate() }
-    }
-
-    private func animate() {
-        phase = false
-        guard active else { return }
-        withAnimation(.linear(duration: activity == .needsInput ? 2.2 : 1.6).repeatForever(autoreverses: activity != .needsInput)) {
-            phase = true
-        }
-    }
-}
-
-/// A thin scanning line under the header while a tile is producing output.
-struct WorkingSweep: View {
-    let color: Color
-    @State private var x: CGFloat = -0.3
-
-    var body: some View {
-        GeometryReader { geo in
-            LinearGradient(colors: [.clear, color.opacity(0.9), .clear], startPoint: .leading, endPoint: .trailing)
-                .frame(width: geo.size.width * 0.3, height: 1.5)
-                .offset(x: geo.size.width * x)
-        }
-        .frame(height: 1.5)
-        .clipped()
-        .allowsHitTesting(false)
-        .onAppear {
-            withAnimation(.easeInOut(duration: 1.4).repeatForever(autoreverses: false)) { x = 1.0 }
+        if activity == .needsInput {
+            Ambient(.pulse(Style.amber, cornerRadius: 10, lineWidth: 2.5, low: 0.35, high: 1, period: 1.4))
+        } else {
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .strokeBorder(Style.state(activity).opacity(0.8), lineWidth: 2)
+                .allowsHitTesting(false)
         }
     }
 }
