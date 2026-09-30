@@ -45,6 +45,9 @@ final class StateFileTests: XCTestCase {
         let saved = try XCTUnwrap(StateFile.load(Workspace.Saved.self, from: board))
         XCTAssertEqual(saved.tiles.compactMap(\.value).map(\.id), ["t"])
         XCTAssertEqual(saved.resumeOnLaunch, false)
+        // A board saved before there was a dock loads with nothing docked.
+        XCTAssertNil(saved.dock)
+        XCTAssertNil(saved.dockWidth)
     }
 
     func testSaveRoundTrips() throws {
@@ -56,8 +59,12 @@ final class StateFileTests: XCTestCase {
         let tile = Workspace.Saved.Tile(id: "t", kind: .terminal, command: "claude", cwd: "/w", sessionId: "S")
         let page = Workspace.Saved.Tile(id: "w", kind: .browser, title: "Docs", url: "https://example.com")
         StateFile.save(Workspace.Saved(tiles: [Lossy(tile), Lossy(page)], order: ["t", "claude:x"], hidden: ["claude:y": Date(timeIntervalSince1970: 5)],
-                                       agentLookbackHours: 12, titles: ["claude:x": "Release notes"]), to: board)
+                                       agentLookbackHours: 12, titles: ["claude:x": "Release notes"], dock: ["t", "claude:x"], dockWidth: 520),
+                       to: board)
         let saved = try XCTUnwrap(StateFile.load(Workspace.Saved.self, from: board))
+        // What is docked, an app conversation included, and how wide.
+        XCTAssertEqual(saved.dock, ["t", "claude:x"])
+        XCTAssertEqual(saved.dockWidth, 520)
         XCTAssertEqual(saved.tiles.compactMap(\.value).map(\.sessionId), ["S", nil])
         // A name the user gave a tile is kept, whatever its kind.
         XCTAssertEqual(saved.tiles.compactMap(\.value).map(\.title), [nil, "Docs"])
