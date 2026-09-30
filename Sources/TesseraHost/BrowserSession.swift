@@ -53,6 +53,13 @@ public final class BrowserSession: NSObject {
                     self.info.progress = view.isLoading ? view.estimatedProgress : nil
                     self.info.activity = view.isLoading ? .working : (self.info.attention ? self.info.activity : .idle)
                 }
+            },
+            // The last progress report arrives while the page still counts as loading: the bar
+            // goes when the load ends, however it ends.
+            webView.observe(\.isLoading, options: [.new]) { [weak self] view, _ in
+                MainActor.assumeIsolated {
+                    if !view.isLoading { self?.info.progress = nil }
+                }
             }
         ]
         webView.load(URLRequest(url: url))

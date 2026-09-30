@@ -328,3 +328,21 @@ final class ClaudeLocalUsageTests: XCTestCase {
         XCTAssertEqual(chunked.week, totals.week)
     }
 }
+
+/// A web tile's load bar belongs to the load: once the page is in, it is gone.
+@MainActor
+final class BrowserSessionTests: XCTestCase {
+    func testProgressClearsWhenTheLoadEnds() throws {
+        let page = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("tessera-page-\(UUID().uuidString.prefix(6)).html")
+        try "<title>Loaded</title><p>hello</p>".write(to: page, atomically: true, encoding: .utf8)
+        addTeardownBlock { try? FileManager.default.removeItem(at: page) }
+        let session = BrowserSession(url: page)
+        let deadline = Date().addingTimeInterval(10)
+        while session.info.title != "Loaded" || session.webView.isLoading, Date() < deadline {
+            RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        }
+        XCTAssertEqual(session.info.title, "Loaded")
+        XCTAssertNil(session.info.progress)
+        XCTAssertEqual(session.info.activity, .idle)
+    }
+}
