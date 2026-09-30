@@ -2,6 +2,8 @@
 # Development: build a debug copy, launch it with scripted actions, and write window captures to $1.
 # Runs from its own bundle and data folder, so a Tessera you're actually using is left alone.
 # Usage: scripts/debug-run.sh /tmp/snap.png "launch=htop;wait=2;open=terminal"
+# With TESSERA_DEBUG_HOME=<dir> the copy takes <dir> for the home folder: a board with none of your
+# Claude, Codex or dsh sessions on it.
 set -euo pipefail
 root=$(cd "$(dirname "$0")/.." && pwd)
 app="$root/.build/app-debug/Tessera.app"
@@ -10,5 +12,6 @@ CONFIGURATION=debug TESSERA_APP_PATH="$app" "$root/scripts/build-app.sh" >/dev/n
 mkdir -p "$root/.build/debug-data"
 # The copy shares the real app's bundle id; keep it off that app's saved window state (a copy killed
 # mid-modal otherwise leaves state that opens no window next time).
-TESSERA_DATA_DIR="$root/.build/debug-data" TESSERA_SNAPSHOT="$1" TESSERA_DEBUG_ACTIONS="${2:-}" \
+env ${TESSERA_DEBUG_HOME:+"CFFIXED_USER_HOME=$TESSERA_DEBUG_HOME"} \
+  TESSERA_DATA_DIR="$root/.build/debug-data" TESSERA_SNAPSHOT="$1" TESSERA_DEBUG_ACTIONS="${2:-}" \
   "$app/Contents/MacOS/Tessera" -ApplePersistenceIgnoreState YES >/dev/null 2>&1 &
