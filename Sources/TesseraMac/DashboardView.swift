@@ -397,7 +397,9 @@ struct TabChip: View {
     var body: some View {
         Button(action: action) {
             HStack(spacing: Style.Space.s) {
-                if let waiting { Circle().fill(Style.state(waiting)).frame(width: 5, height: 5) }
+                if let waiting {
+                    Circle().fill(Style.state(waiting)).frame(width: 5, height: 5).elevation(.glow(Style.state(waiting)))
+                }
                 HStack(alignment: .firstTextBaseline, spacing: Style.Space.s) {
                     Text(title).font(Style.ui(.label, selected ? .semibold : .medium)).lineLimit(1)
                     if count > 0 {
