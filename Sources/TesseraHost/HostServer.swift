@@ -367,7 +367,7 @@ final class RemoteClient {
     private func pushConversations() {
         guard let workspace else { return }
         for id in watched {
-            guard let session = workspace.agents.sessions[id] else { continue }
+            guard let session = workspace.agents.session(id) else { continue }
             if sentConversations[id] != session.snapshot {
                 sentConversations[id] = session.snapshot
                 send(.conversation(ConversationFrame(id: id, snapshot: session.snapshot)))

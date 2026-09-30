@@ -172,7 +172,7 @@ struct AgentPanel: View {
 
     var body: some View {
         let workspace = model.workspace
-        let session = workspace.agents.sessions[id]
+        let session = workspace.agents.session(id)
         let isDsh = session?.flavor == .dsh
         let livePage = isDsh && workspace.dsh.state == .running ? workspace.dshPage : nil
         VStack(spacing: 0) {

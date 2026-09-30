@@ -141,6 +141,28 @@ public struct TileInfo: Codable, Identifiable, Hashable, Sendable {
     }
 }
 
+/// Which tiles are working, waiting on the user, or holding an unseen result. The Mac keeps this
+/// current as tiles change, so the HUD and tabs don't depend on every tile's data.
+public struct BoardState: Equatable, Sendable {
+    public var working: Set<String> = []
+    public var needsInput: Set<String> = []
+    /// Unseen results and questions (`TileInfo.isUnseen`).
+    public var unseen: Set<String> = []
+
+    public init(_ tiles: [TileInfo] = []) {
+        for tile in tiles {
+            if tile.activity == .working { working.insert(tile.id) }
+            if tile.activity == .needsInput { needsInput.insert(tile.id) }
+            if tile.isUnseen { unseen.insert(tile.id) }
+        }
+    }
+
+    /// Everything waiting on the user (`TileInfo.needsUser`).
+    public var needsUser: Set<String> { needsInput.union(unseen) }
+    /// Unseen results that aren't questions.
+    public var done: Int { unseen.subtracting(needsInput).count }
+}
+
 public struct ConversationItem: Codable, Hashable, Sendable, Identifiable {
     public enum Role: String, Codable, Sendable { case user, assistant, tool, toolResult, thinking, system }
     public var id: String
@@ -207,7 +229,8 @@ public extension String {
 
     /// `/Users/me/src/app` → `~/src/app`.
     var abbreviatingHome: String {
-        let home = NSHomeDirectory()
-        return hasPrefix(home) ? "~" + dropFirst(home.count) : self
+        hasPrefix(homeDirectory) ? "~" + dropFirst(homeDirectory.count) : self
     }
 }
+
+private let homeDirectory = NSHomeDirectory()

@@ -159,7 +159,7 @@ struct CommandPalette: View {
                     model.showPalette = true
                 }
             })
-            for tile in workspace.allTiles where tile.attention || tile.activity == .needsInput {
+            for tile in workspace.allTiles where tile.needsUser {
                 out.append(Item(id: "tile-\(tile.id)", symbol: "exclamationmark.circle", color: Style.state(tile.activity),
                                 title: tile.title, subtitle: (tile.detail ?? tile.activity.label)) {
                     model.open(tile.id)

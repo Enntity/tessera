@@ -55,8 +55,6 @@ final class AppModel {
     /// The "watch a machine" sheet in Settings → Machines.
     var showAddMachine = false
     var paletteMode: PaletteMode = .all
-    /// Where each visible tile is, in window coordinates; used to open panels and native windows in place.
-    @ObservationIgnored var tileFrames: [String: CGRect] = [:]
     var expandedFrame: CGRect?
     @ObservationIgnored weak var window: NSWindow?
     @ObservationIgnored private var started = false
@@ -77,10 +75,8 @@ final class AppModel {
         if Bundle.main.bundleIdentifier != nil {
             notifier = AttentionNotifier { [weak self] id in self?.open(id) }
         }
-        // The Dock badge and alerts follow the board as it changes.
-        observe({ [weak self] in self?.workspace.allTiles ?? [] }) { [weak self] tiles in
-            self?.attentionChanged(tiles)
-        }
+        // The Dock badge and alerts follow the board's attention state.
+        observe({ [weak self] in self?.workspace.state }) { [weak self] _ in self?.attentionChanged() }
         #if DEBUG
         if let actions = ProcessInfo.processInfo.environment["TESSERA_DEBUG_ACTIONS"] {
             runDebugActions(actions.split(separator: ";").map(String.init))
@@ -144,7 +140,7 @@ final class AppModel {
             case "wait": next = Double(parts.count > 1 ? parts[1] : "1") ?? 1
             case "open":
                 let kind: TileKind = parts.count > 1 ? (parts[1] == "app" ? .agentSession : parts[1] == "web" ? .browser : .terminal) : .terminal
-                if let tile = workspace.visibleTiles.first(where: { $0.kind == kind }) { open(tile.id) }
+                if let id = workspace.visibleIds.first(where: { workspace.info($0)?.kind == kind }) { open(id) }
             default: break
             }
             runDebugActions(Array(actions.dropFirst()), after: next)
@@ -169,11 +165,11 @@ final class AppModel {
         on ? server.start() : server.stop()
     }
 
-    private func attentionChanged(_ tiles: [TileInfo]) {
-        let waiting = tiles.filter { $0.activity == .needsInput }.count
+    private func attentionChanged() {
+        let waiting = workspace.state.needsInput.count
         let badge = waiting > 0 ? "\(waiting)" : nil
         if NSApp.dockTile.badgeLabel != badge { NSApp.dockTile.badgeLabel = badge }
-        notifier?.update(with: tiles)
+        notifier?.update(with: workspace.allTiles)
     }
 
     /// Converts a window-space rect (top-left origin) to AppKit screen coordinates.
@@ -192,7 +188,7 @@ final class AppModel {
         }
         if workspace.expandedId != nil { collapse() }
         workspace.selectedId = id
-        workspace.openNative(id, at: openedRect(from: tileFrames[id]).flatMap(screenRect(fromWindow:)))
+        workspace.openNative(id, at: openedRect(from: tileFrame(id)).flatMap(screenRect(fromWindow:)))
     }
 
     /// Tessera's own transcript of a desktop-app conversation.
@@ -200,8 +196,19 @@ final class AppModel {
         withAnimation(.spring(duration: 0.38, bounce: 0.12)) { workspace.expand(id) }
     }
 
-    /// Set by the board: its rectangle in the window.
+    /// Set by the board: its rectangle in the window, and how far it is scrolled.
     @ObservationIgnored var boardFrame: CGRect?
+    @ObservationIgnored var boardScroll: CGFloat = 0
+
+    /// Where tile `id` sits on the board right now (window coordinates), for opening in place.
+    func tileFrame(_ id: String) -> CGRect? {
+        let ids = workspace.visibleIds
+        guard let board = boardFrame, let index = ids.firstIndex(of: id) else { return nil }
+        let layout = BoardView.grid(count: ids.count, in: board.size)
+        let origin = layout.origin(of: index, in: board.size)
+        return CGRect(x: board.minX + origin.x, y: board.minY + origin.y - boardScroll,
+                      width: layout.tileSize.width, height: layout.tileSize.height)
+    }
 
     /// Where a tile opened from `source` settles (window coordinates, top-left origin).
     func openedRect(from source: CGRect?) -> CGRect? {
@@ -218,11 +225,11 @@ final class AppModel {
     }
 
     func cycle(_ delta: Int) {
-        let tiles = workspace.visibleTiles
-        guard !tiles.isEmpty else { return }
+        let ids = workspace.visibleIds
+        guard !ids.isEmpty else { return }
         let current = workspace.expandedId ?? workspace.selectedId
-        let i = tiles.firstIndex { $0.id == current } ?? 0
-        let next = tiles[(i + delta + tiles.count) % tiles.count].id
+        let i = ids.firstIndex { $0 == current } ?? 0
+        let next = ids[(i + delta + ids.count) % ids.count]
         if workspace.expandedId != nil { open(next) } else { workspace.selectedId = next }
     }
 

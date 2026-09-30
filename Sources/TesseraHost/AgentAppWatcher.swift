@@ -20,11 +20,21 @@ public struct AgentAppSession: Identifiable, Equatable, Sendable {
     public var lastActivityAt: Date
 }
 
+/// One session's latest state, observed on its own so a busy session re-renders only its tile.
+@Observable
+@MainActor
+public final class AgentSessionTile {
+    public fileprivate(set) var session: AgentAppSession
+
+    init(_ session: AgentAppSession) { self.session = session }
+}
+
 /// Polls the desktop apps' on-disk session stores and tails their transcripts incrementally.
 @Observable
 @MainActor
 public final class AgentAppWatcher {
-    public private(set) var sessions: [String: AgentAppSession] = [:]
+    /// Changes only when sessions come or go; each tile carries its session's updates.
+    public private(set) var sessions: [String: AgentSessionTile] = [:]
     public private(set) var codexRateLimits: CodexRateLimits?
     /// Sessions idle longer than this drop off the board.
     public var lookback: TimeInterval = 36 * 3600
@@ -36,6 +46,8 @@ public final class AgentAppWatcher {
     @ObservationIgnored private var scanning = false
 
     public init() {}
+
+    public func session(_ id: String) -> AgentAppSession? { sessions[id]?.session }
 
     public func start() {
         scan()
@@ -58,23 +70,37 @@ public final class AgentAppWatcher {
         DispatchQueue.global(qos: .utility).async {
             let result = scanner.scan(lookback: lookback, now: Date())
             DispatchQueue.main.async { [weak self] in
-                MainActor.assumeIsolated {
-                    guard let self else { return }
-                    self.scanning = false
-                    // Reassigning unchanged data would re-render the whole board every scan.
-                    var changed = false
-                    if self.sessions != result.sessions {
-                        self.sessions = result.sessions
-                        changed = true
-                    }
-                    if let limits = result.rateLimits, limits != self.codexRateLimits {
-                        self.codexRateLimits = limits
-                        changed = true
-                    }
-                    if changed { self.onChange?() }
-                }
+                MainActor.assumeIsolated { self?.apply(result) }
             }
         }
+    }
+
+    /// Writes only what changed: rewriting unchanged data would re-render the whole board every scan.
+    private func apply(_ result: TranscriptScanner.Result) {
+        scanning = false
+        var changed = false, cameOrWent = false
+        var tiles = sessions
+        for (id, session) in result.sessions {
+            if let tile = tiles[id] {
+                if tile.session != session { tile.session = session; changed = true }
+            } else {
+                tiles[id] = AgentSessionTile(session)
+                cameOrWent = true
+            }
+        }
+        for id in tiles.keys where result.sessions[id] == nil {
+            tiles[id] = nil
+            cameOrWent = true
+        }
+        if cameOrWent {
+            sessions = tiles
+            changed = true
+        }
+        if let limits = result.rateLimits, limits != codexRateLimits {
+            codexRateLimits = limits
+            changed = true
+        }
+        if changed { onChange?() }
     }
 }
 

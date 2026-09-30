@@ -12,31 +12,32 @@ struct BoardView: View {
     var body: some View {
         let workspace = model.workspace
         GeometryReader { geo in
-            let tiles = workspace.visibleTiles
-            let layout = GridLayout.fit(count: tiles.count, in: geo.size, spacing: 10, aspect: 16.0 / 10.5, minTileWidth: 230)
+            let ids = workspace.visibleIds
+            let layout = Self.grid(count: ids.count, in: geo.size)
             let board = geo.frame(in: .named("window"))
             ZStack(alignment: .topLeading) {
-                if tiles.isEmpty {
+                if ids.isEmpty {
                     EmptyBoard(filter: workspace.filter).frame(width: geo.size.width, height: geo.size.height)
                 }
                 ScrollView(layout.scrolls ? .vertical : [], showsIndicators: layout.scrolls) {
                     ZStack(alignment: .topLeading) {
-                        ForEach(Array(tiles.enumerated()), id: \.element.id) { index, tile in
+                        ForEach(Array(ids.enumerated()), id: \.element) { index, id in
                             let origin = layout.origin(of: index, in: geo.size)
-                            TileView(info: tile, size: layout.tileSize)
+                            BoardTile(id: id, size: layout.tileSize)
                                 .frame(width: layout.tileSize.width, height: layout.tileSize.height)
                                 .offset(x: origin.x, y: origin.y)
                                 .transition(.scale(scale: 0.85).combined(with: .opacity))
                         }
                     }
                     .frame(width: geo.size.width, height: max(geo.size.height, layout.contentHeight), alignment: .topLeading)
-                    .animation(.spring(duration: 0.45, bounce: 0.15), value: tiles.map(\.id))
+                    .onGeometryChange(for: CGFloat.self) { -$0.frame(in: .scrollView).minY } action: { model.boardScroll = $0 }
+                    .animation(.spring(duration: 0.45, bounce: 0.15), value: ids)
                     .animation(.spring(duration: 0.45, bounce: 0.15), value: layout)
                 }
                 .scrollDisabled(!layout.scrolls)
 
-                if let id = workspace.expandedId, workspace.info(id) != nil {
-                    ExpandedPanel(id: id, board: board, source: model.tileFrames[id])
+                if let id = workspace.expandedId, workspace.exists(id) {
+                    ExpandedPanel(id: id, board: board, source: model.tileFrame(id))
                         .transition(.opacity)
                         .zIndex(10)
                 }
@@ -78,9 +79,13 @@ struct BoardView: View {
     private func moveRow(_ delta: Int) -> KeyPress.Result {
         guard model.workspace.expandedId == nil, let window = model.window else { return .ignored }
         let size = window.contentView?.bounds.size ?? .zero
-        let cols = GridLayout.fit(count: model.workspace.visibleTiles.count, in: size, spacing: 10, aspect: 16.0 / 10.5, minTileWidth: 230).columns
+        let cols = Self.grid(count: model.workspace.visibleIds.count, in: size).columns
         model.cycle(delta * max(cols, 1))
         return .handled
+    }
+
+    static func grid(count: Int, in size: CGSize) -> TesseraKit.GridLayout {
+        GridLayout.fit(count: count, in: size, spacing: 10, aspect: 16.0 / 10.5, minTileWidth: 230)
     }
 }
 
@@ -136,6 +141,17 @@ struct EmptyBoard: View {
 
 // MARK: - Tile
 
+/// Reads only its own tile, so one tile's change re-renders just that tile.
+struct BoardTile: View {
+    @Environment(AppModel.self) private var model
+    let id: String
+    let size: CGSize
+
+    var body: some View {
+        if let info = model.workspace.info(id) { TileView(info: info, size: size) }
+    }
+}
+
 struct TileView: View {
     @Environment(AppModel.self) private var model
     let info: TileInfo
@@ -176,11 +192,6 @@ struct TileView: View {
         .scaleEffect(hovering ? 1.012 : 1)
         .animation(.spring(duration: 0.25), value: hovering)
         .onHover { hovering = $0 }
-        .background(GeometryReader { g in
-            Color.clear
-                .onAppear { model.tileFrames[info.id] = g.frame(in: .named("window")) }
-                .onChange(of: g.frame(in: .named("window"))) { _, f in model.tileFrames[info.id] = f }
-        })
         .onTapGesture(count: 1) {
             workspace.selectedId = info.id
             model.open(info.id)
@@ -222,7 +233,7 @@ struct TileView: View {
                 BrowserTileContent(browser: browser, isExpanded: workspace.expandedId == info.id)
             }
         case .agentSession:
-            ConversationThumbnail(snapshot: workspace.agents.sessions[info.id]?.snapshot, flavor: info.flavor,
+            ConversationThumbnail(snapshot: workspace.agents.session(info.id)?.snapshot, flavor: info.flavor,
                                   maxItems: size.height > 300 ? 20 : 12,
                                   fontScale: ConversationThumbnail.terminalMatchedScale)
         }
@@ -249,10 +260,8 @@ struct TileView: View {
             Button("Open") { model.open(info.id) }
         }
         if info.kind == .agentSession {
-            if let resume = workspace.agents.sessions[info.id]?.resumeCommand {
-                Button("Continue in Terminal") {
-                    workspace.launch(command: resume, cwd: workspace.agents.sessions[info.id]?.cwd)
-                }
+            if let session = workspace.agents.session(info.id), let resume = session.resumeCommand {
+                Button("Continue in Terminal") { workspace.launch(command: resume, cwd: session.cwd) }
             }
         }
         if info.kind == .terminal {

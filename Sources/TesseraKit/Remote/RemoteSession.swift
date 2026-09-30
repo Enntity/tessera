@@ -69,7 +69,7 @@ public final class RemoteSession {
     }
 
     public var attentionTiles: [TileInfo] {
-        tiles.filter { $0.attention || $0.activity == .needsInput }
+        tiles.filter(\.needsUser)
             .sorted { $0.lastActivityAt < $1.lastActivityAt }
     }
 

@@ -86,19 +86,19 @@ struct HUDBar: View {
 
     var body: some View {
         let workspace = model.workspace
-        let counts = model.workspace.counts
+        let state = workspace.state
         HStack(spacing: 14) {
             Wordmark()
                 .padding(.leading, 78) // clear the traffic lights
             Divider().frame(height: 18).overlay(Style.hairline)
             HStack(spacing: 8) {
-                CountChip(value: counts.needsInput, label: "need you", color: Style.amber, pulse: counts.needsInput > 0) {
+                CountChip(value: state.needsInput.count, label: "need you", color: Style.amber, pulse: !state.needsInput.isEmpty) {
                     model.jumpToAttention()
                 }
-                CountChip(value: counts.done, label: "done", color: Style.mint, pulse: false) {
+                CountChip(value: state.done, label: "done", color: Style.mint, pulse: false) {
                     model.jumpToAttention()
                 }
-                CountChip(value: counts.working, label: "working", color: Style.cyan, pulse: false) {
+                CountChip(value: state.working.count, label: "working", color: Style.cyan, pulse: false) {
                     withAnimation(.spring(duration: 0.35)) { workspace.filter = .all }
                 }
             }
@@ -255,19 +255,20 @@ struct TabStrip: View {
 
     var body: some View {
         let workspace = model.workspace
+        let needsUser = workspace.state.needsUser
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 2) {
-                TabChip(title: "All", count: workspace.allTiles.count, attention: false,
+                TabChip(title: "All", count: workspace.order.count, attention: false,
                         selected: workspace.filter == .all, dropTile: { file($0, into: nil) }) { select(.all) }
-                TabChip(title: "Needs you", count: workspace.counts.needsInput + workspace.counts.done, attention: false,
+                TabChip(title: "Needs you", count: needsUser.count, attention: false,
                         selected: workspace.filter == .attention, tint: Style.amber) { select(.attention) }
                 if !workspace.groups.list.isEmpty {
                     Rectangle().fill(Style.hairline).frame(width: 1, height: 14).padding(.horizontal, 4)
                 }
                 ForEach(workspace.groups.list) { group in
-                    let tiles = workspace.tiles(inGroup: group.id)
-                    TabChip(title: group.name, count: tiles.count,
-                            attention: tiles.contains { $0.attention || $0.activity == .needsInput },
+                    let members = workspace.groups.members(of: group.id)
+                    TabChip(title: group.name, count: members.filter(workspace.exists).count,
+                            attention: !members.isDisjoint(with: needsUser),
                             selected: workspace.filter == .group(group.id), dropTile: { file($0, into: group.id) }) {
                         select(.group(group.id))
                     }

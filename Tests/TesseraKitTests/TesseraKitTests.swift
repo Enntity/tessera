@@ -87,6 +87,18 @@ final class TerminalActivityTrackerTests: XCTestCase {
         XCTAssertTrue(tile.needsUser)
     }
 
+    func testBoardStateCountsWhatNeedsTheUser() {
+        func tile(_ id: String, _ activity: TileActivity, attention: Bool = false) -> TileInfo {
+            TileInfo(id: id, kind: .terminal, flavor: .shell, title: id, activity: activity, attention: attention)
+        }
+        let state = BoardState([tile("w", .working, attention: true), tile("q", .needsInput, attention: true),
+                                tile("seen", .needsInput), tile("d", .done, attention: true), tile("i", .idle)])
+        XCTAssertEqual(state.working, ["w"])
+        XCTAssertEqual(state.needsInput, ["q", "seen"])
+        XCTAssertEqual(state.done, 1)
+        XCTAssertEqual(state.needsUser, ["q", "seen", "d"])
+    }
+
     func testShortBurstIsQuietlyIdle() {
         var t = TerminalActivityTracker()
         t.noteOutput(bytes: 2000, at: t0)
