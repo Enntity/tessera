@@ -512,6 +512,22 @@ final class SessionResumeTests: XCTestCase {
         XCTAssertEqual(SessionResume.freshLaunch(original: "codex resume abc", sessionId: fixedId), "codex")
     }
 
+    /// Scripts run in shells that speak them; everything else (tcsh, nu, …) runs them under zsh, and
+    /// tiles start each shell with flags it accepts.
+    func testShellsGetScriptsAndFlagsTheyUnderstand() {
+        XCTAssertEqual(LaunchScript.dialect(forShell: "/bin/zsh"), .posix)
+        XCTAssertEqual(LaunchScript.dialect(forShell: "/opt/homebrew/bin/bash"), .posix)
+        XCTAssertEqual(LaunchScript.dialect(forShell: "/opt/homebrew/bin/fish"), .fish)
+        XCTAssertNil(LaunchScript.dialect(forShell: "/bin/tcsh"))
+        XCTAssertNil(LaunchScript.dialect(forShell: "/opt/homebrew/bin/nu"))
+        XCTAssertEqual(LoginShell.scriptShell(for: "/bin/tcsh"), "/bin/zsh")
+        XCTAssertEqual(LoginShell.scriptShell(for: "/bin/bash"), "/bin/bash")
+        XCTAssertEqual(ShellIntegration.interactiveArguments("/bin/bash", nonce: "n"), ["-l", "-i"])
+        XCTAssertEqual(ShellIntegration.interactiveArguments("/bin/tcsh", nonce: "n"), ["-l"])
+        XCTAssertEqual(ShellIntegration.interactiveArguments("/opt/homebrew/bin/nu", nonce: "n"), [])
+        XCTAssertEqual(LoginShell.tagged("found", in: "hello\n@found claude\n@foundx no\n@found codex"), ["claude", "codex"])
+    }
+
     func testShellWordsRoundTrip() {
         let words = ShellWords.split(#"claude --append-system-prompt "be brief, it's fine" -x 'a b'"#)
         XCTAssertEqual(words, ["claude", "--append-system-prompt", "be brief, it's fine", "-x", "a b"])

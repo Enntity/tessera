@@ -135,6 +135,25 @@ final class TerminalSessionTests: XCTestCase {
         XCTAssertFalse(session.terminal.screenTail(40).contains { $0.contains("Could not resume") })
     }
 
+    /// tcsh rejects `-l -i` and can't run the launch script: plain tiles get `-l`, agent tiles run
+    /// their script under zsh and then come back to tcsh.
+    func testTcshTilesStart() throws {
+        let home = try isolatedHome()
+        let plain = TerminalSession(command: nil, cwd: NSTemporaryDirectory(), shell: "/bin/tcsh", environmentOverrides: home.env)
+        defer { plain.terminate() }
+        let agent = TerminalSession(command: "echo tessera-tcsh-agent", cwd: NSTemporaryDirectory(), shell: "/bin/tcsh",
+                                    environmentOverrides: home.env)
+        defer { agent.terminate() }
+        XCTAssertTrue(waitUntil(20) { agent.terminal.screenTail(40).contains { $0.contains("tessera-tcsh-agent") } })
+        RunLoop.main.run(until: Date().addingTimeInterval(1.5))
+        for session in [plain, agent] {
+            XCTAssertTrue(session.isRunning)
+            session.send(Array("echo tessera-$shell-ok\r".utf8))
+        }
+        XCTAssertTrue(waitUntil(10) { plain.terminal.screenTail(40).contains("tessera-/bin/tcsh-ok") })
+        XCTAssertTrue(waitUntil(10) { agent.terminal.screenTail(40).contains("tessera-/bin/tcsh-ok") })
+    }
+
     /// fish users get the same typed-command tracking via Tessera's fish hooks.
     func testFishTracksTypedLaunchers() throws {
         let fish = ["/opt/homebrew/bin/fish", "/usr/local/bin/fish"].first { FileManager.default.isExecutableFile(atPath: $0) }

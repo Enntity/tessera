@@ -73,7 +73,7 @@ public final class TerminalSession: NSObject {
         // would undo its one-tile-per-conversation rule.
         self.sessionId = resuming ? sessionId : sessionId ?? command.flatMap(SessionResume.sessionId(in:))
         self.hasStarted = resuming
-        self.shell = shell ?? ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"
+        self.shell = shell ?? LoginShell.path
         self.environmentOverrides = environmentOverrides
         self.mayContinueLatest = mayContinueLatest
         let flavor = AgentFlavor.infer(fromCommand: command)
@@ -198,15 +198,17 @@ public final class TerminalSession: NSObject {
         self.relay = relay
         let process = LocalProcess(delegate: relay, dispatchQueue: .main)
         self.process = process
+        var executable = shell
         var args = ShellIntegration.interactiveArguments(shell, nonce: shellNonce)
         if let plan {
             // Run the tool (falling back to a fresh start if resuming fails fast), then an
             // interactive shell so the tile stays useful.
+            executable = LoginShell.scriptShell(for: shell)
             args = ["-l", "-i", "-c", LaunchScript.build(primary: plan.primary, fallback: plan.fallback,
                                                          followUp: ShellIntegration.followUpShell(shell, nonce: shellNonce),
-                                                         dialect: LaunchScript.dialect(forShell: shell), nonce: shellNonce)]
+                                                         dialect: LaunchScript.dialect(forShell: executable) ?? .posix, nonce: shellNonce)]
         }
-        process.startProcess(executable: shell, args: args, environment: Self.environment(tileId: id, shell: shell, nonce: shellNonce, overrides: environmentOverrides),
+        process.startProcess(executable: executable, args: args, environment: Self.environment(tileId: id, shell: shell, nonce: shellNonce, overrides: environmentOverrides),
                              execName: nil, currentDirectory: cwd)
         isRunning = true
         refreshInfo()

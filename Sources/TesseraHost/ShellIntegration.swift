@@ -73,7 +73,7 @@ enum ShellIntegration {
     static let installed: URL? = install()
 
     static func isZsh(_ shell: String) -> Bool { (shell as NSString).lastPathComponent == "zsh" }
-    static func isFish(_ shell: String) -> Bool { (shell as NSString).lastPathComponent == "fish" }
+    static func isFish(_ shell: String) -> Bool { LaunchScript.dialect(forShell: shell) == .fish }
 
     /// fish loads its own config normally; Tessera's hooks come in via `--init-command`.
     static let fishHooks = """
@@ -98,13 +98,15 @@ enum ShellIntegration {
         }
     }()
 
-    /// Arguments for an interactive login shell in a tile (fish gets its hooks here).
+    /// Arguments for an interactive login shell in a tile (fish gets its hooks here). tcsh and csh
+    /// take `-l` only on its own; shells Tessera doesn't know get no flags rather than rejected ones.
     static func interactiveArguments(_ shell: String, nonce: String) -> [String] {
         if isFish(shell), let hooks = fishHooksFile {
             // fish gets its secret as a private global, never through the environment.
             return ["-l", "-i", "-C", "set -g __tessera_nonce \(nonce); source \(ShellWords.join([hooks.path]))"]
         }
-        return ["-l", "-i"]
+        if LaunchScript.dialect(forShell: shell) != nil { return ["-l", "-i"] }
+        return ["tcsh", "csh"].contains((shell as NSString).lastPathComponent) ? ["-l"] : []
     }
 
     /// Environment additions for a tile's shell.
@@ -120,5 +122,40 @@ enum ShellIntegration {
             return "exec env ZDOTDIR=\(ShellWords.join([dir.path])) TESSERA_NONCE=\(nonce) \(shell) -l -i"
         }
         return "exec " + ShellWords.join([shell] + interactiveArguments(shell, nonce: nonce))
+    }
+}
+
+/// The user's login shell, for tiles and for finding tools on the PATH its startup files set up.
+enum LoginShell {
+    static var path: String { ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh" }
+
+    /// What runs Tessera's scripts for `shell`: the shell itself when it speaks POSIX sh or fish, else zsh.
+    static func scriptShell(for shell: String) -> String {
+        LaunchScript.dialect(forShell: shell) == nil ? "/bin/zsh" : shell
+    }
+
+    /// Runs `script` in an interactive login shell and returns what it printed, or nil if it
+    /// couldn't run or was stopped after `timeout` (a startup file waiting on something). Startup
+    /// files may print too, so scripts tag the lines they mean.
+    static func run(_ script: String, timeout: TimeInterval = 20) -> String? {
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: scriptShell(for: path))
+        p.arguments = ["-l", "-i", "-c", script]
+        let out = Pipe()
+        p.standardOutput = out
+        p.standardError = FileHandle.nullDevice
+        p.standardInput = FileHandle.nullDevice
+        do { try p.run() } catch { return nil }
+        let killer = DispatchWorkItem { if p.isRunning { p.terminate() } }
+        DispatchQueue.global().asyncAfter(deadline: .now() + timeout, execute: killer)
+        let data = out.fileHandleForReading.readDataToEndOfFile()
+        p.waitUntilExit()
+        killer.cancel()
+        return p.terminationReason == .exit ? String(decoding: data, as: UTF8.self) : nil
+    }
+
+    /// The values of lines `script` printed as `@<tag> <value>`.
+    static func tagged(_ tag: String, in output: String) -> [String] {
+        output.split(separator: "\n").compactMap { $0.hasPrefix("@\(tag) ") ? String($0.dropFirst(tag.count + 2)) : nil }
     }
 }

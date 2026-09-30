@@ -38,11 +38,14 @@ public final class DshWebServer {
         state = .starting
         output = ""
         DispatchQueue.global(qos: .userInitiated).async {
-            let resolved = Self.resolveLauncher()
+            let probe = LoginShell.run(Self.probeScript)
+            let resolved = probe.flatMap(Self.launcher(fromProbe:))
             DispatchQueue.main.async {
                 MainActor.assumeIsolated {
                     guard let (exe, args, path) = resolved else {
-                        return self.finish(.failure(DshError(message: "dsh isn't installed. Install it with `npm i -g @deepseek-ai/dsh`, or make sure `npx` is on your PATH.")))
+                        return self.finish(.failure(DshError(message: probe == nil
+                            ? "Couldn't read your PATH: your login shell didn't finish starting."
+                            : "dsh isn't installed. Install it with `npm i -g @deepseek-ai/dsh`, or make sure `npx` is on your PATH.")))
                     }
                     self.launch(exe, args: args + ["--profile", "web", "--no-open", "--port", "0"], path: path)
                 }
@@ -100,7 +103,8 @@ public final class DshWebServer {
         // First runs through npx download packages; give it time, then give up clearly.
         DispatchQueue.main.asyncAfter(deadline: .now() + 120) { [weak self] in
             MainActor.assumeIsolated {
-                guard let self, self.state == .starting else { return }
+                // Only this attempt: a retry started since has its own clock.
+                guard let self, self.process === p, self.state == .starting else { return }
                 self.stop()
                 self.finish(.failure(DshError(message: "dsh web didn't start within two minutes.")))
             }
@@ -142,25 +146,16 @@ public final class DshWebServer {
         return url
     }
 
-    /// The dsh (or npx) executable and PATH from the user's login shell, so version managers work.
-    nonisolated static func resolveLauncher() -> (String, [String], String)? {
-        let shell = ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"
-        let p = Process()
-        p.executableURL = URL(fileURLWithPath: shell)
-        p.arguments = ["-l", "-i", "-c", "printenv PATH; command -v dsh; command -v npx"]
-        let out = Pipe()
-        p.standardOutput = out
-        p.standardError = FileHandle.nullDevice
-        p.standardInput = FileHandle.nullDevice
-        do { try p.run() } catch { return nil }
-        p.waitUntilExit()
-        // Line 1 is PATH; the rest are whatever `command -v` found.
-        let lines = String(decoding: out.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
-            .split(separator: "\n").map(String.init)
-        guard let path = lines.first, path.contains("/") else { return nil }
-        let exes = lines.dropFirst().filter { $0.hasPrefix("/") }
-        if let dsh = exes.first(where: { $0.hasSuffix("/dsh") }) { return (dsh, [], path) }
-        if let npx = exes.first(where: { $0.hasSuffix("/npx") }) { return (npx, ["-y", "@deepseek-ai/dsh"], path) }
+    /// Asks the user's login shell for its PATH and where dsh and npx are, so version managers work.
+    /// (Piped through sed, which reads the same in POSIX shells and fish.)
+    nonisolated static let probeScript = "printenv PATH | /usr/bin/sed 's/^/@path /'; command -v dsh | /usr/bin/sed 's/^/@dsh /'; "
+        + "command -v npx | /usr/bin/sed 's/^/@npx /'"
+
+    /// The dsh (or npx) executable and PATH from the probe's output.
+    nonisolated static func launcher(fromProbe output: String) -> (String, [String], String)? {
+        guard let path = LoginShell.tagged("path", in: output).first, path.contains("/") else { return nil }
+        if let dsh = LoginShell.tagged("dsh", in: output).first(where: { $0.hasPrefix("/") }) { return (dsh, [], path) }
+        if let npx = LoginShell.tagged("npx", in: output).first(where: { $0.hasPrefix("/") }) { return (npx, ["-y", "@deepseek-ai/dsh"], path) }
         return nil
     }
 }

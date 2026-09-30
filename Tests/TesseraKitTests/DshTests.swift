@@ -85,6 +85,17 @@ final class DshWebServerTests: XCTestCase {
         XCTAssertNil(DshWebServer.launchURL(in: "dsh web: http://127.0.0.1:1/"))
     }
 
+    /// Startup files can print anything; only the probe's tagged lines count.
+    func testLauncherFromTaggedProbeOutput() {
+        let noisy = "Welcome back!\n/not/a/path\n@path /opt/bin:/usr/bin\n@npx /opt/bin/npx\n"
+        XCTAssertEqual(DshWebServer.launcher(fromProbe: noisy).map { [$0.0] + $0.1 + [$0.2] },
+                       ["/opt/bin/npx", "-y", "@deepseek-ai/dsh", "/opt/bin:/usr/bin"])
+        XCTAssertEqual(DshWebServer.launcher(fromProbe: noisy + "@dsh /opt/bin/dsh\n")?.0, "/opt/bin/dsh")
+        // An alias isn't something to run; nothing found means not installed.
+        XCTAssertNil(DshWebServer.launcher(fromProbe: "@path /usr/bin\n@dsh alias dsh='x'\n"))
+        XCTAssertNil(DshWebServer.launcher(fromProbe: "@dsh /opt/bin/dsh\n"))
+    }
+
     func testSessionSelectionScriptQuotesTitles() {
         let js = Workspace.selectDshSessionScript(title: #"Fix "quotes" & </script>"#, folder: "enn'tity")
         XCTAssertTrue(js.contains(#"Fix \"quotes\""#))

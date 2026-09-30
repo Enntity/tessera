@@ -60,8 +60,13 @@ public enum LaunchScript {
     /// Failing within this many seconds means "couldn't start", not "the user quit".
     public static let quickFailure = 20
 
-    public static func dialect(forShell shell: String) -> Dialect {
-        (shell as NSString).lastPathComponent == "fish" ? .fish : .posix
+    /// The dialect `shell` speaks, or nil for shells these scripts aren't written for (tcsh, nu, …).
+    public static func dialect(forShell shell: String) -> Dialect? {
+        switch (shell as NSString).lastPathComponent {
+        case "fish": .fish
+        case "zsh", "bash", "sh", "ksh", "mksh": .posix
+        default: nil
+        }
     }
 
     public static func build(primary: String, fallback: String?, followUp: String, dialect: Dialect, nonce: String) -> String {

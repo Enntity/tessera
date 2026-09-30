@@ -52,7 +52,8 @@ Native macOS app, with a focused iOS companion built on the same core.
     isn't found at all (say, after a toolchain switch), the tile shuts down and keeps its
     conversation for Resume.
   - Agents you exited come back as a shell in their last folder. bash tiles resume what Tessera
-    launched but don't track commands typed into them.
+    launched but don't track commands typed into them; so do other login shells (tcsh, nu, …),
+    whose launches run through zsh.
 - **Privacy mode (⇧⌘P).** For screenshots and video: terminal and conversation text become
   word-length bars in place, web pages a coarse mosaic. Everything keeps moving.
 - **iPhone / iPad.** Pair by scanning the QR code in Settings → iPhone with the Camera. The phone
