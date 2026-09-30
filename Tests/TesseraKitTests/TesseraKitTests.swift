@@ -446,9 +446,13 @@ final class RemoteVitalsTests: XCTestCase {
         a.cpu = 0.4213
         a.memory = 0.6671
         a.temperature = 58.3
+        a.gpuPowerW = 41.8
+        a.load = 0.52
         var b = a
         b.cpu = 0.4189
         b.temperature = 57.8
+        b.gpuPowerW = 42.3
+        b.load = 0.47
         a.quantize()
         b.quantize()
         XCTAssertEqual(a, b)

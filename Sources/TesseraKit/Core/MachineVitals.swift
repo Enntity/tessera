@@ -49,8 +49,8 @@ public struct MachineVitals: Codable, Identifiable, Hashable, Sendable {
         self.status = status
     }
 
-    /// Rounds readings to what the chip shows (whole percent and degrees), so a poll that changes
-    /// nothing visible leaves the value equal and re-renders nothing.
+    /// Rounds readings to what the chip shows (whole percent, degrees and watts; load to a tenth),
+    /// so a poll that changes nothing visible leaves the value equal and re-renders nothing.
     public mutating func quantize() {
         func percent(_ v: Double?) -> Double? { v.map { ($0 * 100).rounded() / 100 } }
         cpu = percent(cpu)
@@ -58,6 +58,8 @@ public struct MachineVitals: Codable, Identifiable, Hashable, Sendable {
         memory = percent(memory)
         temperature = temperature?.rounded()
         hottestSensor = hottestSensor?.rounded()
+        gpuPowerW = gpuPowerW?.rounded()
+        load = load.map { ($0 * 10).rounded() / 10 }
     }
 }
 
