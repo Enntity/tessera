@@ -266,6 +266,14 @@ final class UsageAPITests: XCTestCase {
         XCTAssertEqual(UsageAPI.minimumInterval(for: .claudePlan), 300)
     }
 
+    func testBudgetInput() {
+        XCTAssertEqual(UsageProviderConfig.budget(from: " $1,000 "), 1000)
+        XCTAssertEqual(UsageProviderConfig.budget(from: "250.5"), 250.5)
+        for bad in ["", "abc", "inf", "nan", "-5", "0", "99999999999999999999"] {
+            XCTAssertNil(UsageProviderConfig.budget(from: bad), bad)
+        }
+    }
+
     func testOpenAIRequestUsesMonthStart() {
         let config = UsageProviderConfig(id: "oa", kind: .openai)
         let req = UsageAPI.request(for: config, key: "sk-admin", now: Date())
@@ -409,6 +417,22 @@ final class RemoteVitalsTests: XCTestCase {
         XCTAssertEqual(r.temperature!, 53, accuracy: 0.01)  // GPU temperature, like nvidia-smi
         XCTAssertEqual(r.memory!, 1 - 65669088.0 / 127600812.0, accuracy: 0.0001)
         XCTAssertEqual(r.memoryTotalGB!, 121.7, accuracy: 0.1)
+    }
+
+    func testHostileOutputCantOverflow() {
+        let r = RemoteVitals.parse("""
+        @stat cpu 18446744073709551615 18446744073709551615 1 18446744073709551615 9
+        @memtotal 1e30
+        @memavail 5
+        @ctemp inf
+        @gpu x, 1e30, nan, 99999999999999999999
+        """)
+        XCTAssertNotNil(r.cpuSample)
+        XCTAssertNil(r.memory)
+        XCTAssertNil(r.cpuTemperature)
+        XCTAssertNil(r.gpu)
+        XCTAssertNil(r.gpuTemperature)
+        XCTAssertNil(r.gpuPowerW)
     }
 
     func testCPUUtilizationFromDeltas() {

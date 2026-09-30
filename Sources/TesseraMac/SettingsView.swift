@@ -39,7 +39,9 @@ struct ProvidersSettings: View {
                                 .font(.caption).foregroundStyle(.secondary)
                         }
                         Spacer()
-                        if let budget = config.monthlyBudget { Text("Budget $\(Int(budget))").font(.caption).foregroundStyle(.secondary) }
+                        if let budget = config.monthlyBudget {
+                            Text("Budget $\(budget.formatted(.number.precision(.fractionLength(0))))").font(.caption).foregroundStyle(.secondary)
+                        }
                         Button(role: .destructive) { usage.remove(id: config.id) } label: { Image(systemName: "trash") }
                             .buttonStyle(.borderless)
                     }
@@ -89,7 +91,8 @@ struct ProvidersSettings: View {
                     .keyboardShortcut(.cancelAction)
                 Button("Connect") { connect() }
                     .keyboardShortcut(.defaultAction)
-                    .disabled(kind.spec.keyHint != nil && kind != .custom && key.isEmpty)
+                    .disabled(kind.spec.keyHint != nil && kind != .custom && key.isEmpty
+                              || !budget.isEmpty && UsageProviderConfig.budget(from: budget) == nil)
             }
         }
         .padding(22)
@@ -102,7 +105,7 @@ struct ProvidersSettings: View {
     }
 
     private func connect() {
-        let config = UsageProviderConfig(kind: kind, name: name.isEmpty ? nil : name, monthlyBudget: Double(budget),
+        let config = UsageProviderConfig(kind: kind, name: name.isEmpty ? nil : name, monthlyBudget: UsageProviderConfig.budget(from: budget),
                                          customBalanceURL: customURL.isEmpty ? nil : customURL,
                                          customAuthHeader: customHeader.isEmpty ? nil : customHeader,
                                          customJSONPath: customPath.isEmpty ? nil : customPath,

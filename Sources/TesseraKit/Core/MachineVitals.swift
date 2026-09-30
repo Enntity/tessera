@@ -111,6 +111,9 @@ public enum RemoteVitals {
     }
 
     public static func parse(_ output: String) -> Reading {
+        // A broken or hostile host can print anything; keep numbers finite and sane so nothing
+        // downstream (sums, Int conversions for display) can trap.
+        func number(_ s: String) -> Double? { Double(s).flatMap { $0.isFinite && abs($0) < 1e12 ? $0 : nil } }
         var r = Reading()
         var memTotal: Double?, memAvail: Double?
         for raw in output.split(separator: "\n") {
@@ -123,23 +126,23 @@ public enum RemoteVitals {
                 // cpu user nice system idle iowait irq softirq steal …
                 let n = value.split(separator: " ").dropFirst().compactMap { UInt64($0) }
                 guard n.count >= 4 else { continue }
-                let idle = n[3] + (n.count > 4 ? n[4] : 0)
-                let total = n.prefix(8).reduce(0, +)
-                r.cpuSample = CPUSample(busy: total - idle, total: total)
-            case "memtotal": memTotal = Double(value)
-            case "memavail": memAvail = Double(value)
-            case "load": r.load = Double(value)
+                let idle = n[3] &+ (n.count > 4 ? n[4] : 0)
+                let total = n.prefix(8).reduce(0, &+)
+                r.cpuSample = CPUSample(busy: total &- idle, total: total)
+            case "memtotal": memTotal = number(value)
+            case "memavail": memAvail = number(value)
+            case "load": r.load = number(value)
             case "ncpu": r.cores = Int(value)
             case "ctemp":
                 // Thermal zones report millidegrees.
-                if let milli = Double(value), milli > 0 { r.cpuTemperature = milli > 1000 ? milli / 1000 : milli }
+                if let milli = number(value), milli > 0 { r.cpuTemperature = milli > 1000 ? milli / 1000 : milli }
             case "gpu":
                 let f = value.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
                 guard f.count >= 4 else { continue }
                 r.gpuName = f[0]
-                r.gpu = Double(f[1]).map { $0 / 100 }
-                r.gpuTemperature = Double(f[2])
-                r.gpuPowerW = Double(f[3])
+                r.gpu = number(f[1]).map { $0 / 100 }
+                r.gpuTemperature = number(f[2])
+                r.gpuPowerW = number(f[3])
             default:
                 break
             }

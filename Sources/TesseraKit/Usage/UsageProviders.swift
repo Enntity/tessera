@@ -61,6 +61,12 @@ public struct UsageProviderConfig: Codable, Identifiable, Hashable, Sendable {
         self.customJSONPath = customJSONPath
         self.customTopUpURL = customTopUpURL
     }
+
+    /// A budget as typed (`500`, `$1,000`): a positive, sane amount, or nil.
+    public static func budget(from text: String) -> Double? {
+        Double(text.trimmingCharacters(in: .whitespaces).filter { $0 != "$" && $0 != "," })
+            .flatMap { $0.isFinite && $0 > 0 && $0 < 1e12 ? $0 : nil }
+    }
 }
 
 public struct UsageProviderSpec: Sendable {
