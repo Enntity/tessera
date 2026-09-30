@@ -315,14 +315,21 @@ public enum UsageAPI {
     }
 
     /// The Claude plan row from locally counted usage, when the official limits aren't available.
+    /// `limit` is a plan limit Claude Code has run into and when it resets; it leads the row.
     public static func claudeLocalReading(config: UsageProviderConfig, fiveHours: (tokens: Int, replies: Int),
-                                          week: (tokens: Int, replies: Int), note: String?, now: Date = Date()) -> UsageReading {
+                                          week: (tokens: Int, replies: Int), limit: (window: String, resetsAt: Date)? = nil,
+                                          note: String?, now: Date = Date()) -> UsageReading {
         let spec = config.kind.spec
+        let reached = limit.map { l in
+            (l.window == "seven_day" ? "Weekly" : l.window == "five_hour" ? "Session" : "Plan") + " limit reached · resets "
+                + l.resetsAt.formatted(date: Calendar.current.isDate(l.resetsAt, inSameDayAs: now) ? .omitted : .abbreviated, time: .shortened)
+        }
         return UsageReading(
             id: config.id, name: config.name, symbol: spec.symbol,
-            headline: "5h · \(fiveHours.tokens.compactTokens) tokens",
-            remaining: nil,
-            lines: ["Week · \(week.tokens.compactTokens) tokens · \(week.replies) replies", "Counted from local transcripts"],
+            headline: reached ?? "5h · \(fiveHours.tokens.compactTokens) tokens",
+            remaining: limit == nil ? nil : 0,
+            lines: (reached == nil ? [] : ["5h · \(fiveHours.tokens.compactTokens) tokens"])
+                + ["Week · \(week.tokens.compactTokens) tokens · \(week.replies) replies", "Counted from local transcripts"],
             status: .ok, message: note, topUpURL: spec.topUpURL, updatedAt: now)
     }
 

@@ -25,7 +25,7 @@ public final class UsageService {
     /// or skipped attempt keeps showing what's left instead of only local counts.
     @ObservationIgnored private var claudeOfficial: UsageReading?
     @ObservationIgnored private var claudeNote: String?
-    /// Claude Code's sign-in is missing or has run out: the card offers to run `claude`.
+    /// Claude Code isn't signed in at all: the card offers to run `claude`, which signs in.
     @ObservationIgnored private var claudeNeedsSignIn = false
     static let claudeSignIn = UsageReading.Fix(title: "Sign in with Claude Code", command: "claude")
     @ObservationIgnored private let store: URL
@@ -156,7 +156,10 @@ public final class UsageService {
         let tryOfficial = force || claudeOfficialRetryAt.map { Date() >= $0 } ?? true
         let local = claudeLocal
         Task { [session] in
-            let counted = await Task.detached(priority: .utility) { local.refresh() }.value
+            let (counted, signedIn) = await Task.detached(priority: .utility) { (local.refresh(), ClaudeLocalUsage.signedIn()) }.value
+            // Signed in, Claude Code may keep a current sign-in where Tessera can't read it; then the
+            // counted usage stands on its own, with nothing for the user to do.
+            self.claudeNeedsSignIn = !signedIn
             var official: UsageReading?
             var note: String?
             if tryOfficial {
@@ -168,11 +171,8 @@ public final class UsageService {
                         case 200..<300:
                             official = try? UsageAPI.parse(data, for: config)
                             self.claudeOfficialRetryAt = nil
-                            self.claudeNeedsSignIn = false
                         case 401, 403:
                             await ClaudeTokenCache.shared.invalidate()
-                            note = "Claude Code's sign-in has run out; showing usage counted here."
-                            self.claudeNeedsSignIn = true
                             self.claudeOfficialRetryAt = Date().addingTimeInterval(1800)
                         case 429:
                             note = "Official limits are rate-limited right now."
@@ -187,10 +187,9 @@ public final class UsageService {
                         self.claudeOfficialRetryAt = Date().addingTimeInterval(300)
                     }
                 } else {
-                    note = "Sign in to Claude Code for the official plan limits; showing usage counted here."
-                    self.claudeNeedsSignIn = true
                     self.claudeOfficialRetryAt = Date().addingTimeInterval(1800)
                 }
+                if !signedIn { note = "Sign in to Claude Code for its usage and plan limits." }
                 self.claudeNote = note
             } else {
                 note = self.claudeNote
@@ -206,7 +205,8 @@ public final class UsageService {
             } else {
                 var reading = UsageAPI.claudeLocalReading(
                     config: config, fiveHours: (counted.fiveHours.tokens, counted.fiveHours.replies),
-                    week: (counted.week.tokens, counted.week.replies), note: note)
+                    week: (counted.week.tokens, counted.week.replies),
+                    limit: counted.limit.map { ($0.window, $0.resetsAt) }, note: note)
                 reading.fix = self.claudeNeedsSignIn ? Self.claudeSignIn : nil
                 self.readings[config.id] = reading
             }

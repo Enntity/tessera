@@ -10,6 +10,13 @@ final class ClaudeLocalUsage: @unchecked Sendable {
         var replies = 0
     }
 
+    /// A plan limit Claude Code ran into (it records the refusal in the transcript): which window,
+    /// and when it resets.
+    struct Limit: Equatable, Sendable {
+        var window: String
+        var resetsAt: Date
+    }
+
     private struct FileState {
         var offset: UInt64 = 0
         var remainder = Data()
@@ -19,11 +26,19 @@ final class ClaudeLocalUsage: @unchecked Sendable {
     private var files: [String: FileState] = [:]
     /// Tokens and replies per hour since the epoch.
     private var hourly: [Int: Totals] = [:]
+    private var limit: Limit?
     private let lock = NSLock()
     private let root: URL
     /// Transcripts are read this much at a time, so a first read of a huge one never holds it all.
     private let chunkSize: Int
     static let window: TimeInterval = 7 * 86_400
+
+    /// Whether Claude Code has an account signed in (`~/.claude.json` names one once it has).
+    static func signedIn(config: URL = URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent(".claude.json")) -> Bool {
+        guard let data = try? Data(contentsOf: config),
+              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return false }
+        return root["oauthAccount"] != nil
+    }
 
     init(root: URL = ClaudeSessions.projects, chunkSize: Int = 8 << 20) {
         self.root = root
@@ -31,7 +46,7 @@ final class ClaudeLocalUsage: @unchecked Sendable {
     }
 
     /// Reads whatever was appended since last time. Call off the main thread.
-    func refresh(now: Date = Date()) -> (fiveHours: Totals, week: Totals) {
+    func refresh(now: Date = Date()) -> (fiveHours: Totals, week: Totals, limit: Limit?) {
         lock.lock()
         defer { lock.unlock() }
         let fm = FileManager.default
@@ -55,7 +70,7 @@ final class ClaudeLocalUsage: @unchecked Sendable {
                 acc.replies += t.replies
             }
         }
-        return (sum(hours: 5), sum(hours: 24 * 7))
+        return (sum(hours: 5), sum(hours: 24 * 7), limit.flatMap { $0.resetsAt > now ? $0 : nil })
     }
 
     private func ingest(path: String, size: UInt64, since: Date) {
@@ -76,6 +91,9 @@ final class ClaudeLocalUsage: @unchecked Sendable {
                 // assistant lines that carry usage.
                 Self.forEachLine(in: data[..<lastNewline], containing: ["\"type\":\"assistant\"", "\"usage\":{"]) { line in
                     count(line, into: &state, since: since)
+                }
+                Self.forEachLine(in: data[..<lastNewline], containing: [Self.limitKeys.refused]) { line in
+                    if let hit = Self.limit(in: line), hit.resetsAt > limit?.resetsAt ?? .distantPast { limit = hit }
                 }
             } else {
                 state.remainder = data
@@ -117,6 +135,17 @@ final class ClaudeLocalUsage: @unchecked Sendable {
               let q = memchr(base + offset, 0x22, line.count - offset) else { return nil }
         let end = base.distance(to: UnsafeRawPointer(q))
         return String(decoding: UnsafeRawBufferPointer(start: base + offset, count: end - offset), as: UTF8.self)
+    }
+
+    private static let limitKeys = (refused: "\"quotaLimits\":{\"status\":\"rejected\"", resetsAt: Array("\"resetsAt\":".utf8),
+                                    window: Array("\"rateLimitType\":\"".utf8))
+
+    private static func limit(in line: UnsafeRawBufferPointer) -> Limit? {
+        guard let r = find(limitKeys.resetsAt, in: line, from: 0) else { return nil }
+        let digits = String(decoding: UnsafeRawBufferPointer(rebasing: line[(r + limitKeys.resetsAt.count)...]).prefix { (0x30...0x39).contains($0) }, as: UTF8.self)
+        guard let seconds = TimeInterval(digits) else { return nil }
+        let window = find(limitKeys.window, in: line, from: 0).flatMap { quoted(in: line, from: $0 + limitKeys.window.count) }
+        return Limit(window: window ?? "", resetsAt: Date(timeIntervalSince1970: seconds))
     }
 
     private static let assistantKeys = (usage: Array("\"usage\":{".utf8), timestamp: Array("\"timestamp\":\"".utf8),

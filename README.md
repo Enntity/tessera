@@ -68,9 +68,11 @@ Native macOS app, with a focused iOS companion built on the same core.
   A page that doesn't load says why: in its tile's footer, and along the bottom of its open panel.
 - **Accounts sidebar.** Remaining balance / plan headroom with one-click top-up: OpenRouter,
   DeepSeek, Moonshot, OpenAI and Anthropic (admin-key spend vs. budget), xAI, ChatGPT/Codex plan
-  limits (from local Codex logs), Claude plan limits (opt-in: reads Claude Code's sign-in, never
-  modifies it, and falls back to counting your local transcripts), and a custom provider for any
-  JSON balance endpoint. Keys live in the login Keychain.
+  limits (from local Codex logs), Claude plan usage (opt-in: counted from your local transcripts,
+  a limit Claude Code runs into shown with when it resets, and the official limits when Claude
+  Code's stored sign-in is readable; never modified), and a custom provider for any JSON balance
+  endpoint. Keys live in the login Keychain. A card that needs something from you says what, and
+  clicking it does it (signed out of Claude Code: a terminal running `claude` to sign in).
 - **Tabs.** All · your own tabs, in a strip over the board. Drag tiles onto a tab (or Move to
   Tab); new tiles land in the tab you're viewing, as does a Claude or Codex app conversation
   started there once its tile appears (a new tile drops the filter, so it always shows); each tab

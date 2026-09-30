@@ -343,6 +343,36 @@ final class ClaudeLocalUsageTests: XCTestCase {
     }
 }
 
+extension ClaudeLocalUsageTests {
+    func testALimitClaudeCodeRanIntoLeadsUntilItResets() throws {
+        let root = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("tessera-limit-\(UUID().uuidString.prefix(6))")
+        let project = root.appendingPathComponent("-tmp-proj")
+        try FileManager.default.createDirectory(at: project, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let now = Date(timeIntervalSince1970: 1_790_740_000)
+        func refused(_ window: String, resets: TimeInterval) -> String {
+            #"{"type":"assistant","timestamp":"2026-09-30T03:36:32.027Z","message":{"id":"x\#(window)","usage":{"input_tokens":0}},"quotaLimits":{"status":"rejected","resetsAt":\#(Int(resets)),"rateLimitType":"\#(window)"},"error":"rate_limit"}"#
+        }
+        let path = project.appendingPathComponent("s.jsonl")
+        try ([refused("seven_day", resets: now.timeIntervalSince1970 - 60), refused("five_hour", resets: now.timeIntervalSince1970 + 7400)]
+                .joined(separator: "\n") + "\n").write(to: path, atomically: true, encoding: .utf8)
+        let usage = ClaudeLocalUsage(root: root)
+        XCTAssertEqual(usage.refresh(now: now).limit?.window, "five_hour")
+        // Once it has reset, it's gone.
+        XCTAssertNil(usage.refresh(now: now.addingTimeInterval(7500)).limit)
+    }
+
+    func testSignedInMeansAnAccountIsNamed() throws {
+        let file = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("claude-\(UUID().uuidString.prefix(6)).json")
+        defer { try? FileManager.default.removeItem(at: file) }
+        XCTAssertFalse(ClaudeLocalUsage.signedIn(config: file))
+        try #"{"numStartups":3}"#.write(to: file, atomically: true, encoding: .utf8)
+        XCTAssertFalse(ClaudeLocalUsage.signedIn(config: file))
+        try #"{"oauthAccount":{"emailAddress":"a@b.c"}}"#.write(to: file, atomically: true, encoding: .utf8)
+        XCTAssertTrue(ClaudeLocalUsage.signedIn(config: file))
+    }
+}
+
 /// A web tile's load bar belongs to the load: once the page is in, it is gone.
 @MainActor
 final class BrowserSessionTests: XCTestCase {
