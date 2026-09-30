@@ -78,6 +78,20 @@ public enum AgentFlavor: String, Codable, Sendable, CaseIterable {
     }
 }
 
+// The Mac and the phone are updated separately, so a newer peer may send a flavor or state this
+// build doesn't know: it reads as the generic case instead of failing the whole message.
+public extension AgentFlavor {
+    init(from decoder: Decoder) throws {
+        self = Self(rawValue: try decoder.singleValueContainer().decode(String.self)) ?? .custom
+    }
+}
+
+public extension TileActivity {
+    init(from decoder: Decoder) throws {
+        self = Self(rawValue: try decoder.singleValueContainer().decode(String.self)) ?? .idle
+    }
+}
+
 /// The one state vocabulary every tile type maps into.
 public enum TileActivity: String, Codable, Sendable {
     case starting, working, idle, done, needsInput, exited, failed

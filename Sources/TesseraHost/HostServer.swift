@@ -21,6 +21,8 @@ public final class HostServer {
     @ObservationIgnored private var clients: [UUID: RemoteClient] = [:]
     @ObservationIgnored private var pump: Timer?
     @ObservationIgnored private var lastUsage: [UsageReading] = []
+    /// Why the listener last failed; stays on show until the next start.
+    @ObservationIgnored private var failure: String?
     @ObservationIgnored private let hostId: String
 
     public init(workspace: Workspace) {
@@ -48,6 +50,7 @@ public final class HostServer {
 
     public func start() {
         guard listener == nil else { return }
+        failure = nil
         do {
             let l = try NWListener(using: SecureChannel.parameters(pairingCode: pairingCode), on: NWEndpoint.Port(rawValue: port)!)
             l.service = NWListener.Service(name: hostName, type: WireProtocol.serviceType)
@@ -57,8 +60,7 @@ public final class HostServer {
                         guard let self else { return }
                         switch state {
                         case .ready: self.status = "Listening on :\(self.port)"; self.isRunning = true
-                        case .failed(let e): self.status = "Failed: \(e.localizedDescription)"; self.stop()
-                        case .cancelled: self.status = "Off"; self.isRunning = false
+                        case .failed(let e): self.failure = "Failed: \(e.localizedDescription)"; self.stop()
                         default: break
                         }
                     }
@@ -87,6 +89,7 @@ public final class HostServer {
         for c in clients.values { c.close() }
         clients.removeAll()
         clientNames = []
+        status = failure ?? "Off"
         isRunning = false
     }
 
@@ -101,9 +104,15 @@ public final class HostServer {
 
     /// Paired devices are few; anything beyond this is noise or abuse.
     static let maxClients = 8
+    /// Connections still proving they know the code. Only paired devices count against `maxClients`,
+    /// so peers without the code can't lock the phone out; when these fill up, the oldest goes.
+    static let maxPending = 8
 
     private func accept(_ connection: NWConnection) {
-        guard let workspace, clients.count < Self.maxClients else { return connection.cancel() }
+        guard let workspace else { return connection.cancel() }
+        let pending = clients.values.filter { !$0.authenticated }
+        guard clients.count - pending.count < Self.maxClients else { return connection.cancel() }
+        if pending.count >= Self.maxPending { pending.min { $0.openedAt < $1.openedAt }?.close() }
         let client = RemoteClient(connection: connection, workspace: workspace, hello: HostHello(hostName: hostName, hostId: hostId))
         clients[client.id] = client
         client.onClose = { [weak self] id in
@@ -141,11 +150,12 @@ public final class HostServer {
         defer { freeifaddrs(ifaddr) }
         for ptr in sequence(first: first, next: { $0.pointee.ifa_next }) {
             let iface = ptr.pointee
-            guard iface.ifa_addr.pointee.sa_family == UInt8(AF_INET) else { continue }
+            // An interface may have no address at all.
+            guard let addr = iface.ifa_addr, addr.pointee.sa_family == UInt8(AF_INET) else { continue }
             let name = String(cString: iface.ifa_name)
             guard name.hasPrefix("en") else { continue }
             var host = [CChar](repeating: 0, count: Int(NI_MAXHOST))
-            getnameinfo(iface.ifa_addr, socklen_t(iface.ifa_addr.pointee.sa_len), &host, socklen_t(host.count), nil, 0, NI_NUMERICHOST)
+            getnameinfo(addr, socklen_t(addr.pointee.sa_len), &host, socklen_t(host.count), nil, 0, NI_NUMERICHOST)
             result = String(cString: host)
             if name == "en0" { break }
         }
@@ -157,6 +167,7 @@ public final class HostServer {
 @MainActor
 final class RemoteClient {
     let id = UUID()
+    let openedAt = Date()
     private(set) var deviceName: String?
     var onClose: ((UUID) -> Void)?
     var onHello: (() -> Void)?
@@ -164,16 +175,16 @@ final class RemoteClient {
     private let connection: NWConnection
     private weak var workspace: Workspace?
     private let hello: HostHello
-    private var authenticated = false
+    private(set) var authenticated = false
     private var watched: Set<String> = []
     private var pendingOutput: [String: [UInt8]] = [:]
     private var sentConversations: [String: ConversationSnapshot] = [:]
     private var closed = false
     /// Bytes handed to the connection but not yet sent. A stalled peer (a locked phone keeps TCP
-    /// alive) must not make the Mac buffer terminal output without bound.
+    /// alive) must not make the Mac queue anything without bound.
     private var inFlight = 0
-    /// Terminals whose stream was dropped under backpressure; they get a fresh snapshot once drained.
-    private var needsResync: Set<String> = []
+    /// Messages were dropped under backpressure; once drained, the peer gets the full state again.
+    private var behind = false
 
     static let maxInputBytes = 64 * 1024
     static let highWater = 4 * 1024 * 1024
@@ -220,7 +231,9 @@ final class RemoteClient {
     }
 
     func send(_ message: HostMessage, then: (() -> Void)? = nil) {
-        guard authenticated, !closed, let data = try? WireProtocol.encode(message) else { return }
+        guard authenticated, !closed else { return }
+        guard !behind, inFlight <= Self.highWater else { behind = true; return }
+        guard let data = try? WireProtocol.encode(message) else { return }
         inFlight += data.count
         SecureChannel.sendFrame(data, on: connection) { [weak self] _ in
             DispatchQueue.main.async {
@@ -240,15 +253,17 @@ final class RemoteClient {
 
     func flush() {
         guard let workspace else { return }
-        if inFlight > Self.highWater {
-            // Too far behind: stop streaming and catch up with snapshots later.
-            needsResync.formUnion(pendingOutput.keys)
+        if inFlight > Self.highWater { behind = true }
+        if behind {
+            // Too far behind: send nothing, and once drained, catch up with fresh state and snapshots.
             pendingOutput.removeAll(keepingCapacity: true)
+            guard inFlight < Self.lowWater else { return }
+            behind = false
+            sentConversations.removeAll()
+            send(.usage(workspace.usage.orderedReadings))
+            sendTiles()
+            for id in watched { sendSnapshot(id) }
             return
-        }
-        if inFlight < Self.lowWater, !needsResync.isEmpty {
-            for id in needsResync where watched.contains(id) { sendSnapshot(id) }
-            needsResync.removeAll()
         }
         guard !pendingOutput.isEmpty else { return pushConversations() }
         for (id, bytes) in pendingOutput {

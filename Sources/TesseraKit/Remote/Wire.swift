@@ -118,6 +118,7 @@ public struct LaunchRequest: Codable, Sendable {
 }
 
 public enum WireProtocol {
+    /// Bump when a wire type changes in a way older builds can't read; a mismatched phone is told to update.
     public static let version = 1
     public static let serviceType = "_tessera._tcp"
     public static let defaultPort: UInt16 = 47_474

@@ -89,7 +89,9 @@ struct ConnectionBanner: View {
     var body: some View {
         switch session.state {
         case .connected:
-            EmptyView()
+            if let notice = session.notice {
+                Label(notice, systemImage: "arrow.down.app").font(Style.ui(12)).foregroundStyle(Style.amber)
+            }
         case .connecting, .idle:
             HStack(spacing: 8) {
                 ProgressView()

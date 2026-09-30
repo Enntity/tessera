@@ -200,10 +200,16 @@ public final class RemoteSession {
     // MARK: Receiving
 
     private func receive(_ data: Data) {
-        guard let message = try? WireProtocol.decode(HostMessage.self, from: data) else { return }
+        guard let message = try? WireProtocol.decode(HostMessage.self, from: data) else {
+            // Something this build can't read: say so rather than quietly showing stale tiles.
+            let update = "This Mac runs a newer Tessera; update the app to see everything."
+            if notice != update { notice = update }
+            return
+        }
         switch message {
         case .hello(let h):
             hostName = h.hostName
+            notice = nil
             state = .connected
         case .tiles(let list):
             tiles = list

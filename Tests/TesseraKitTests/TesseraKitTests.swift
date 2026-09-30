@@ -334,6 +334,18 @@ final class TerminalSnapshotTests: XCTestCase {
     }
 }
 
+final class WireCompatibilityTests: XCTestCase {
+    /// A newer Mac may send flavors and states this build doesn't know; the tile list still arrives.
+    func testUnknownFlavorsAndStatesReadAsGeneric() throws {
+        let json = #"{"tiles":{"_0":[{"id":"t","kind":"terminal","flavor":"hologram","title":"x","subtitle":"","#
+            + #""activity":"dreaming","attention":false,"lastActivityAt":0}]}}"#
+        guard case .tiles(let tiles) = try WireProtocol.decode(HostMessage.self, from: Data(json.utf8)) else { return XCTFail("wrong case") }
+        XCTAssertEqual(tiles.map(\.flavor), [.custom])
+        XCTAssertEqual(tiles.map(\.activity), [.idle])
+        XCTAssertEqual(try JSONDecoder().decode([AgentFlavor].self, from: Data(#"["dsh","codex"]"#.utf8)), [.dsh, .codex])
+    }
+}
+
 final class TileGroupsTests: XCTestCase {
     func testTileLivesInOneTabAndDeletingKeepsTiles() {
         var g = TileGroups()

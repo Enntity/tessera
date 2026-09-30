@@ -144,8 +144,10 @@ in Settings → iPhone. Over the internet, use Tailscale or a VPN and connect by
 Network.framework's PSK mode negotiates `TLS_PSK_WITH_AES_128_GCM_SHA256` (no ECDHE), so there is
 no forward secrecy: someone who recorded traffic *and* later obtains the code could decrypt it.
 Rotating the code limits exposure; an ephemeral X25519 exchange inside the channel is the planned fix.
-The host caps connections, drops peers that don't say hello within 10 s, and stops streaming to a
-peer that falls behind (it resyncs with a snapshot). Pairing links on the phone always ask first.
+The host caps paired connections (peers without the code can't take their slots), drops peers that
+don't say hello within 10 s, and stops sending to a peer that falls behind, such as a locked phone
+(it catches up with fresh state and snapshots once it drains). Pairing links on the phone always
+ask first.
 
 ## Known limits / next
 
