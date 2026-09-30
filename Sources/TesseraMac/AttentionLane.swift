@@ -69,10 +69,7 @@ struct LaneRow: View {
                 Button { model.open(id) } label: {
                     VStack(alignment: .leading, spacing: Style.Space.xxs) {
                         HStack(spacing: Style.Space.xs) {
-                            Image(systemName: info.flavor.symbol)
-                                .font(Style.ui(.caption, .semibold))
-                                .foregroundStyle(Style.accent(info.flavor))
-                                .frame(width: Style.Space.xl)
+                            FlavorGlyph(info.flavor)
                             Text(info.title).font(Style.label).foregroundStyle(Style.ink).lineLimit(1)
                             if info.activity == .done { Dot(Style.mint).padding(.leading, Style.Space.xxs) }
                             Spacer(minLength: Style.Space.xs)

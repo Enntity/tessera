@@ -78,11 +78,7 @@ public struct TileCard<Content: View>: View {
 
     private var header: some View {
         HStack(spacing: Style.Space.xs) {
-            // One width for every glyph, so titles start on one line down a column of tiles.
-            Image(systemName: info.flavor.symbol)
-                .font(Style.ui(.caption, .semibold))
-                .foregroundStyle(Style.accent(info.flavor))
-                .frame(width: Style.Space.xl)
+            FlavorGlyph(info.flavor)
             Text(lit(info.title))
                 .font(Style.label)
                 .foregroundStyle(Style.ink)

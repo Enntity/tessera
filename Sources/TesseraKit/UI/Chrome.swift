@@ -46,6 +46,21 @@ private extension Alignment {
     }
 }
 
+/// A tool's glyph at the head of a title (a tile's, a lane row's, a docked tile's), in its own
+/// color and one width for all, so the titles after them start on one line.
+public struct FlavorGlyph: View {
+    let flavor: AgentFlavor
+
+    public init(_ flavor: AgentFlavor) { self.flavor = flavor }
+
+    public var body: some View {
+        Image(systemName: flavor.symbol)
+            .font(Style.ui(.caption, .semibold))
+            .foregroundStyle(Style.accent(flavor))
+            .frame(width: Style.Space.xl)
+    }
+}
+
 /// A state's mark: a small dot in its color, lit where it calls for the eye.
 public struct Dot: View {
     let color: Color

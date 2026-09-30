@@ -62,9 +62,12 @@ private struct DockGrip: View {
             // Astride the rule it moves.
             .offset(x: -grip.width / 2)
             .onHover { over in
+                guard over != hovering else { return }
                 hovering = over
                 if over { NSCursor.resizeLeftRight.push() } else { NSCursor.pop() }
             }
+            // (The dock can go from under the pointer: the last tile undocked.)
+            .onDisappear { if hovering { NSCursor.pop() } }
             .gesture(DragGesture(minimumDistance: 1, coordinateSpace: .named("window"))
                 .onChanged { drag in
                     let start = from ?? width
@@ -112,12 +115,8 @@ struct DockHeader: View {
         HStack(spacing: Style.Space.gutter) {
             Button { model.open(info.id, inApp: false) } label: {
                 HStack(spacing: Style.Space.xs) {
-                    Image(systemName: info.flavor.symbol)
-                        .font(Style.ui(.caption, .semibold))
-                        .foregroundStyle(Style.accent(info.flavor))
-                        .frame(width: Style.Space.xl)
+                    FlavorGlyph(info.flavor)
                     Text(info.title).font(Style.label).foregroundStyle(Style.ink).lineLimit(1)
-                    if info.activity == .done, info.attention { Dot(Style.mint).padding(.leading, Style.Space.xxs) }
                     Spacer(minLength: Style.Space.xs)
                     StatePill(activity: info.activity)
                 }
