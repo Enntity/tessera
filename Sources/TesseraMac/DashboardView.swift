@@ -124,11 +124,8 @@ struct WindowAccessor: NSViewRepresentable {
                 w.isMovableByWindowBackground = false
                 w.titlebarAppearsTransparent = true
                 w.backgroundColor = NSColor(Style.void)
-                #if DEBUG
-                // A development copy shares the app's bundle id: its window must not become the
-                // frame the real app opens with next time.
-                if Preferences.store !== UserDefaults.standard { w.setFrameAutosaveName("") }
-                #endif
+                // Its window must not become the frame the real app opens with next time.
+                if Preferences.isDevelopmentCopy { w.setFrameAutosaveName("") }
                 onWindow(w)
             }
         }

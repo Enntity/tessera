@@ -67,4 +67,8 @@ public enum Preferences {
         #endif
         return .standard
     }()
+
+    /// A development instance shares the app's bundle id, so it must leave alone what macOS keeps
+    /// per app: the saved window frame, and notifications (its own would appear as the app's).
+    public static var isDevelopmentCopy: Bool { store !== UserDefaults.standard }
 }

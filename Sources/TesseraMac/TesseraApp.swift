@@ -85,7 +85,7 @@ final class AppModel {
             MainActor.assumeIsolated { self?.workspace.prepareForQuit() }
         }
         // UNUserNotificationCenter requires an app bundle; a bare `swift run` binary goes without.
-        if Bundle.main.bundleIdentifier != nil {
+        if Bundle.main.bundleIdentifier != nil, !Preferences.isDevelopmentCopy {
             notifier = AttentionNotifier { [weak self] id in self?.open(id) }
         }
         // The Dock badge and alerts follow the board's attention state.
