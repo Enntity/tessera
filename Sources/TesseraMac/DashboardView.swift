@@ -65,7 +65,8 @@ struct UndoToast: View {
         .padding(.horizontal, 14)
         .padding(.vertical, 8)
         .background(Style.glass, in: Capsule())
-        .overlay(Capsule().strokeBorder(Style.ink.opacity(0.15)))
+        // Left to take clicks, the outline swallows those on Undo's centre line.
+        .overlay(Capsule().strokeBorder(Style.ink.opacity(0.15)).allowsHitTesting(false))
         .shadow(color: .black.opacity(0.5), radius: 20, y: 8)
         .task(id: toast) {
             try? await Task.sleep(for: .seconds(8))
