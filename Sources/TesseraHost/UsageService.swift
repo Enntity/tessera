@@ -19,19 +19,25 @@ public final class UsageService {
     @ObservationIgnored private var failures: [String: Int] = [:]
     @ObservationIgnored private var lastGood: [String: Date] = [:]
     @ObservationIgnored private let claudeLocal = ClaudeLocalUsage()
-    /// Where the Claude plan's limits come from, once the user connects it (see `ClaudeStatusTap`).
-    @ObservationIgnored private let claudeTap: ClaudeStatusTap
-    /// Watches Tessera's data folder, so limits the tap records show at once.
-    @ObservationIgnored private var claudeWatch: DispatchSourceFileSystemObject?
-    @ObservationIgnored private var claudeRecordedAt: Date?
-    @ObservationIgnored private var claudeRefreshPending = false
+    /// The user agreed to Tessera reading Claude Code's `/usage` in the background (`ClaudeUsageProbe`).
+    public private(set) var claudeChecksOn = Preferences.store.bool(forKey: "tessera.claudeUsageChecks") {
+        didSet { Preferences.store.set(claudeChecksOn, forKey: "tessera.claudeUsageChecks") }
+    }
+    /// The plan as `/usage` last showed it, and when; and why the last read didn't get it.
+    @ObservationIgnored private var claudePlan: (windows: [ClaudeUsageScreen.Window], at: Date)?
+    @ObservationIgnored private var claudePlanNote: String?
+    @ObservationIgnored private var claudeProbe: ClaudeUsageProbe?
+    /// When `/usage` may next be read: every few minutes, and longer after Anthropic said not now.
+    @ObservationIgnored private var claudeProbeAt = Date.distantPast
+    static let claudeProbeEvery: TimeInterval = 600
+    @ObservationIgnored private let directory: URL
     /// What `claude auth status` said last, and when: asked again every few minutes, or when forced.
     @ObservationIgnored private var claudeAuth: (signedIn: Bool?, at: Date)?
     /// When the user last started signing in from the card: refusals from before then are answered.
     @ObservationIgnored private var claudeSignInStartedAt: Date?
     /// Claude Code in a terminal isn't signed in (or its sign-in has run out): the card offers to sign in.
     static let claudeSignIn = UsageReading.Fix(title: "Sign in to Claude Code", command: "claude auth login")
-    /// Signed in, but the tap isn't connected: the card offers to connect it (Tessera asks first).
+    /// Signed in, but plan limits aren't being read: the card offers to (Tessera asks first).
     static let claudeConnect = UsageReading.Fix(title: "Show plan limits", command: nil)
     @ObservationIgnored private let store: URL
     @ObservationIgnored private let session: URLSession = {
@@ -44,7 +50,7 @@ public final class UsageService {
 
     public init(directory: URL) {
         store = directory.appendingPathComponent("providers.json")
-        claudeTap = ClaudeStatusTap(directory: directory)
+        self.directory = directory
         // Local plan readers need no key, so they're on by default.
         configs = StateFile.loadList(UsageProviderConfig.self, from: store) ?? [UsageProviderConfig(id: "codex-plan", kind: .codexPlan)]
     }
@@ -59,52 +65,39 @@ public final class UsageService {
             MainActor.assumeIsolated { self?.refreshAll() }
         }
         timer?.tolerance = 30
-        watchClaudeTap()
+        // Plan limits once came through Claude Code's status line; put back the one that was replaced.
+        ClaudeStatusTap.retire(in: directory)
     }
 
-    /// Whether Claude Code's status line runs Tessera's tap (another tool may have replaced it).
-    public var claudeTapConnected: Bool { claudeTap.isConnected }
-
-    /// Connects the tap: edits Claude Code's settings.json (after keeping a copy). Ask the user first.
-    public func connectClaudeTap() throws {
-        try claudeTap.connect()
-        refreshClaude()
-    }
-
-    /// Puts back the status line the tap replaced.
-    public func disconnectClaudeTap() throws {
-        try claudeTap.disconnect()
-        refreshClaude()
-    }
-
-    private func refreshClaude() {
+    /// Starts (the user has agreed) or stops Tessera reading Claude Code's `/usage` in the background.
+    public func setClaudeChecks(_ on: Bool) {
+        claudeChecksOn = on
+        claudePlan = nil
+        claudePlanNote = nil
+        claudeProbeAt = .distantPast
         for c in configs where c.kind == .claudePlan { refresh(c, force: true) }
     }
 
-    /// The folder changes whenever anything in it is saved; only a new recording from the tap counts,
-    /// and a busy session's stream of them refreshes the card at most every few seconds.
-    private func watchClaudeTap() {
-        let fd = open(claudeTap.directory.path, O_EVTONLY)
-        guard fd >= 0 else { return }
-        let source = DispatchSource.makeFileSystemObjectSource(fileDescriptor: fd, eventMask: .write, queue: .main)
-        source.setEventHandler { [weak self] in
-            MainActor.assumeIsolated {
-                guard let self, !self.claudeRefreshPending else { return }
-                let at = FileStat(self.claudeTap.recorded.path)?.modified
-                guard at != self.claudeRecordedAt else { return }
-                self.claudeRecordedAt = at
-                self.claudeRefreshPending = true
-                DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
-                    MainActor.assumeIsolated {
-                        self.claudeRefreshPending = false
-                        self.refreshClaude()
-                    }
-                }
+    /// Reads `/usage` once; the card is redrawn with what it said.
+    private func readClaudePlan(for config: UsageProviderConfig) {
+        let probe = ClaudeUsageProbe()
+        claudeProbe = probe
+        claudeProbeAt = Date().addingTimeInterval(Self.claudeProbeEvery)
+        probe.run { [weak self] result in
+            guard let self else { return }
+            self.claudeProbe = nil
+            switch result {
+            case .read(let windows):
+                self.claudePlan = (windows, Date())
+                self.claudePlanNote = nil
+            case .refused:
+                self.claudeProbeAt = Date().addingTimeInterval(3 * Self.claudeProbeEvery)
+                self.claudePlanNote = "Anthropic didn't give the plan limits just now; trying again later."
+            case .failed(let why):
+                self.claudePlanNote = why
             }
+            self.refresh(config)
         }
-        source.setCancelHandler { close(fd) }
-        source.resume()
-        claudeWatch = source
     }
 
     public func add(_ config: UsageProviderConfig, key: String?) {
@@ -199,38 +192,43 @@ public final class UsageService {
         }
     }
 
-    /// Claude plan: the 5-hour and weekly limits Claude Code last reported to its status line (once
-    /// the tap is connected), with the usage counted from local transcripts beside them; without
-    /// them, the counted usage alone — never a dead error — and the one thing that would add them.
+    /// Claude plan: the 5-hour and weekly limits as Claude Code's `/usage` last showed them (once the
+    /// user has agreed to Tessera reading it), with the usage counted from local transcripts beside
+    /// them; without them, the counted usage alone — never a dead error — and the one thing that
+    /// would add them.
     private func refreshClaudePlan(_ config: UsageProviderConfig, force: Bool) {
         if readings[config.id] == nil {
             readings[config.id] = UsageReading(id: config.id, name: config.name, symbol: config.kind.spec.symbol, status: .loading)
         }
-        let local = claudeLocal, tap = claudeTap
+        let local = claudeLocal
         let known = force ? nil : claudeAuth.flatMap { Date().timeIntervalSince($0.at) < 600 ? $0.signedIn : nil }
         Task {
-            let (counted, asked, connected, recorded) = await Task.detached(priority: .utility) {
-                (local.refresh(), known == nil ? ClaudeLocalUsage.signedIn() : known, tap.isConnected, tap.latest())
+            let (counted, asked) = await Task.detached(priority: .utility) {
+                (local.refresh(), known == nil ? ClaudeLocalUsage.signedIn() : known)
             }.value
             self.claudeAuth = (asked, Date())
             // Couldn't ask (no `claude` on the PATH): nothing to offer about signing in. Signed in, its
             // credentials may still have run out; its last reply in a terminal says so.
             let expired = counted.signInRefusedAt.map { $0 > self.claudeSignInStartedAt ?? .distantPast } ?? false
             let signedIn = (asked ?? true) && !expired
+            if self.claudeChecksOn, signedIn, self.claudeProbe == nil, Date() >= self.claudeProbeAt {
+                self.readClaudePlan(for: config)
+            }
             var reading: UsageReading
-            if let recorded, let limits = UsageAPI.claudeStatusReading(recorded.data, recordedAt: recorded.at, config: config) {
-                reading = limits
+            if self.claudeChecksOn, let plan = self.claudePlan {
+                reading = UsageAPI.claudeUsageReading(plan.windows, readAt: plan.at, config: config)
                 reading.lines.append("Local · 5h \(counted.fiveHours.tokens.compactTokens) · week \(counted.week.tokens.compactTokens) tokens")
+                if reading.message == nil { reading.message = self.claudePlanNote }
             } else {
                 reading = UsageAPI.claudeLocalReading(
                     config: config, fiveHours: (counted.fiveHours.tokens, counted.fiveHours.replies),
                     week: (counted.week.tokens, counted.week.replies),
                     limit: counted.limit.map { ($0.window, $0.resetsAt) },
                     note: !signedIn ? (expired ? "Claude Code's sign-in has run out; sign in again for its plan limits."
-                                                             : "Sign in to Claude Code for its usage and plan limits.")
-                        : connected ? "Plan limits show once a Claude Code session in a terminal gets a reply." : nil)
+                                               : "Sign in to Claude Code for its usage and plan limits.")
+                        : self.claudeChecksOn ? self.claudePlanNote ?? "Reading plan limits from Claude Code…" : nil)
             }
-            reading.fix = !signedIn ? Self.claudeSignIn : connected ? nil : Self.claudeConnect
+            reading.fix = !signedIn ? Self.claudeSignIn : self.claudeChecksOn ? nil : Self.claudeConnect
             self.readings[config.id] = reading
         }
     }

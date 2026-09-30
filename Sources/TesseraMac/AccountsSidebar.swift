@@ -38,7 +38,7 @@ struct AccountsSidebar: View {
                                 model.create { $0.launch(command: command) }
                                 usage.fixStarted(reading.id)
                             } else {
-                                connectClaudeTap()
+                                startClaudeChecks()
                             }
                         }
                             .help("Drag to reorder")
@@ -51,8 +51,8 @@ struct AccountsSidebar: View {
                                 Button("Refresh") {
                                     if let c = usage.configs.first(where: { $0.id == reading.id }) { usage.refresh(c) }
                                 }
-                                if usage.configs.first(where: { $0.id == reading.id })?.kind == .claudePlan, usage.claudeTapConnected {
-                                    Button("Disconnect from Claude Code's Status Line") { report { try usage.disconnectClaudeTap() } }
+                                if usage.configs.first(where: { $0.id == reading.id })?.kind == .claudePlan, usage.claudeChecksOn {
+                                    Button("Stop Checking Plan Limits") { usage.setClaudeChecks(false) }
                                 }
                                 Button("Remove", role: .destructive) { usage.remove(id: reading.id) }
                             }
@@ -81,30 +81,22 @@ struct AccountsSidebar: View {
         .chromeSurface(rule: .leading)
     }
 
-    /// Says exactly what connecting changes before anything is changed.
-    private func connectClaudeTap() {
+    /// Says exactly what Tessera will do before it does it.
+    private func startClaudeChecks() {
         let alert = NSAlert()
         alert.messageText = "Show Claude plan limits?"
         alert.informativeText = """
-            Claude Code reports your 5-hour and weekly limits to its status line. Tessera will set \
-            Claude Code's status line (in ~/.claude/settings.json) to a small script that records those \
-            numbers and then runs the status line you have now, so it looks the same.
+            Claude Code shows your 5-hour and weekly limits on its /usage screen. Every 10 minutes \
+            Tessera will start Claude Code out of sight in your home folder, open /usage, read those \
+            numbers, and quit. Nothing is sent to a model, no tokens are used, and nothing is saved as \
+            a conversation.
 
-            A copy of settings.json is kept as settings.json.tessera-backup. Disconnect from the card's \
-            menu puts your status line back.
+            Stop Checking Plan Limits in the card's menu turns this off.
             """
-        alert.addButton(withTitle: "Connect")
+        alert.addButton(withTitle: "Show Plan Limits")
         alert.addButton(withTitle: "Cancel")
         guard alert.runModal() == .alertFirstButtonReturn else { return }
-        report { try model.workspace.usage.connectClaudeTap() }
-    }
-
-    private func report(_ change: () throws -> Void) {
-        do { try change() } catch {
-            let alert = NSAlert(error: error)
-            alert.messageText = "Couldn't change Claude Code's status line"
-            alert.runModal()
-        }
+        model.workspace.usage.setClaudeChecks(true)
     }
 }
 

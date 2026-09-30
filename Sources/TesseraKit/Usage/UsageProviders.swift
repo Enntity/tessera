@@ -282,30 +282,23 @@ public enum UsageAPI {
         return reading
     }
 
-    /// The Claude plan's limits as Claude Code last handed them to its status line (`rate_limits`),
-    /// recorded at `recordedAt`. Nil when there are none to show: an API-key session, or every
-    /// window has reset since.
-    public static func claudeStatusReading(_ status: Data, recordedAt: Date, config: UsageProviderConfig, now: Date = Date()) -> UsageReading? {
-        guard let root = try? JSONSerialization.jsonObject(with: status) as? [String: Any],
-              let limits = root["rate_limits"] as? [String: Any] else { return nil }
-        let windows = [("five_hour", "5h"), ("seven_day", "Week")].compactMap { key, label -> PlanWindow? in
-            guard let w = limits[key] as? [String: Any], let used = number(w["used_percentage"]) else { return nil }
-            let resets = number(w["resets_at"]).map { Date(timeIntervalSince1970: $0) }
-            return resets.map { $0 > now } ?? true ? PlanWindow(label: label, usedPercent: used, resetsAt: resets) : nil
-        }
-        guard !windows.isEmpty else { return nil }
-        let spec = config.kind.spec
-        var reading = UsageReading(id: config.id, name: config.name, symbol: spec.symbol, topUpURL: spec.topUpURL, updatedAt: recordedAt)
-        applyPlan(windows, to: &reading, now: now)
-        if now.timeIntervalSince(recordedAt) >= 600 { reading.message = "As of \(recordedAt.shortAge(now: now)) ago" }
-        return reading
-    }
-
     /// One of a plan's usage windows (five hours, a week).
     struct PlanWindow {
         var label: String
         var usedPercent: Double
         var resetsAt: Date?
+        /// When it resets, as a person would say it, for readings that give no date ("6:50pm").
+        var resetsText: String?
+    }
+
+    /// The Claude plan as Claude Code's `/usage` panel showed it at `readAt`.
+    public static func claudeUsageReading(_ windows: [ClaudeUsageScreen.Window], readAt: Date, config: UsageProviderConfig,
+                                          now: Date = Date()) -> UsageReading {
+        let spec = config.kind.spec
+        var reading = UsageReading(id: config.id, name: config.name, symbol: spec.symbol, topUpURL: spec.topUpURL, updatedAt: readAt)
+        applyPlan(windows.map { PlanWindow(label: $0.label, usedPercent: $0.usedPercent, resetsText: $0.resets) }, to: &reading, now: now)
+        if now.timeIntervalSince(readAt) >= 1200 { reading.message = "As of \(readAt.shortAge(now: now)) ago" }
+        return reading
     }
 
     /// A plan's reading: the headline and the gauge both say how much is left of the window
@@ -316,7 +309,8 @@ public enum UsageAPI {
         reading.headline = "\(max(0, 100 - Int(used.rounded())))% left"
         reading.remaining = max(0, 1 - used / 100)
         reading.lines = windows.map { w in
-            "\(w.label) \(Int(w.usedPercent.rounded()))% used" + (w.resetsAt.map { " · resets \(relative($0, now: now))" } ?? "")
+            "\(w.label) \(Int(w.usedPercent.rounded()))% used"
+                + ((w.resetsAt.map { relative($0, now: now) } ?? w.resetsText).map { " · resets \($0)" } ?? "")
         }
     }
 

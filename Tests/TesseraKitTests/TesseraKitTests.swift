@@ -474,23 +474,43 @@ final class UsageAPITests: XCTestCase {
         XCTAssertEqual(r.headline, "$12.35 this month")
     }
 
-    func testClaudePlanFromTheStatusLine() throws {
+    func testClaudePlanFromTheUsagePanel() throws {
+        // What `/usage` puts on screen (bars, then the numbers; other sections around it).
+        let panel = [
+            "   Settings  Status   Config   Usage Stats",
+            "Session",
+            "Total cost:            $0.0000",
+            "Current session",
+            "█████                                             10% used",
+            "Resets 6:50pm (America/Phoenix)",
+            "",
+            "Current week (all models)",
+            "██████████                                        20% used",
+            "Resets Oct 7 at 5am (America/Phoenix)",
+            "Current week (Fable)",
+            "                                                   0% used",
+        ]
+        guard case .windows(let windows) = ClaudeUsageScreen.parse(panel) else { return XCTFail("no windows") }
+        // Read off a terminal, the panel's gaps are cells moved over, not written: they read as spaces.
+        let mirror = TerminalMirror(cols: 80, rows: 10)
+        mirror.feed(Array("Current session\r\n\u{1b}[5C11%\u{1b}[1Cused\r\n".utf8))
+        XCTAssertTrue(mirror.terminal.transcriptLines().contains("     11% used"))
+        XCTAssertEqual(windows, [.init(label: "5h", usedPercent: 10, resets: "6:50pm"),
+                                 .init(label: "Week", usedPercent: 20, resets: "Oct 7 at 5am")])
+        // Still loading: nothing yet. Refused: said so.
+        XCTAssertNil(ClaudeUsageScreen.parse(Array(panel.prefix(6))))
+        XCTAssertEqual(ClaudeUsageScreen.parse(["Error: Usage endpoint is rate limited. Please try again in a moment."]),
+                       .refused("Error: Usage endpoint is rate limited. Please try again in a moment."))
+
         let config = UsageProviderConfig(id: "cp", kind: .claudePlan)
         let now = Date(timeIntervalSince1970: 1_790_000_000)
-        let status = Data(#"{"model":{"display_name":"Opus"},"rate_limits":{"five_hour":{"used_percentage":42.4,"resets_at":1790003600},"seven_day":{"used_percentage":80,"resets_at":1790500000}}}"#.utf8)
-        let r = try XCTUnwrap(UsageAPI.claudeStatusReading(status, recordedAt: now, config: config, now: now))
+        let r = UsageAPI.claudeUsageReading(windows, readAt: now, config: config, now: now)
         // One number: what is left of the window nearest its limit, as the gauge shows.
-        XCTAssertEqual(r.headline, "20% left")
-        XCTAssertEqual(r.remaining!, 0.2, accuracy: 0.001)
-        XCTAssertEqual(r.lines, ["5h 42% used · resets in 1h 0m", "Week 80% used · resets in 5d"])
-        // Recorded a while ago, it says so; a window that has reset since drops out.
-        let later = now.addingTimeInterval(2 * 3600)
-        let old = try XCTUnwrap(UsageAPI.claudeStatusReading(status, recordedAt: now, config: config, now: later))
-        XCTAssertEqual(old.lines.first, "Week 80% used · resets in 5d")
-        XCTAssertEqual(old.message, "As of 2h ago")
-        // Nothing to show: no rate limits (an API-key session), or every window has reset.
-        XCTAssertNil(UsageAPI.claudeStatusReading(Data(#"{"model":{}}"#.utf8), recordedAt: now, config: config, now: now))
-        XCTAssertNil(UsageAPI.claudeStatusReading(status, recordedAt: now, config: config, now: now.addingTimeInterval(9 * 86_400)))
+        XCTAssertEqual(r.headline, "80% left")
+        XCTAssertEqual(r.remaining!, 0.8, accuracy: 0.001)
+        XCTAssertEqual(r.lines, ["5h 10% used · resets 6:50pm", "Week 20% used · resets Oct 7 at 5am"])
+        XCTAssertNil(r.message)
+        XCTAssertEqual(UsageAPI.claudeUsageReading(windows, readAt: now, config: config, now: now.addingTimeInterval(3600)).message, "As of 1h ago")
     }
 
     func testCodexPlanSaysWhatIsLeft() {

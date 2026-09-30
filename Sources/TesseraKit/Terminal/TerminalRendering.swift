@@ -248,7 +248,8 @@ public extension Terminal {
         var lines: [String] = []
         var row = buffer.totalLinesTrimmed
         while let line = getScrollInvariantLine(row: row) {
-            var text = line.translateToString(trimRight: true)
+            // Cells a program moved over without writing read back as NUL: they are spaces on screen.
+            var text = line.translateToString(trimRight: true).replacingOccurrences(of: "\u{0}", with: " ")
             while text.last == " " { text.removeLast() }
             lines.append(text)
             row += 1

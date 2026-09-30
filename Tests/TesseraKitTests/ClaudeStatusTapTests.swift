@@ -1,8 +1,8 @@
 import XCTest
 @testable import TesseraHost
 
-/// The status-line tap edits Claude Code's settings only as far as its own line, keeps what was
-/// there running, and gives it back exactly.
+/// Retiring the old status-line tap puts back exactly the status line it replaced, and touches
+/// nothing else in Claude Code's settings.
 final class ClaudeStatusTapTests: XCTestCase {
     private var root: URL!
 
@@ -13,61 +13,40 @@ final class ClaudeStatusTapTests: XCTestCase {
 
     override func tearDownWithError() throws { try? FileManager.default.removeItem(at: root) }
 
-    private func settings() throws -> [String: Any] {
-        try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: root.appendingPathComponent("claude/settings.json"))) as? [String: Any])
+    private func write(_ object: Any, to url: URL) throws {
+        try JSONSerialization.data(withJSONObject: object).write(to: url)
     }
 
-    /// Runs the tap as Claude Code would: the status JSON on stdin, what it prints back.
-    private func run(_ tap: ClaudeStatusTap, input: String) throws -> String {
-        let p = Process()
-        p.executableURL = URL(fileURLWithPath: "/bin/sh")
-        p.arguments = [tap.script.path]
-        let stdin = Pipe(), stdout = Pipe()
-        p.standardInput = stdin
-        p.standardOutput = stdout
-        try p.run()
-        stdin.fileHandleForWriting.write(Data(input.utf8))
-        try stdin.fileHandleForWriting.close()
-        p.waitUntilExit()
-        return String(decoding: stdout.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+    private func settings(_ url: URL) throws -> [String: Any] {
+        try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
     }
 
-    func testItWrapsTheStatusLineThereWasAndGivesItBack() throws {
-        let file = root.appendingPathComponent("claude/settings.json")
-        try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
-        let original: [String: Any] = ["model": "opus", "statusLine": ["type": "command", "command": "echo mine", "padding": 2]]
-        try JSONSerialization.data(withJSONObject: original).write(to: file)
-        let tap = ClaudeStatusTap(directory: root.appendingPathComponent("data"), settings: file)
-        XCTAssertFalse(tap.isConnected)
+    func testItPutsBackTheStatusLineItReplaced() throws {
+        let data = root.appendingPathComponent("data"), file = root.appendingPathComponent("settings.json")
+        let tap = "/bin/sh " + ClaudeStatusTap.quoted(data.appendingPathComponent("claude-statusline.sh").path)
+        try write(["model": "opus", "statusLine": ["type": "command", "command": tap, "padding": 2]], to: file)
+        let original: [String: Any] = ["type": "command", "command": "echo mine", "padding": 2]
+        try write(original, to: data.appendingPathComponent("claude-statusline.previous.json"))
+        try Data("x".utf8).write(to: data.appendingPathComponent("claude-status.json"))
 
-        try tap.connect()
-        XCTAssertTrue(tap.isConnected)
-        XCTAssertTrue(FileManager.default.fileExists(atPath: tap.backup.path))
-        var now = try settings()
+        ClaudeStatusTap.retire(in: data, settings: file)
+        let now = try settings(file)
+        XCTAssertEqual(now["statusLine"] as? NSDictionary, original as NSDictionary)
         XCTAssertEqual(now["model"] as? String, "opus")
-        XCTAssertEqual((now["statusLine"] as? [String: Any])?["padding"] as? Int, 2)
-        // Connecting again changes nothing (and doesn't take its own line for the user's).
-        try tap.connect()
-        XCTAssertEqual(try run(tap, input: #"{"model":{}}"#).trimmingCharacters(in: .newlines), "mine")
-
-        // Only a status that carries plan limits is recorded; the user's status line runs either way.
-        XCTAssertNil(tap.latest())
-        let status = #"{"rate_limits":{"five_hour":{"used_percentage":12,"resets_at":1790003600}}}"#
-        XCTAssertEqual(try run(tap, input: status).trimmingCharacters(in: .newlines), "mine")
-        XCTAssertEqual(tap.latest().map { String(decoding: $0.data, as: UTF8.self) }, status)
-
-        try tap.disconnect()
-        XCTAssertFalse(tap.isConnected)
-        now = try settings()
-        XCTAssertEqual(now["statusLine"] as? NSDictionary, original["statusLine"] as? NSDictionary)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: data.appendingPathComponent("claude-status.json").path))
     }
 
-    func testWithNoStatusLineItPrintsNothingAndDisconnectingRemovesIt() throws {
-        let file = root.appendingPathComponent("claude/settings.json")
-        let tap = ClaudeStatusTap(directory: root.appendingPathComponent("data"), settings: file)
-        try tap.connect()
-        XCTAssertEqual(try run(tap, input: #"{"rate_limits":{}}"#), "")
-        try tap.disconnect()
-        XCTAssertNil(try settings()["statusLine"])
+    func testWithNoStatusLineBeforeItRemovesItsOwn_AndLeavesOthersAlone() throws {
+        let data = root.appendingPathComponent("data"), file = root.appendingPathComponent("settings.json")
+        let tap = "/bin/sh " + ClaudeStatusTap.quoted(data.appendingPathComponent("claude-statusline.sh").path)
+        try write(["statusLine": ["type": "command", "command": tap]], to: file)
+        try write([String: Any](), to: data.appendingPathComponent("claude-statusline.previous.json"))
+        ClaudeStatusTap.retire(in: data, settings: file)
+        XCTAssertNil(try settings(file)["statusLine"])
+
+        // Someone else's status line is not Tessera's to touch.
+        try write(["statusLine": ["type": "command", "command": "echo theirs"]], to: file)
+        ClaudeStatusTap.retire(in: data, settings: file)
+        XCTAssertEqual((try settings(file)["statusLine"] as? [String: Any])?["command"] as? String, "echo theirs")
     }
 }
