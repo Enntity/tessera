@@ -28,6 +28,8 @@ public final class AgentAppWatcher {
     public private(set) var codexRateLimits: CodexRateLimits?
     /// Sessions idle longer than this drop off the board.
     public var lookback: TimeInterval = 36 * 3600
+    /// The lookbacks Settings offers, in hours.
+    public static let lookbackHours: ClosedRange<Double> = 1...240
     /// The first scan has come back (until then, `sessions` being empty means nothing).
     @ObservationIgnored public private(set) var hasScanned = false
 

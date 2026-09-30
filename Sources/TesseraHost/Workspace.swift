@@ -553,7 +553,7 @@ public final class Workspace {
         resumeOnLaunch = saved.resumeOnLaunch ?? true
         savedOrder = saved.order ?? []
         hiddenAgents = saved.hidden ?? [:]
-        if let hours = saved.agentLookbackHours { agents.lookback = hours * 3600 }
+        if let hours = saved.agentLookbackHours, AgentAppWatcher.lookbackHours.contains(hours) { agents.lookback = hours * 3600 }
         // One tile per conversation; "continue latest" only where it can't collide (see RestorePlan).
         let plan = RestorePlan.plan(tiles.filter { $0.kind == .terminal }.map { tile in
             RestorePlan.Tile(id: tile.id, command: tile.command, cwd: tile.cwd ?? defaultDirectory, sessionId: tile.sessionId)

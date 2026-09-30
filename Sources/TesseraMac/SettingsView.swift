@@ -210,8 +210,9 @@ struct GeneralSettings: View {
                     }
                 }
                 Stepper("Show sessions active in the last \(Int(workspace.agents.lookback / 3600)) hours",
-                        value: Binding(get: { workspace.agents.lookback / 3600 }, set: { workspace.agents.lookback = $0 * 3600; workspace.save() }),
-                        in: 1...240, step: 6)
+                        value: Binding(get: { workspace.agents.lookback / 3600 }, set: { workspace.agents.lookback = $0 * 3600 }),
+                        in: AgentAppWatcher.lookbackHours, step: 6)
+                    .onChange(of: workspace.agents.lookback) { _, _ in workspace.save() }
             }
         }
         .formStyle(.grouped)
