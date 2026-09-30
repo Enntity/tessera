@@ -26,10 +26,11 @@ struct DashboardView: View {
                             TabStrip()
                             BoardView()
                         }
+                        // Over the board's own bottom edge, in the margin under the last row.
                         .overlay(alignment: .bottom) {
                             if let toast = model.closedToast {
                                 UndoToast(toast: toast)
-                                    .padding(.bottom, Style.Space.xxl)
+                                    .padding(.bottom, Style.Space.s)
                                     .transition(.move(edge: .bottom).combined(with: .opacity))
                             }
                         }
