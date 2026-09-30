@@ -24,9 +24,9 @@ Native macOS app, with a focused iOS companion built on the same core.
   free port with `--no-open`),
   signs the web tile in with its one-time token, and selects that session. The server stops when
   Tessera quits — or crashes.
-- **Attention.** Output-then-silence → *Done* (green breathing ring). Permission prompts, `(y/n)`,
+- **Attention.** Output-then-silence → *Done* (a calm green ring). Permission prompts, `(y/n)`,
   "Do you want to…", OSC 9/777 notifications, Claude's own "needs action" turn summaries, and
-  Codex approval events → *Needs you* (amber comet ring), plus a Dock badge and system
+  Codex approval events → *Needs you* (a breathing amber ring), plus a Dock badge and system
   notifications while Tessera is in the background. ⌘J jumps to the next one.
 - **Web tiles.** Live, scaled WKWebViews; unread counts in titles (`(3) Inbox`) raise attention.
 - **Accounts sidebar.** Remaining balance / plan headroom with one-click top-up: OpenRouter,
