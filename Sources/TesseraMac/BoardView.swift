@@ -336,12 +336,19 @@ struct PageStill: View {
     let browser: BrowserSession
 
     var body: some View {
-        if let image = browser.snapshot {
-            Image(nsImage: image).resizable().aspectRatio(contentMode: .fill)
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top).clipped()
-        } else {
-            Color.black
-        }
+        Color.black.overlay(alignment: .top) { browser.snapshot.map { FilledFromTop(image: $0) } }.clipped()
+    }
+}
+
+/// An image across the whole width it is given, from the top down. It is laid over something of
+/// the right size, and cut to it: by itself it would ask for the height that width gives it, and
+/// make a tile taller than its place in the grid.
+struct FilledFromTop: View {
+    let image: NSImage
+    var interpolation = Image.Interpolation.medium
+
+    var body: some View {
+        Image(nsImage: image).interpolation(interpolation).resizable().aspectRatio(contentMode: .fill)
     }
 }
 
@@ -351,15 +358,9 @@ struct PrivateWebCover: View {
     let browser: BrowserSession
 
     var body: some View {
-        ZStack {
-            Style.deck
-            if let image = browser.mosaic {
-                Image(nsImage: image).interpolation(.none).resizable().aspectRatio(contentMode: .fill)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-                    .clipped()
-            }
-        }
-        .allowsHitTesting(false)
+        Style.deck.overlay(alignment: .top) { browser.mosaic.map { FilledFromTop(image: $0, interpolation: .none) } }
+            .clipped()
+            .allowsHitTesting(false)
         .task {
             while !Task.isCancelled {
                 browser.refreshSnapshot(force: true)
