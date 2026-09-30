@@ -170,6 +170,8 @@ public enum Style {
         public static let sidebar: CGFloat = 290
         /// The Needs-you lane.
         public static let lane: CGFloat = 220
+        /// The least room the tabs keep in their strip when the filter's chips want it.
+        public static let tabs: CGFloat = 220
         /// The filter field in the top bar: as wide as it gets, and as narrow.
         public static let filter: CGFloat = 260
         public static let filterMin: CGFloat = 120

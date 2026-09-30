@@ -422,7 +422,7 @@ struct TabStrip: View {
             }
             .padding(.horizontal, Style.Space.l)
         }
-        .frame(minWidth: Style.Metrics.lane)
+        .frame(minWidth: Style.Metrics.tabs)
     }
 
     private func file(_ tileId: String, into groupId: String?) {

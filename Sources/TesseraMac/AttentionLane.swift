@@ -50,8 +50,8 @@ struct AttentionLane: View {
 }
 
 /// One waiting tile: what it is, why it waits (its question, its error, what it finished with), and
-/// for how long. A click opens it, as a click on its tile does. Under the pointer, a terminal with
-/// a question grows a row of the answers a phone offers, typed into it without opening it.
+/// for how long. A button: it opens the tile, as a click on the tile does. Under the pointer, a
+/// terminal with a question grows a row of the answers a phone offers, typed into it unopened.
 struct LaneRow: View {
     @Environment(AppModel.self) private var model
     @Environment(\.tesseraPrivacy) private var privacy
@@ -65,42 +65,49 @@ struct LaneRow: View {
             #if DEBUG
             let hovering = hovering || model.debugHover == id
             #endif
-            VStack(alignment: .leading, spacing: Style.Space.xxs) {
-                HStack(spacing: Style.Space.xs) {
-                    Image(systemName: info.flavor.symbol)
-                        .font(Style.ui(.caption, .semibold))
-                        .foregroundStyle(Style.accent(info.flavor))
-                        .frame(width: Style.Space.xl)
-                    Text(info.title).font(Style.label).foregroundStyle(Style.ink).lineLimit(1)
-                    if info.activity == .done { Dot(Style.mint).padding(.leading, Style.Space.xxs) }
-                    Spacer(minLength: Style.Space.xs)
-                    Age(of: info.lastActivityAt).font(Style.caption).foregroundStyle(Style.muted)
+            VStack(alignment: .leading, spacing: 0) {
+                Button { model.open(id) } label: {
+                    VStack(alignment: .leading, spacing: Style.Space.xxs) {
+                        HStack(spacing: Style.Space.xs) {
+                            Image(systemName: info.flavor.symbol)
+                                .font(Style.ui(.caption, .semibold))
+                                .foregroundStyle(Style.accent(info.flavor))
+                                .frame(width: Style.Space.xl)
+                            Text(info.title).font(Style.label).foregroundStyle(Style.ink).lineLimit(1)
+                            if info.activity == .done { Dot(Style.mint).padding(.leading, Style.Space.xxs) }
+                            Spacer(minLength: Style.Space.xs)
+                            Age(of: info.lastActivityAt).font(Style.caption).foregroundStyle(Style.muted)
+                        }
+                        HStack(alignment: .firstTextBaseline, spacing: Style.Space.xs) {
+                            Text(privacy ? AttributedString(info.reason.obscured(true)) : info.reason.markdownPreview(120))
+                                .foregroundStyle(info.activity == .done ? Style.muted : Style.state(info.activity))
+                                // All of it under the pointer, where an answer may be about to be given.
+                                .lineLimit(hovering ? 6 : 2)
+                                .multilineTextAlignment(.leading)
+                                .fixedSize(horizontal: false, vertical: true)
+                            Spacer(minLength: Style.Space.xs)
+                            if isNext { Text("⌘J").foregroundStyle(Style.muted) }
+                        }
+                        .font(Style.caption)
+                        // Under the title, past the glyph.
+                        .padding(.leading, Style.Space.xl + Style.Space.xs)
+                    }
+                    .padding(.leading, Style.Space.s)
+                    .padding(.trailing, Style.Space.m)
+                    .padding(.vertical, Style.Space.s)
+                    .contentShape(Rectangle())
                 }
-                HStack(alignment: .firstTextBaseline, spacing: Style.Space.xs) {
-                    Text(privacy ? AttributedString(info.reason.obscured(true)) : info.reason.markdownPreview(120))
-                        .foregroundStyle(info.activity == .done ? Style.muted : Style.state(info.activity))
-                        // All of it under the pointer, where an answer may be about to be given.
-                        .lineLimit(hovering ? 6 : 2)
-                        .fixedSize(horizontal: false, vertical: true)
-                    Spacer(minLength: Style.Space.xs)
-                    if isNext { Text("⌘J").foregroundStyle(Style.muted) }
+                .buttonStyle(.plain)
+                if hovering, info.kind == .terminal, info.activity == .needsInput {
+                    answers.padding(.horizontal, Style.Space.m).padding(.bottom, Style.Space.m)
                 }
-                .font(Style.caption)
-                // Under the title, past the glyph.
-                .padding(.leading, Style.Space.xl + Style.Space.xs)
-                if hovering, info.kind == .terminal, info.activity == .needsInput { answers }
             }
-            .padding(.leading, Style.Space.s)
-            .padding(.trailing, Style.Space.m)
-            .padding(.vertical, Style.Space.s)
             .background(model.workspace.selectedId == id ? Style.Neutral.selected : hovering ? Style.Neutral.hover : .clear,
                         in: Style.shape(Style.Radius.m))
             .cardSurface()
-            .contentShape(Rectangle())
-            .onTapGesture { model.open(id) }
+            .help([info.title, privacy ? nil : info.reason].compactMap { $0 }.joined(separator: "\n"))
             .onHover { self.hovering = $0 }
             .animation(Style.Motion.quick, value: hovering)
-            .help([info.title, privacy ? nil : info.reason].compactMap { $0 }.joined(separator: "\n"))
         }
     }
 
@@ -120,8 +127,6 @@ struct LaneRow: View {
                 .help("Type \(answer.label) into this terminal")
             }
         }
-        .padding(.top, Style.Space.xs)
-        .padding(.leading, Style.Space.xxs)
         .transition(.opacity)
     }
 }
