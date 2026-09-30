@@ -201,7 +201,7 @@ public struct UsageRow: View {
                     }
                 }
                 if let fix = reading.fix, let onFix {
-                    Button { onFix(fix) } label: { Label(fix.title, systemImage: "terminal") }
+                    Button { onFix(fix) } label: { Label(fix.title, systemImage: fix.command == nil ? "gauge.with.needle" : "terminal") }
                         .buttonStyle(.capsulePrimary)
                         .padding(.top, Style.Space.xs)
                 }

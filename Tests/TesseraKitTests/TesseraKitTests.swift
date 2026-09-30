@@ -474,13 +474,23 @@ final class UsageAPITests: XCTestCase {
         XCTAssertEqual(r.headline, "$12.35 this month")
     }
 
-    func testClaudePlanWindows() throws {
+    func testClaudePlanFromTheStatusLine() throws {
         let config = UsageProviderConfig(id: "cp", kind: .claudePlan)
-        let r = try UsageAPI.parse(Data(#"{"five_hour":{"utilization":42.0,"resets_at":null},"seven_day":{"utilization":80}}"#.utf8), for: config)
+        let now = Date(timeIntervalSince1970: 1_790_000_000)
+        let status = Data(#"{"model":{"display_name":"Opus"},"rate_limits":{"five_hour":{"used_percentage":42.4,"resets_at":1790003600},"seven_day":{"used_percentage":80,"resets_at":1790500000}}}"#.utf8)
+        let r = try XCTUnwrap(UsageAPI.claudeStatusReading(status, recordedAt: now, config: config, now: now))
         // One number: what is left of the window nearest its limit, as the gauge shows.
         XCTAssertEqual(r.headline, "20% left")
         XCTAssertEqual(r.remaining!, 0.2, accuracy: 0.001)
-        XCTAssertEqual(r.lines, ["5h 42% used", "Week 80% used"])
+        XCTAssertEqual(r.lines, ["5h 42% used · resets in 1h 0m", "Week 80% used · resets in 5d"])
+        // Recorded a while ago, it says so; a window that has reset since drops out.
+        let later = now.addingTimeInterval(2 * 3600)
+        let old = try XCTUnwrap(UsageAPI.claudeStatusReading(status, recordedAt: now, config: config, now: later))
+        XCTAssertEqual(old.lines.first, "Week 80% used · resets in 5d")
+        XCTAssertEqual(old.message, "As of 2h ago")
+        // Nothing to show: no rate limits (an API-key session), or every window has reset.
+        XCTAssertNil(UsageAPI.claudeStatusReading(Data(#"{"model":{}}"#.utf8), recordedAt: now, config: config, now: now))
+        XCTAssertNil(UsageAPI.claudeStatusReading(status, recordedAt: now, config: config, now: now.addingTimeInterval(9 * 86_400)))
     }
 
     func testCodexPlanSaysWhatIsLeft() {
@@ -511,7 +521,7 @@ final class UsageAPITests: XCTestCase {
         XCTAssertEqual(UsageAPI.backoff(failures: 1, retryAfter: nil), 300)
         XCTAssertEqual(UsageAPI.backoff(failures: 3, retryAfter: nil), 1200)
         XCTAssertEqual(UsageAPI.backoff(failures: 9, retryAfter: nil), 3600)
-        XCTAssertEqual(UsageAPI.minimumInterval(for: .claudePlan), 300)
+        XCTAssertEqual(UsageAPI.minimumInterval(for: .claudePlan), 0)
     }
 
     func testBudgetInput() {
@@ -540,19 +550,6 @@ final class KeychainTests: XCTestCase {
         defer { Keychain.set(nil, account: account) }
         XCTAssertTrue(Keychain.contains(account: account))
         XCTAssertEqual(try Keychain.read(account: account), "secret")
-    }
-}
-
-final class ClaudeOAuthTests: XCTestCase {
-    let now = Date(timeIntervalSince1970: 1_800_000_000)
-    func credentials(expiresIn: TimeInterval) -> String {
-        #"{"claudeAiOauth":{"accessToken":"old-at","refreshToken":"old-rt","expiresAt":\#(Int((now.timeIntervalSince1970 + expiresIn) * 1000)),"scopes":["user:inference","user:profile"],"subscriptionType":"max"},"mcpOAuth":{"k":1}}"#
-    }
-
-    func testTokenIsUsableUntilCloseToExpiry() {
-        XCTAssertEqual(ClaudeOAuth.token(in: credentials(expiresIn: 3600), now: now)?.value, "old-at")
-        XCTAssertNil(ClaudeOAuth.token(in: credentials(expiresIn: 120), now: now))
-        XCTAssertNil(ClaudeOAuth.token(in: credentials(expiresIn: -60), now: now))
     }
 }
 

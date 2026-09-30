@@ -19,15 +19,20 @@ public final class UsageService {
     @ObservationIgnored private var failures: [String: Int] = [:]
     @ObservationIgnored private var lastGood: [String: Date] = [:]
     @ObservationIgnored private let claudeLocal = ClaudeLocalUsage()
-    /// When to next try the official Claude plan endpoint after it refused us.
-    @ObservationIgnored private var claudeOfficialRetryAt: Date?
-    /// The last official Claude reading and why the latest attempt didn't get one, so a refused
-    /// or skipped attempt keeps showing what's left instead of only local counts.
-    @ObservationIgnored private var claudeOfficial: UsageReading?
-    @ObservationIgnored private var claudeNote: String?
-    /// Claude Code isn't signed in at all: the card offers to run `claude`, which signs in.
-    @ObservationIgnored private var claudeNeedsSignIn = false
-    static let claudeSignIn = UsageReading.Fix(title: "Sign in with Claude Code", command: "claude")
+    /// Where the Claude plan's limits come from, once the user connects it (see `ClaudeStatusTap`).
+    @ObservationIgnored private let claudeTap: ClaudeStatusTap
+    /// Watches Tessera's data folder, so limits the tap records show at once.
+    @ObservationIgnored private var claudeWatch: DispatchSourceFileSystemObject?
+    @ObservationIgnored private var claudeRecordedAt: Date?
+    @ObservationIgnored private var claudeRefreshPending = false
+    /// What `claude auth status` said last, and when: asked again every few minutes, or when forced.
+    @ObservationIgnored private var claudeAuth: (signedIn: Bool?, at: Date)?
+    /// When the user last started signing in from the card: refusals from before then are answered.
+    @ObservationIgnored private var claudeSignInStartedAt: Date?
+    /// Claude Code in a terminal isn't signed in (or its sign-in has run out): the card offers to sign in.
+    static let claudeSignIn = UsageReading.Fix(title: "Sign in to Claude Code", command: "claude auth login")
+    /// Signed in, but the tap isn't connected: the card offers to connect it (Tessera asks first).
+    static let claudeConnect = UsageReading.Fix(title: "Show plan limits", command: nil)
     @ObservationIgnored private let store: URL
     @ObservationIgnored private let session: URLSession = {
         let c = URLSessionConfiguration.ephemeral
@@ -39,6 +44,7 @@ public final class UsageService {
 
     public init(directory: URL) {
         store = directory.appendingPathComponent("providers.json")
+        claudeTap = ClaudeStatusTap(directory: directory)
         // Local plan readers need no key, so they're on by default.
         configs = StateFile.loadList(UsageProviderConfig.self, from: store) ?? [UsageProviderConfig(id: "codex-plan", kind: .codexPlan)]
     }
@@ -53,6 +59,52 @@ public final class UsageService {
             MainActor.assumeIsolated { self?.refreshAll() }
         }
         timer?.tolerance = 30
+        watchClaudeTap()
+    }
+
+    /// Whether Claude Code's status line runs Tessera's tap (another tool may have replaced it).
+    public var claudeTapConnected: Bool { claudeTap.isConnected }
+
+    /// Connects the tap: edits Claude Code's settings.json (after keeping a copy). Ask the user first.
+    public func connectClaudeTap() throws {
+        try claudeTap.connect()
+        refreshClaude()
+    }
+
+    /// Puts back the status line the tap replaced.
+    public func disconnectClaudeTap() throws {
+        try claudeTap.disconnect()
+        refreshClaude()
+    }
+
+    private func refreshClaude() {
+        for c in configs where c.kind == .claudePlan { refresh(c, force: true) }
+    }
+
+    /// The folder changes whenever anything in it is saved; only a new recording from the tap counts,
+    /// and a busy session's stream of them refreshes the card at most every few seconds.
+    private func watchClaudeTap() {
+        let fd = open(claudeTap.directory.path, O_EVTONLY)
+        guard fd >= 0 else { return }
+        let source = DispatchSource.makeFileSystemObjectSource(fileDescriptor: fd, eventMask: .write, queue: .main)
+        source.setEventHandler { [weak self] in
+            MainActor.assumeIsolated {
+                guard let self, !self.claudeRefreshPending else { return }
+                let at = FileStat(self.claudeTap.recorded.path)?.modified
+                guard at != self.claudeRecordedAt else { return }
+                self.claudeRecordedAt = at
+                self.claudeRefreshPending = true
+                DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
+                    MainActor.assumeIsolated {
+                        self.claudeRefreshPending = false
+                        self.refreshClaude()
+                    }
+                }
+            }
+        }
+        source.setCancelHandler { close(fd) }
+        source.resume()
+        claudeWatch = source
     }
 
     public func add(_ config: UsageProviderConfig, key: String?) {
@@ -147,69 +199,39 @@ public final class UsageService {
         }
     }
 
-    /// Claude plan: the official 5-hour / weekly limits when Claude Code's sign-in works, otherwise
-    /// usage counted from local transcripts plus a hint — never a dead error.
+    /// Claude plan: the 5-hour and weekly limits Claude Code last reported to its status line (once
+    /// the tap is connected), with the usage counted from local transcripts beside them; without
+    /// them, the counted usage alone — never a dead error — and the one thing that would add them.
     private func refreshClaudePlan(_ config: UsageProviderConfig, force: Bool) {
         if readings[config.id] == nil {
             readings[config.id] = UsageReading(id: config.id, name: config.name, symbol: config.kind.spec.symbol, status: .loading)
         }
-        let tryOfficial = force || claudeOfficialRetryAt.map { Date() >= $0 } ?? true
-        let local = claudeLocal
-        Task { [session] in
-            let (counted, signedIn) = await Task.detached(priority: .utility) { (local.refresh(), ClaudeLocalUsage.signedIn()) }.value
-            // Signed in, Claude Code may keep a current sign-in where Tessera can't read it; then the
-            // counted usage stands on its own, with nothing for the user to do.
-            self.claudeNeedsSignIn = !signedIn
-            var official: UsageReading?
-            var note: String?
-            if tryOfficial {
-                if let token = await ClaudeTokenCache.shared.token(), let request = UsageAPI.request(for: config, key: token) {
-                    do {
-                        let (data, response) = try await session.data(for: request)
-                        let http = response as? HTTPURLResponse
-                        switch http?.statusCode ?? 0 {
-                        case 200..<300:
-                            official = try? UsageAPI.parse(data, for: config)
-                            self.claudeOfficialRetryAt = nil
-                        case 401, 403:
-                            await ClaudeTokenCache.shared.invalidate()
-                            self.claudeOfficialRetryAt = Date().addingTimeInterval(1800)
-                        case 429:
-                            note = "Official limits are rate-limited right now."
-                            self.claudeOfficialRetryAt = Date().addingTimeInterval(
-                                UsageAPI.backoff(failures: 1, retryAfter: http?.value(forHTTPHeaderField: "Retry-After")))
-                        case let code:
-                            note = "Official limits unavailable (HTTP \(code))."
-                            self.claudeOfficialRetryAt = Date().addingTimeInterval(900)
-                        }
-                    } catch {
-                        note = "Official limits unreachable: \(error.localizedDescription)"
-                        self.claudeOfficialRetryAt = Date().addingTimeInterval(300)
-                    }
-                } else {
-                    self.claudeOfficialRetryAt = Date().addingTimeInterval(1800)
-                }
-                if !signedIn { note = "Sign in to Claude Code for its usage and plan limits." }
-                self.claudeNote = note
-            } else {
-                note = self.claudeNote
-            }
-            if let official { self.claudeOfficial = official }
-            if var reading = self.claudeOfficial {
-                if official == nil {
-                    reading.message = [note, "limits from \(reading.updatedAt.shortAge()) ago"].compactMap { $0 }.joined(separator: " · ")
-                }
+        let local = claudeLocal, tap = claudeTap
+        let known = force ? nil : claudeAuth.flatMap { Date().timeIntervalSince($0.at) < 600 ? $0.signedIn : nil }
+        Task {
+            let (counted, asked, connected, recorded) = await Task.detached(priority: .utility) {
+                (local.refresh(), known == nil ? ClaudeLocalUsage.signedIn() : known, tap.isConnected, tap.latest())
+            }.value
+            self.claudeAuth = (asked, Date())
+            // Couldn't ask (no `claude` on the PATH): nothing to offer about signing in. Signed in, its
+            // credentials may still have run out; its last reply in a terminal says so.
+            let expired = counted.signInRefusedAt.map { $0 > self.claudeSignInStartedAt ?? .distantPast } ?? false
+            let signedIn = (asked ?? true) && !expired
+            var reading: UsageReading
+            if let recorded, let limits = UsageAPI.claudeStatusReading(recorded.data, recordedAt: recorded.at, config: config) {
+                reading = limits
                 reading.lines.append("Local · 5h \(counted.fiveHours.tokens.compactTokens) · week \(counted.week.tokens.compactTokens) tokens")
-                reading.fix = self.claudeNeedsSignIn ? Self.claudeSignIn : nil
-                self.readings[config.id] = reading
             } else {
-                var reading = UsageAPI.claudeLocalReading(
+                reading = UsageAPI.claudeLocalReading(
                     config: config, fiveHours: (counted.fiveHours.tokens, counted.fiveHours.replies),
                     week: (counted.week.tokens, counted.week.replies),
-                    limit: counted.limit.map { ($0.window, $0.resetsAt) }, note: note)
-                reading.fix = self.claudeNeedsSignIn ? Self.claudeSignIn : nil
-                self.readings[config.id] = reading
+                    limit: counted.limit.map { ($0.window, $0.resetsAt) },
+                    note: !signedIn ? (expired ? "Claude Code's sign-in has run out; sign in again for its plan limits."
+                                                             : "Sign in to Claude Code for its usage and plan limits.")
+                        : connected ? "Plan limits show once a Claude Code session in a terminal gets a reply." : nil)
             }
+            reading.fix = !signedIn ? Self.claudeSignIn : connected ? nil : Self.claudeConnect
+            self.readings[config.id] = reading
         }
     }
 
@@ -217,15 +239,10 @@ public final class UsageService {
     /// times, so the card corrects itself once it has worked.
     public func fixStarted(_ id: String) {
         guard let config = configs.first(where: { $0.id == id }) else { return }
-        for delay in [20.0, 60, 180] {
+        if config.kind == .claudePlan { claudeSignInStartedAt = Date() }
+        for delay in [20.0, 60, 180, 300] {
             DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
-                MainActor.assumeIsolated {
-                    guard let self, self.claudeNeedsSignIn || config.kind != .claudePlan else { return }
-                    Task {
-                        await ClaudeTokenCache.shared.invalidate()
-                        self.refresh(config, force: true)
-                    }
-                }
+                MainActor.assumeIsolated { self?.refresh(config, force: true) }
             }
         }
     }
@@ -262,45 +279,4 @@ public final class UsageService {
         StateFile.save(configs, to: store)
     }
 
-}
-
-/// Claude Code stores its OAuth sign-in as JSON in the login Keychain. macOS asks the user before
-/// letting Tessera read it, and nothing is read unless the Claude plan provider is added. The token
-/// is only ever sent to Anthropic and never modified: when it has expired, running `claude` renews it.
-actor ClaudeTokenCache {
-    static let shared = ClaudeTokenCache()
-    private static let service = "Claude Code-credentials"
-    private var cached: (token: ClaudeOAuth.Token, at: Date)?
-
-    func token() async -> String? {
-        let now = Date()
-        if let cached, now.timeIntervalSince(cached.at) < 600, cached.token.expiresAt > now.addingTimeInterval(ClaudeOAuth.margin) {
-            return cached.token.value
-        }
-        guard let raw = Keychain.firstGenericPassword(service: Self.service),
-              let t = ClaudeOAuth.token(in: raw, now: now) else { return nil }
-        cached = (t, now)
-        return t.value
-    }
-
-    func invalidate() { cached = nil }
-}
-
-/// Claude Code's stored sign-in format.
-enum ClaudeOAuth {
-    struct Token { var value: String; var expiresAt: Date }
-    /// Treat a token this close to expiry as expired, so a request never races it.
-    static let margin: TimeInterval = 300
-
-    private static func oauth(_ credentials: String) -> [String: Any]? {
-        (try? JSONSerialization.jsonObject(with: Data(credentials.utf8)) as? [String: Any])?["claudeAiOauth"] as? [String: Any]
-    }
-
-    /// The access token, when present and not about to expire.
-    static func token(in credentials: String, now: Date) -> Token? {
-        guard let o = oauth(credentials), let value = o["accessToken"] as? String,
-              let ms = (o["expiresAt"] as? NSNumber)?.doubleValue else { return nil }
-        let expiresAt = Date(timeIntervalSince1970: ms / 1000)
-        return expiresAt > now.addingTimeInterval(margin) ? Token(value: value, expiresAt: expiresAt) : nil
-    }
 }

@@ -44,17 +44,6 @@ public enum Keychain {
                                     kSecMatchLimit as String: kSecMatchLimitOne]
         return SecItemCopyMatching(query as CFDictionary, nil) == errSecSuccess
     }
-
-    /// Any generic password by service name alone (used to read Claude Code's own sign-in).
-    public static func firstGenericPassword(service: String) -> String? {
-        let query: [String: Any] = [kSecClass as String: kSecClassGenericPassword,
-                                    kSecAttrService as String: service,
-                                    kSecReturnData as String: true,
-                                    kSecMatchLimit as String: kSecMatchLimitOne]
-        var out: CFTypeRef?
-        guard SecItemCopyMatching(query as CFDictionary, &out) == errSecSuccess, let data = out as? Data else { return nil }
-        return String(data: data, encoding: .utf8)
-    }
 }
 
 public enum Preferences {

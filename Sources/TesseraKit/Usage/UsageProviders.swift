@@ -16,14 +16,14 @@ public struct UsageReading: Codable, Identifiable, Hashable, Sendable {
     public var message: String?
     public var topUpURL: String?
     public var updatedAt: Date
-    /// What the user can do about what `message` says, as one command (a sign-in that has run out:
-    /// `claude`). The card offers it; clicking the card runs it.
+    /// What the user can do about what `message` says. The card offers it; clicking the card does it.
     public var fix: Fix?
 
     public struct Fix: Codable, Hashable, Sendable {
         public var title: String
-        public var command: String
-        public init(title: String, command: String) {
+        /// Run in a new terminal (signing in: `claude`); nil when the host does it itself (after asking).
+        public var command: String?
+        public init(title: String, command: String?) {
             self.title = title
             self.command = command
         }
@@ -113,7 +113,7 @@ public extension UsageProviderKind {
                   keyHint: "xai-…", help: "xAI API key. Shows key status; top up in the console.")
         case .claudePlan:
             .init(name: "Claude plan", symbol: "sparkle", topUpURL: "https://claude.ai/settings/usage",
-                  keyHint: nil, help: "Official 5-hour and weekly limits via Claude Code's sign-in when it's current; otherwise usage counted from your local Claude transcripts.")
+                  keyHint: nil, help: "The 5-hour and weekly limits Claude Code reports to its status line, and usage counted from your local Claude transcripts. No key needed.")
         case .codexPlan:
             .init(name: "ChatGPT / Codex plan", symbol: "chevron.left.forwardslash.chevron.right", topUpURL: "https://chatgpt.com/codex/settings/usage",
                   keyHint: nil, help: "Reads the rate limits Codex records in ~/.codex/sessions. No key needed.")
@@ -154,7 +154,7 @@ public enum UsageAPI {
     public static func minimumInterval(for kind: UsageProviderKind) -> TimeInterval {
         switch kind {
         case .codexPlan: 0
-        case .claudePlan: 300
+        case .claudePlan: 0
         default: 60
         }
     }
@@ -196,11 +196,6 @@ public enum UsageAPI {
             r.setValue(key, forHTTPHeaderField: "x-api-key")
             r.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
             return r
-        case .claudePlan:
-            guard let r0 = bearer("https://api.anthropic.com/api/oauth/usage") else { return nil }
-            var r = r0
-            r.setValue("oauth-2025-04-20", forHTTPHeaderField: "anthropic-beta")
-            return r
         case .custom:
             guard let s = config.customBalanceURL, let u = URL(string: s) else { return nil }
             var r = URLRequest(url: u)
@@ -210,7 +205,7 @@ public enum UsageAPI {
                            forHTTPHeaderField: header)
             }
             return r
-        case .codexPlan:
+        case .codexPlan, .claudePlan:
             return nil
         }
     }
@@ -257,21 +252,13 @@ public enum UsageAPI {
             reading.headline = blocked ? "Key blocked" : "Key active"
             reading.status = blocked ? .error : .ok
             if let name = obj["name"] as? String { reading.lines = [name] }
-        case .claudePlan:
-            let windows: [(String, String)] = [("five_hour", "5h"), ("seven_day", "Week"), ("seven_day_opus", "Opus wk"), ("seven_day_sonnet", "Sonnet wk")]
-            let used = windows.compactMap { key, label -> PlanWindow? in
-                guard let w = obj[key] as? [String: Any], let util = number(w["utilization"]) else { return nil }
-                return PlanWindow(label: label, usedPercent: util, resetsAt: TranscriptSupport.date(w["resets_at"]))
-            }
-            guard !used.isEmpty else { throw Failure.shape("No plan windows in response") }
-            applyPlan(used, to: &reading, now: now)
         case .custom:
             let path = config.customJSONPath ?? ""
             guard let value = number(dig(json, path: path)) else { throw Failure.shape("No number at `\(path)`") }
             reading.headline = String(format: "%.2f", value)
             if let budget = config.monthlyBudget, budget > 0 { reading.remaining = min(1, max(0, value / budget)) }
-        case .codexPlan:
-            throw Failure.shape("Codex plan is read from local sessions")
+        case .codexPlan, .claudePlan:
+            throw Failure.shape("Plan limits are read locally")
         }
         return reading
     }
@@ -292,6 +279,25 @@ public enum UsageAPI {
             }
         }, to: &reading, now: now)
         reading.lines += limits.planType.map { ["Plan: \($0)"] } ?? []
+        return reading
+    }
+
+    /// The Claude plan's limits as Claude Code last handed them to its status line (`rate_limits`),
+    /// recorded at `recordedAt`. Nil when there are none to show: an API-key session, or every
+    /// window has reset since.
+    public static func claudeStatusReading(_ status: Data, recordedAt: Date, config: UsageProviderConfig, now: Date = Date()) -> UsageReading? {
+        guard let root = try? JSONSerialization.jsonObject(with: status) as? [String: Any],
+              let limits = root["rate_limits"] as? [String: Any] else { return nil }
+        let windows = [("five_hour", "5h"), ("seven_day", "Week")].compactMap { key, label -> PlanWindow? in
+            guard let w = limits[key] as? [String: Any], let used = number(w["used_percentage"]) else { return nil }
+            let resets = number(w["resets_at"]).map { Date(timeIntervalSince1970: $0) }
+            return resets.map { $0 > now } ?? true ? PlanWindow(label: label, usedPercent: used, resetsAt: resets) : nil
+        }
+        guard !windows.isEmpty else { return nil }
+        let spec = config.kind.spec
+        var reading = UsageReading(id: config.id, name: config.name, symbol: spec.symbol, topUpURL: spec.topUpURL, updatedAt: recordedAt)
+        applyPlan(windows, to: &reading, now: now)
+        if now.timeIntervalSince(recordedAt) >= 600 { reading.message = "As of \(recordedAt.shortAge(now: now)) ago" }
         return reading
     }
 

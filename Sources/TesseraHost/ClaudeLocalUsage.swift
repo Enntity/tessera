@@ -27,17 +27,26 @@ final class ClaudeLocalUsage: @unchecked Sendable {
     /// Tokens and replies per hour since the epoch.
     private var hourly: [Int: Totals] = [:]
     private var limit: Limit?
+    /// Claude Code in a terminal: its last reply, and the last time its sign-in was refused.
+    private var cliReplyAt: Date?
+    private var cliSignInFailedAt: Date?
     private let lock = NSLock()
     private let root: URL
     /// Transcripts are read this much at a time, so a first read of a huge one never holds it all.
     private let chunkSize: Int
     static let window: TimeInterval = 7 * 86_400
 
-    /// Whether Claude Code has an account signed in (`~/.claude.json` names one once it has).
-    static func signedIn(config: URL = URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent(".claude.json")) -> Bool {
-        guard let data = try? Data(contentsOf: config),
-              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return false }
-        return root["oauthAccount"] != nil
+    /// Whether Claude Code in a terminal is signed in, as it says itself (`claude auth status`): its
+    /// sign-in can run out while the desktop app, which keeps its own, goes on working. Nil when it
+    /// couldn't be asked (not installed, the shell didn't start). Takes a few seconds; call off main.
+    static func signedIn() -> Bool? {
+        LoginShell.run("claude auth status --json 2>/dev/null | /usr/bin/tr -d '\\n' | /usr/bin/sed 's/^/@auth /'")
+            .flatMap { LoginShell.tagged("auth", in: $0).first }
+            .flatMap(loggedIn(status:))
+    }
+
+    static func loggedIn(status json: String) -> Bool? {
+        (try? JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any])?["loggedIn"] as? Bool
     }
 
     init(root: URL = ClaudeSessions.projects, chunkSize: Int = 8 << 20) {
@@ -46,7 +55,10 @@ final class ClaudeLocalUsage: @unchecked Sendable {
     }
 
     /// Reads whatever was appended since last time. Call off the main thread.
-    func refresh(now: Date = Date()) -> (fiveHours: Totals, week: Totals, limit: Limit?) {
+    /// `signInRefusedAt`: when Claude Code in a terminal last heard that its sign-in no longer works,
+    /// if that is the last it heard (`auth status` still says signed in then: it has credentials,
+    /// just stale ones).
+    func refresh(now: Date = Date()) -> (fiveHours: Totals, week: Totals, limit: Limit?, signInRefusedAt: Date?) {
         lock.lock()
         defer { lock.unlock() }
         let fm = FileManager.default
@@ -70,7 +82,8 @@ final class ClaudeLocalUsage: @unchecked Sendable {
                 acc.replies += t.replies
             }
         }
-        return (sum(hours: 5), sum(hours: 24 * 7), limit.flatMap { $0.resetsAt > now ? $0 : nil })
+        return (sum(hours: 5), sum(hours: 24 * 7), limit.flatMap { $0.resetsAt > now ? $0 : nil },
+                cliSignInFailedAt.flatMap { $0 > cliReplyAt ?? .distantPast ? $0 : nil })
     }
 
     private func ingest(path: String, size: UInt64, since: Date) {
@@ -94,6 +107,9 @@ final class ClaudeLocalUsage: @unchecked Sendable {
                 }
                 Self.forEachLine(in: data[..<lastNewline], containing: [Self.limitKeys.refused]) { line in
                     if let hit = Self.limit(in: line), hit.resetsAt > limit?.resetsAt ?? .distantPast { limit = hit }
+                }
+                Self.forEachLine(in: data[..<lastNewline], containing: [Self.cliKeys.cli, Self.cliKeys.signInFailed]) { line in
+                    if let at = Self.timestamp(in: line), at > cliSignInFailedAt ?? .distantPast { cliSignInFailedAt = at }
                 }
             } else {
                 state.remainder = data
@@ -148,8 +164,15 @@ final class ClaudeLocalUsage: @unchecked Sendable {
         return Limit(window: window ?? "", resetsAt: Date(timeIntervalSince1970: seconds))
     }
 
+    private static let cliKeys = (cli: "\"entrypoint\":\"cli\"", signInFailed: "\"error\":\"authentication_failed\"",
+                                  apiError: Array("\"isApiErrorMessage\":true".utf8))
+
     private static let assistantKeys = (usage: Array("\"usage\":{".utf8), timestamp: Array("\"timestamp\":\"".utf8),
                                         message: Array("\"message\":{".utf8), id: Array("\"id\":\"".utf8))
+
+    private static func timestamp(in line: UnsafeRawBufferPointer) -> Date? {
+        find(assistantKeys.timestamp, in: line, from: 0).flatMap { quoted(in: line, from: $0 + assistantKeys.timestamp.count) }.flatMap(date)
+    }
 
     /// Pulls just the id, timestamp and usage numbers out of a transcript line. Lines can be huge
     /// (whole replies and tool calls), so only these few small spans are ever decoded.
@@ -158,6 +181,10 @@ final class ClaudeLocalUsage: @unchecked Sendable {
         guard let t = Self.find(keys.timestamp, in: line, from: 0),
               let ts = Self.quoted(in: line, from: t + keys.timestamp.count).flatMap(Self.date), ts >= since,
               let u = Self.find(keys.usage, in: line, from: 0) else { return }
+        if Self.find(Array(Self.cliKeys.cli.utf8), in: line, from: 0) != nil, Self.find(Self.cliKeys.apiError, in: line, from: 0) == nil,
+           ts > cliReplyAt ?? .distantPast {
+            cliReplyAt = ts
+        }
         // Streaming writes one entry per content block, all carrying the same message and usage.
         if let m = Self.find(keys.message, in: line, from: 0), let i = Self.find(keys.id, in: line, from: m),
            let id = Self.quoted(in: line, from: i + keys.id.count) {

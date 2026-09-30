@@ -34,8 +34,12 @@ struct AccountsSidebar: View {
                 VStack(spacing: Style.Space.m) {
                     ForEach(usage.orderedReadings) { reading in
                         UsageRow(reading: reading, onTopUp: { NSWorkspace.shared.open($0) }) { fix in
-                            model.create { $0.launch(command: fix.command) }
-                            usage.fixStarted(reading.id)
+                            if let command = fix.command {
+                                model.create { $0.launch(command: command) }
+                                usage.fixStarted(reading.id)
+                            } else {
+                                connectClaudeTap()
+                            }
                         }
                             .help("Drag to reorder")
                             .onDrag {
@@ -46,6 +50,9 @@ struct AccountsSidebar: View {
                             .contextMenu {
                                 Button("Refresh") {
                                     if let c = usage.configs.first(where: { $0.id == reading.id }) { usage.refresh(c) }
+                                }
+                                if usage.configs.first(where: { $0.id == reading.id })?.kind == .claudePlan, usage.claudeTapConnected {
+                                    Button("Disconnect from Claude Code's Status Line") { report { try usage.disconnectClaudeTap() } }
                                 }
                                 Button("Remove", role: .destructive) { usage.remove(id: reading.id) }
                             }
@@ -72,6 +79,32 @@ struct AccountsSidebar: View {
                 .padding(Style.Space.l)
         }
         .chromeSurface(rule: .leading)
+    }
+
+    /// Says exactly what connecting changes before anything is changed.
+    private func connectClaudeTap() {
+        let alert = NSAlert()
+        alert.messageText = "Show Claude plan limits?"
+        alert.informativeText = """
+            Claude Code reports your 5-hour and weekly limits to its status line. Tessera will set \
+            Claude Code's status line (in ~/.claude/settings.json) to a small script that records those \
+            numbers and then runs the status line you have now, so it looks the same.
+
+            A copy of settings.json is kept as settings.json.tessera-backup. Disconnect from the card's \
+            menu puts your status line back.
+            """
+        alert.addButton(withTitle: "Connect")
+        alert.addButton(withTitle: "Cancel")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        report { try model.workspace.usage.connectClaudeTap() }
+    }
+
+    private func report(_ change: () throws -> Void) {
+        do { try change() } catch {
+            let alert = NSAlert(error: error)
+            alert.messageText = "Couldn't change Claude Code's status line"
+            alert.runModal()
+        }
     }
 }
 

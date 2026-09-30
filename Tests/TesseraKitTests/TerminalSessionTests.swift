@@ -362,14 +362,34 @@ extension ClaudeLocalUsageTests {
         XCTAssertNil(usage.refresh(now: now.addingTimeInterval(7500)).limit)
     }
 
-    func testSignedInMeansAnAccountIsNamed() throws {
-        let file = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("claude-\(UUID().uuidString.prefix(6)).json")
-        defer { try? FileManager.default.removeItem(at: file) }
-        XCTAssertFalse(ClaudeLocalUsage.signedIn(config: file))
-        try #"{"numStartups":3}"#.write(to: file, atomically: true, encoding: .utf8)
-        XCTAssertFalse(ClaudeLocalUsage.signedIn(config: file))
-        try #"{"oauthAccount":{"emailAddress":"a@b.c"}}"#.write(to: file, atomically: true, encoding: .utf8)
-        XCTAssertTrue(ClaudeLocalUsage.signedIn(config: file))
+    func testAnExpiredSignInIsTheLastWordFromATerminalSession() throws {
+        let root = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("tessera-auth-\(UUID().uuidString.prefix(6))")
+        let project = root.appendingPathComponent("-tmp-proj")
+        try FileManager.default.createDirectory(at: project, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let now = ISO8601DateFormatter().date(from: "2026-09-30T22:00:00Z")!
+        func reply(_ id: String, at: String, entry: String) -> String {
+            #"{"type":"assistant","timestamp":"\#(at)","entrypoint":"\#(entry)","message":{"id":"\#(id)","usage":{"input_tokens":1}}}"#
+        }
+        let refused = #"{"type":"assistant","timestamp":"2026-09-30T21:43:13.119Z","entrypoint":"cli","message":{"id":"e","usage":{"input_tokens":0}},"error":"authentication_failed","isApiErrorMessage":true,"apiErrorStatus":401}"#
+        let path = project.appendingPathComponent("s.jsonl")
+        // A reply in the desktop app after the refusal doesn't count: its sign-in is its own.
+        try ([reply("a", at: "2026-09-30T20:00:00.000Z", entry: "cli"), refused, reply("b", at: "2026-09-30T21:50:00.000Z", entry: "claude-desktop")]
+                .joined(separator: "\n") + "\n").write(to: path, atomically: true, encoding: .utf8)
+        let usage = ClaudeLocalUsage(root: root)
+        XCTAssertNotNil(usage.refresh(now: now).signInRefusedAt)
+        // Signed in again, the next reply in a terminal clears it.
+        let handle = try FileHandle(forWritingTo: path)
+        handle.seekToEndOfFile()
+        handle.write(Data((reply("c", at: "2026-09-30T21:55:00.000Z", entry: "cli") + "\n").utf8))
+        try handle.close()
+        XCTAssertNil(usage.refresh(now: now).signInRefusedAt)
+    }
+
+    func testSignedInIsWhatClaudeAuthStatusSays() {
+        XCTAssertEqual(ClaudeLocalUsage.loggedIn(status: #"{  "loggedIn": false,  "authMethod": "none"}"#), false)
+        XCTAssertEqual(ClaudeLocalUsage.loggedIn(status: #"{"loggedIn":true,"authMethod":"claude.ai"}"#), true)
+        XCTAssertNil(ClaudeLocalUsage.loggedIn(status: "command not found"))
     }
 }
 
