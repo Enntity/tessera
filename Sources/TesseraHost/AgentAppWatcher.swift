@@ -238,9 +238,8 @@ final class TranscriptScanner: @unchecked Sendable {
     /// Background subagents write `<session>/subagents/agent-<id>.jsonl` beside the transcript.
     private func subagentActivity(_ transcriptPath: String) -> Date? {
         let dir = URL(fileURLWithPath: String(transcriptPath.dropLast(".jsonl".count))).appendingPathComponent("subagents")
-        let files = (try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: [.contentModificationDateKey])) ?? []
-        return files.filter { $0.pathExtension == "jsonl" }
-            .compactMap { try? $0.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate }
+        return list(dir).filter { $0.hasSuffix(".jsonl") }
+            .compactMap { FileStat(dir.appendingPathComponent($0).path)?.modified }
             .max()
     }
 
