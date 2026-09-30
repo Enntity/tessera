@@ -60,6 +60,17 @@ final class TerminalSessionTests: XCTestCase {
         XCTAssertEqual(duplicate.resumeHint, "Resume runs: claude")
     }
 
+    /// Two tiles saved in the same conversation: only the first resumes it, the other starts fresh.
+    func testRestoredDuplicateConversationStartsFresh() {
+        let plan = RestorePlan.plan([.init(id: "a", command: "codex resume S1", cwd: "/w", sessionId: nil),
+                                     .init(id: "b", command: "codex resume S1", cwd: "/w", sessionId: nil)])
+        let tiles = ["a", "b"].map { id in
+            TerminalSession(id: id, command: "codex resume S1", cwd: NSTemporaryDirectory(), sessionId: plan[id]?.sessionId,
+                            resuming: true, mayContinueLatest: plan[id]?.mayContinueLatest ?? false, startSuspended: true)
+        }
+        XCTAssertEqual(tiles.map(\.resumeHint), ["Resume runs: codex resume S1", "Resume runs: codex"])
+    }
+
     /// Through the user's real zsh startup: a typed launcher is adopted as the tile's resumable
     /// agent command, and returning to the prompt drops it.
     func testTypedLauncherIsAdoptedThenDroppedAtPrompt() throws {

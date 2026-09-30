@@ -69,7 +69,9 @@ public final class TerminalSession: NSObject {
         self.id = id
         self.command = command
         self.cwd = cwd
-        self.sessionId = sessionId ?? command.flatMap(SessionResume.sessionId(in:))
+        // A restored tile gets exactly what RestorePlan decided; re-reading the id from the command
+        // would undo its one-tile-per-conversation rule.
+        self.sessionId = resuming ? sessionId : sessionId ?? command.flatMap(SessionResume.sessionId(in:))
         self.hasStarted = resuming
         self.shell = shell ?? ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"
         self.environmentOverrides = environmentOverrides
