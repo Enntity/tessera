@@ -90,10 +90,11 @@ final class TerminalSessionTests: XCTestCase {
         session.send(Array("\(launcher.path) --model opus\r".utf8))
         XCTAssertTrue(waitUntil(10) { session.command == "\(launcher.path) --model opus" })
         XCTAssertEqual(session.flavor, .claude)
+        XCTAssertEqual(session.info.flavor, .claude)
         XCTAssertTrue(session.resumeHint.contains("claude-tessera-probe --model opus"))
         session.send([0x03])  // Ctrl-C back to the prompt
         XCTAssertTrue(waitUntil(10) { session.command == nil })
-        XCTAssertEqual(session.flavor, .shell)
+        XCTAssertEqual(session.info.flavor, .shell)
     }
 
     private func fakeTool(_ name: String, body: String) throws -> URL {

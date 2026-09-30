@@ -23,6 +23,22 @@ final class GridLayoutTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(g.tileSize.width, 200)
     }
 
+    func testOriginCentresGridAndTopAlignsWhenScrolling() {
+        let fits = GridLayout.fit(count: 2, in: CGSize(width: 1000, height: 1000), spacing: 10)
+        XCTAssertFalse(fits.scrolls)
+        let first = fits.origin(of: 0, in: CGSize(width: 1000, height: 1000))
+        let last = fits.origin(of: 1, in: CGSize(width: 1000, height: 1000))
+        // Centred: equal margins on both sides, in both directions.
+        let right = 1000 - (last.x + fits.tileSize.width), bottom = 1000 - (last.y + fits.tileSize.height)
+        XCTAssertEqual(first.x, right, accuracy: 0.5)
+        XCTAssertEqual(first.y, bottom, accuracy: 0.5)
+        let scrolling = GridLayout.fit(count: 200, in: CGSize(width: 1000, height: 600), spacing: 10, minTileWidth: 200)
+        XCTAssertTrue(scrolling.scrolls)
+        XCTAssertEqual(scrolling.origin(of: 0, in: CGSize(width: 1000, height: 600)).y, 0)
+        XCTAssertEqual(scrolling.origin(of: scrolling.columns, in: CGSize(width: 1000, height: 600)).y,
+                       scrolling.tileSize.height + 10, accuracy: 0.5)
+    }
+
     func testExpandedFrameStaysCenteredOnTileAndInsideBounds() {
         let bounds = CGRect(x: 0, y: 0, width: 2000, height: 1200)
         let mid = GridLayout.expandedFrame(from: CGRect(x: 900, y: 500, width: 200, height: 120), in: bounds, preferred: CGSize(width: 1000, height: 700))
@@ -124,6 +140,15 @@ final class TerminalActivityTrackerTests: XCTestCase {
         XCTAssertEqual(TerminalSession.cleanTitle("⠂ Respond to greeting | ml"), "Respond to greeting | ml")
         XCTAssertEqual(TerminalSession.cleanTitle("✳ Claude Code"), "Claude Code")
         XCTAssertEqual(TerminalSession.cleanTitle("~/src/app"), "~/src/app")
+    }
+
+    /// The flavor picks a tile's colour, glyph and resume behaviour; launchers count as their tool.
+    func testFlavorFromCommand() {
+        let cases: [(String?, AgentFlavor)] = [
+            ("claude", .claude), ("codex-work", .codex), ("FOO=1 grok", .grok), ("/opt/bin/gemini -p x", .gemini),
+            ("dsh", .dsh), ("zsh", .shell), ("npm test", .custom), (nil, .shell)
+        ]
+        for (command, flavor) in cases { XCTAssertEqual(AgentFlavor.infer(fromCommand: command), flavor, command ?? "nil") }
     }
 
     func testMarkdownPreviewRendersInlineAndDropsHeadings() {

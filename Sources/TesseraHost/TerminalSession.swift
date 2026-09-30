@@ -328,6 +328,7 @@ public final class TerminalSession: NSObject {
 
     private func refreshInfo() {
         var next = info
+        next.flavor = flavor
         next.title = customTitle ?? title
         next.activity = tracker.activity
         next.attention = tracker.attention
@@ -356,7 +357,6 @@ public final class TerminalSession: NSObject {
             launchedAt = Date()
             flavor = AgentFlavor.infer(fromCommand: line)
             if let dir = liveDirectory() { cwd = dir }
-            info.flavor = flavor
             refreshInfo()
             onResumableChange?()
         case .startedFresh:
@@ -373,7 +373,6 @@ public final class TerminalSession: NSObject {
             command = nil
             sessionId = nil
             flavor = .shell
-            info.flavor = .shell
             refreshInfo()
             onResumableChange?()
         }
