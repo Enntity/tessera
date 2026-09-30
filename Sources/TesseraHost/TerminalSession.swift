@@ -465,6 +465,22 @@ extension TerminalSession {
         isRunning = false
         tracker.noteExit(code: status.map(Self.exitCode(fromWaitStatus:)))
         refreshInfo()
+        // SwiftTerm asks for the status without waiting for it, and now and then asks too soon: a
+        // failure then reads as a clean exit. A child still there to be reaped is asked again.
+        if status == 0, let pid = process?.shellPid, pid > 0 { confirmExit(of: pid, generation: generation, tries: 5) }
+    }
+
+    private func confirmExit(of pid: pid_t, generation: Int, tries: Int) {
+        var status: Int32 = 0
+        let reaped = waitpid(pid, &status, WNOHANG)
+        if reaped == pid, status != 0, generation == self.generation {
+            tracker.noteExit(code: Self.exitCode(fromWaitStatus: status))
+            refreshInfo()
+        } else if reaped == 0, tries > 0 {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
+                self?.confirmExit(of: pid, generation: generation, tries: tries - 1)
+            }
+        }
     }
 
     fileprivate func received(_ slice: ArraySlice<UInt8>, generation: Int) {
