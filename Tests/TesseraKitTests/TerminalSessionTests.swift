@@ -382,3 +382,62 @@ final class BrowserSessionTests: XCTestCase {
         XCTAssertNil(BrowserSession.mosaic(NSImage(size: CGSize(width: 10, height: 10)), pageWidth: 0))
     }
 }
+
+/// The board's rule for the dock: a tile is on the board, open, or docked, and never two of them.
+@MainActor
+final class WorkspaceDockTests: XCTestCase {
+    /// A board of its own, in a throwaway folder, with pages that load from it.
+    private func board(pages: Int) throws -> (Workspace, [String]) {
+        // Only a debug build takes its folder from the environment: any other would open the user's own board.
+        #if !DEBUG
+        throw XCTSkip("needs a debug build")
+        #endif
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("tessera-board-\(UUID().uuidString.prefix(6))")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: dir) }
+        setenv("TESSERA_DATA_DIR", dir.path, 1)
+        defer { unsetenv("TESSERA_DATA_DIR") }
+        let workspace = Workspace()
+        let ids = try (0..<pages).map { i in
+            let page = dir.appendingPathComponent("page\(i).html")
+            try "<title>Page \(i)</title>".write(to: page, atomically: true, encoding: .utf8)
+            return try XCTUnwrap(workspace.openBrowser(page.absoluteString))
+        }
+        return (workspace, ids)
+    }
+
+    func testADockedTileOpensWhereItIsAndFullSizeOnlyOutOfTheDock() throws {
+        let (workspace, ids) = try board(pages: 3)
+        workspace.setDocked(ids[0], true)
+        workspace.setDocked(ids[1], true)
+        XCTAssertEqual(workspace.docked, [ids[0], ids[1]])
+        // Opened, a docked tile stays in the dock: it is selected, and no panel opens.
+        workspace.open(ids[0])
+        XCTAssertNil(workspace.expandedId)
+        XCTAssertEqual(workspace.selectedId, ids[0])
+        // Its full-size button takes it out of the dock and opens it, in one step.
+        workspace.openFromDock(ids[0])
+        XCTAssertEqual(workspace.expandedId, ids[0])
+        XCTAssertEqual(workspace.docked, [ids[1]])
+        // Asked of a tile that isn't docked, it does nothing.
+        workspace.openFromDock(ids[2])
+        XCTAssertEqual(workspace.expandedId, ids[0])
+        // Docked from its open panel, the panel closes.
+        workspace.setDocked(ids[0], true)
+        XCTAssertNil(workspace.expandedId)
+        XCTAssertEqual(workspace.docked, [ids[1], ids[0]])
+        // A third tile docked lets the oldest go.
+        workspace.setDocked(ids[2], true)
+        XCTAssertEqual(workspace.docked, [ids[0], ids[2]])
+    }
+
+    func testAClosedTileLeavesTheDockAndComesBackUndocked() throws {
+        let (workspace, ids) = try board(pages: 2)
+        workspace.setDocked(ids[0], true)
+        XCTAssertNotNil(workspace.close(ids[0]))
+        XCTAssertEqual(workspace.docked, [])
+        XCTAssertTrue(workspace.reopen(ids[0]))
+        XCTAssertTrue(workspace.exists(ids[0]))
+        XCTAssertEqual(workspace.docked, [])
+    }
+}
