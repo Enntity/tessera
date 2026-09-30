@@ -53,3 +53,23 @@ final class StateFileTests: XCTestCase {
         XCTAssertEqual(StateFile.loadList(MachineConfig.self, from: url)?.map(\.sshHost), ["box"])
     }
 }
+
+/// App sessions aren't saved as tiles, but their places on the board are.
+final class BoardOrderTests: XCTestCase {
+    func testReappearingSessionReturnsAfterItsSavedNeighbour() {
+        let saved = ["t1", "claude:a", "t2", "codex:b"]
+        XCTAssertEqual(Workspace.restoredIndex(of: "claude:a", saved: saved, in: ["t1", "t2"]), 1)
+        XCTAssertEqual(Workspace.restoredIndex(of: "codex:b", saved: saved, in: ["t1", "claude:a", "t2"]), 3)
+        // Its neighbours are gone: nothing before it survives, so it leads.
+        XCTAssertEqual(Workspace.restoredIndex(of: "claude:a", saved: saved, in: ["t2"]), 0)
+        // Never saved: a new session goes last.
+        XCTAssertEqual(Workspace.restoredIndex(of: "dsh:new", saved: saved, in: ["t1", "t2"]), 2)
+    }
+
+    func testSavedOrderKeepsOnlyWhatShouldComeBack() {
+        let saved = ["t1", "claude:hidden", "t2", "gone", "codex:closed-for-good"]
+        let order = Workspace.persistedOrder(["t2", "t1"], saved: saved) { $0 == "claude:hidden" }
+        XCTAssertEqual(order, ["t2", "t1", "claude:hidden"])
+        XCTAssertEqual(Workspace.persistedOrder([], saved: saved) { _ in false }, [])
+    }
+}

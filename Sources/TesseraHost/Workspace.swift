@@ -41,6 +41,8 @@ public final class Workspace {
 
     @ObservationIgnored private var agentAcknowledged: [String: Date] = [:]
     @ObservationIgnored private var hiddenAgents: [String: Date] = [:]
+    /// The order last saved, app sessions included: they take their places again as they reappear.
+    @ObservationIgnored private var savedOrder: [String] = []
     @ObservationIgnored private var clock: Timer?
     @ObservationIgnored private var lastPublished: [TileInfo] = []
     @ObservationIgnored private var firstAgentScan = true
@@ -394,7 +396,7 @@ public final class Workspace {
             if let hidden = hiddenAgents[a.id], a.lastActivityAt <= hidden { continue }
             hiddenAgents[a.id] = nil
             if agentAcknowledged[a.id] == nil { agentAcknowledged[a.id] = .distantPast }
-            order.append(a.id)
+            order.insert(a.id, at: Self.restoredIndex(of: a.id, saved: savedOrder, in: order))
             added.append(a)
         }
         openPendingAppConversation(newlyAdded: added)
@@ -491,6 +493,11 @@ public final class Workspace {
         var placeNativeWindows: Bool?
         var groups: [TileGroup]?
         var resumeOnLaunch: Bool?
+        /// Every tile's place, app sessions included (they aren't in `tiles`).
+        var order: [String]?
+        /// App sessions the user closed, and when.
+        var hidden: [String: Date]?
+        var agentLookbackHours: Double?
     }
 
     private var saveURL: URL { directory.appendingPathComponent("workspace.json") }
@@ -507,8 +514,36 @@ public final class Workspace {
             if let b = browsers[id] { return .init(id: id, kind: .browser, url: b.url?.absoluteString) }
             return nil
         }
+        // App sessions not on the board now (closed, or not rescanned yet since launch) keep their places.
+        savedOrder = Self.persistedOrder(order, saved: savedOrder) { [agents] id in
+            agents.sessions[id] != nil || (!agents.hasScanned && id.contains(":"))
+        }
+        // Closed longer ago than the lookback: that session can't be on the board anyway.
+        let now = Date()
+        hiddenAgents = hiddenAgents.filter { now.timeIntervalSince($0.value) < agents.lookback }
         StateFile.save(Saved(tiles: tiles.map(Lossy.init), defaultDirectory: defaultDirectory, placeNativeWindows: placeNativeWindows,
-                             groups: groups.list, resumeOnLaunch: resumeOnLaunch), to: saveURL)
+                             groups: groups.list, resumeOnLaunch: resumeOnLaunch, order: savedOrder, hidden: hiddenAgents,
+                             agentLookbackHours: agents.lookback / 3600), to: saveURL)
+    }
+
+    /// Where a tile that reappears (an app session found again after launch) goes: right after the
+    /// nearest tile that preceded it when saved, at the front if none of those is on the board, or at
+    /// the end if it was never saved.
+    nonisolated static func restoredIndex(of id: String, saved: [String], in order: [String]) -> Int {
+        guard let i = saved.firstIndex(of: id) else { return order.endIndex }
+        for previous in saved[..<i].reversed() {
+            if let j = order.firstIndex(of: previous) { return j + 1 }
+        }
+        return 0
+    }
+
+    /// The board's order plus the saved ids `keep` wants remembered, each at its old place.
+    nonisolated static func persistedOrder(_ order: [String], saved: [String], keep: (String) -> Bool) -> [String] {
+        var result = order
+        for id in saved where !result.contains(id) && keep(id) {
+            result.insert(id, at: restoredIndex(of: id, saved: saved, in: result))
+        }
+        return result
     }
 
     private func restore() {
@@ -520,6 +555,9 @@ public final class Workspace {
         placeNativeWindows = saved.placeNativeWindows ?? true
         groups = TileGroups(saved.groups ?? [])
         resumeOnLaunch = saved.resumeOnLaunch ?? true
+        savedOrder = saved.order ?? []
+        hiddenAgents = saved.hidden ?? [:]
+        if let hours = saved.agentLookbackHours { agents.lookback = hours * 3600 }
         // One tile per conversation; "continue latest" only where it can't collide (see RestorePlan).
         let plan = RestorePlan.plan(tiles.filter { $0.kind == .terminal }.map { tile in
             RestorePlan.Tile(id: tile.id, command: tile.command, cwd: tile.cwd ?? defaultDirectory, sessionId: tile.sessionId)

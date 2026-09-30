@@ -28,6 +28,8 @@ public final class AgentAppWatcher {
     public private(set) var codexRateLimits: CodexRateLimits?
     /// Sessions idle longer than this drop off the board.
     public var lookback: TimeInterval = 36 * 3600
+    /// The first scan has come back (until then, `sessions` being empty means nothing).
+    @ObservationIgnored public private(set) var hasScanned = false
 
     @ObservationIgnored private let scanner = TranscriptScanner()
     @ObservationIgnored private var timer: Timer?
@@ -58,6 +60,7 @@ public final class AgentAppWatcher {
                 MainActor.assumeIsolated {
                     guard let self else { return }
                     self.scanning = false
+                    self.hasScanned = true
                     // Reassigning unchanged data would re-render the whole board every scan.
                     if self.sessions != result.sessions { self.sessions = result.sessions }
                     if let limits = result.rateLimits, limits != self.codexRateLimits { self.codexRateLimits = limits }
