@@ -48,6 +48,13 @@ public enum SessionResume {
         return tool(named: inv.name)
     }
 
+    /// The agent CLI a command runs, when it runs a conversation (not `claude auth login`): what is
+    /// worth resuming, and what a session file can be bound to.
+    public static func conversationTool(for command: String) -> Tool? {
+        guard let inv = Invocation(command), let tool = tool(named: inv.name), isConversation(tool, inv) else { return nil }
+        return tool
+    }
+
     static func tool(named name: String) -> Tool? {
         if let exact = Tool(rawValue: name) { return exact }
         return [Tool.claude, .codex, .grok, .opencode, .omp].first { name.hasPrefix($0.rawValue + "-") || name.hasPrefix($0.rawValue + "_") }
@@ -57,11 +64,24 @@ public enum SessionResume {
     /// extra arguments), so adding flags like `--session-id` is safe.
     static func isDirect(_ inv: Invocation) -> Bool { Tool(rawValue: inv.name) != nil }
 
+    /// The CLI's own subcommands (`claude auth login`, `claude mcp list`): they run and exit, with no
+    /// conversation to name or resume. A first word that is anything else is a prompt.
+    static let subcommands: [Tool: Set<String>] = [
+        .claude: ["auth", "mcp", "config", "doctor", "update", "upgrade", "install", "setup-token", "plugin", "plugins",
+                  "migrate-installer", "gateway", "agents"],
+        .grok: ["auth", "login", "logout", "config", "update", "mcp"],
+    ]
+
+    static func isConversation(_ tool: Tool, _ inv: Invocation) -> Bool {
+        guard let first = inv.words.dropFirst().first(where: { !$0.hasPrefix("-") }) else { return true }
+        return !(subcommands[tool]?.contains(first) ?? false)
+    }
+
     /// The command to actually run for a fresh launch, and the session id assigned to it (if the tool
     /// lets us choose one). Commands that already pick a session, and launchers, are left alone.
     public static func prepareLaunch(_ command: String, newId: () -> String = { UUID().uuidString.lowercased() })
         -> (command: String, sessionId: String?) {
-        guard let inv = Invocation(command), let tool = tool(named: inv.name) else { return (command, nil) }
+        guard let inv = Invocation(command), let tool = tool(named: inv.name), isConversation(tool, inv) else { return (command, nil) }
         if let existing = sessionId(in: command) { return (command, existing) }
         switch tool {
         case .claude, .grok:
@@ -98,7 +118,7 @@ public enum SessionResume {
     /// The command that brings `original` back into `sessionId` — or into the tool's most recent
     /// conversation when the id is unknown. Nil means "just run the original command again".
     public static func resumeCommand(original: String, sessionId: String?) -> String? {
-        guard let inv = Invocation(original), let tool = tool(named: inv.name) else { return nil }
+        guard let inv = Invocation(original), let tool = tool(named: inv.name), isConversation(tool, inv) else { return nil }
         let id = sessionId.flatMap { isSafeId($0) ? $0 : nil }
         let args = Array(inv.words.dropFirst())
         // `codex exec …` and friends aren't sessions.
@@ -115,7 +135,7 @@ public enum SessionResume {
     /// A fresh start: the original command without any session selection. For direct Claude/Grok it
     /// reclaims `sessionId` when given (an id assigned but never saved).
     public static func freshLaunch(original: String, sessionId: String? = nil) -> String? {
-        guard let inv = Invocation(original), let tool = tool(named: inv.name) else { return nil }
+        guard let inv = Invocation(original), let tool = tool(named: inv.name), isConversation(tool, inv) else { return nil }
         var words = withoutSession(tool, Array(inv.words.dropFirst()))
         if tool == .claude || tool == .grok, let sessionId, isSafeId(sessionId), isDirect(inv) { words += ["--session-id", sessionId] }
         return inv.joined([inv.exe] + words)

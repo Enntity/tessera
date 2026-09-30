@@ -804,6 +804,18 @@ final class SessionResumeTests: XCTestCase {
         XCTAssertEqual(SessionResume.resumeCommand(original: "claude -c", sessionId: nil), "claude --continue")
     }
 
+    func testSubcommandsAreNotConversations() {
+        // `claude auth login` (a card's sign-in) must run as typed: no session id, nothing to resume.
+        XCTAssertEqual(SessionResume.prepareLaunch("claude auth login", newId: { self.fixedId }).command, "claude auth login")
+        XCTAssertNil(SessionResume.prepareLaunch("claude mcp list").sessionId)
+        XCTAssertNil(SessionResume.resumeCommand(original: "claude auth login", sessionId: nil))
+        XCTAssertNil(SessionResume.freshLaunch(original: "claude doctor", sessionId: fixedId))
+        XCTAssertNil(SessionResume.conversationTool(for: "claude auth status"))
+        // A prompt is not a subcommand: that is a conversation.
+        XCTAssertEqual(SessionResume.prepareLaunch("claude 'fix the auth bug'", newId: { self.fixedId }).sessionId, fixedId)
+        XCTAssertEqual(SessionResume.conversationTool(for: "claude --model opus"), .claude)
+    }
+
     func testCommandsThatAlreadyPickASessionAreLeftAlone() {
         XCTAssertEqual(SessionResume.prepareLaunch("claude --continue").command, "claude --continue")
         XCTAssertNil(SessionResume.prepareLaunch("claude -p hi").sessionId)

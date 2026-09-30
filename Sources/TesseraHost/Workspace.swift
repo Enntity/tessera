@@ -697,7 +697,7 @@ public final class Workspace {
         // Keep looking for as long as the agent runs: a conversation may start long after launch.
         let waiting = terminals.values.filter { $0.isRunning && !$0.isSuspended && $0.sessionId == nil }
         func candidates(_ tool: SessionResume.Tool) -> [SessionBinding.Candidate] {
-            SessionBinding.unambiguous(waiting.filter { $0.command.flatMap(SessionResume.tool(for:)) == tool }
+            SessionBinding.unambiguous(waiting.filter { $0.command.flatMap(SessionResume.conversationTool(for:)) == tool }
                 .map { SessionBinding.Candidate(tileId: $0.id, cwd: $0.cwd, launchedAt: $0.launchedAt,
                                                 continuing: $0.command.map(SessionResume.continuesLatest) ?? false) })
                 // After ten minutes unbound it rarely happens, so those are looked for once a minute.

@@ -401,7 +401,7 @@ public final class TerminalSession: NSObject {
             typedHost = [typed, expanded].compactMap { $0 }.compactMap(MachineConfig.sshHost).first
             // Only agent CLIs are worth bringing back; `ls` or `make` are not. Prefer the line as
             // typed; an alias is recognised through its expansion.
-            guard let line = [typed, expanded].compactMap({ $0 }).first(where: { SessionResume.tool(for: $0) != nil }) else {
+            guard let line = [typed, expanded].compactMap({ $0 }).first(where: { SessionResume.conversationTool(for: $0) != nil }) else {
                 return refreshInfo()
             }
             command = line
@@ -424,7 +424,7 @@ public final class TerminalSession: NSObject {
         case .programMissing:
             // An agent not there to run (e.g. not on PATH after a toolchain switch): keep its
             // conversation for Resume. Anything else just leaves the shell, as a typo would.
-            guard command.flatMap(SessionResume.tool(for:)) != nil else { return }
+            guard command.flatMap(SessionResume.conversationTool(for:)) != nil else { return }
             shutDown(because: "Not found")
         case .prompt:
             typedHost = nil
