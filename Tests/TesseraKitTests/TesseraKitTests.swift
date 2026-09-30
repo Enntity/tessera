@@ -278,6 +278,12 @@ final class TerminalActivityTrackerTests: XCTestCase {
         t.noteExit(code: 2)
         XCTAssertEqual(t.activity, .failed)
         XCTAssertTrue(t.attention)
+        // Short enough for a tile's footer.
+        XCTAssertEqual(t.detail, "exit 2")
+        t.restart()
+        t.noteExit(code: 0)
+        XCTAssertEqual(t.activity, .exited)
+        XCTAssertEqual(t.detail, "Exited")
     }
 }
 

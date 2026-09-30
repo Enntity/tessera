@@ -72,7 +72,7 @@ public struct TerminalActivityTracker: Sendable {
     public mutating func noteExit(code: Int32?, failure: String? = nil) {
         exited = true
         activity = (code ?? 0) == 0 && failure == nil ? .exited : .failed
-        detail = failure ?? code.map { "Exited with status \($0)" } ?? "Exited"
+        detail = failure ?? code.flatMap { $0 == 0 ? nil : "exit \($0)" } ?? "Exited"
         if activity == .failed, !isBeingViewed { attention = true }
     }
 
