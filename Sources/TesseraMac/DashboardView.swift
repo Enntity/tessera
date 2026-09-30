@@ -11,6 +11,11 @@ struct DashboardView: View {
             VStack(spacing: 0) {
                 HUDBar()
                 HStack(spacing: 0) {
+                    if model.showLane {
+                        AttentionLane()
+                            .frame(width: Style.Metrics.lane)
+                            .transition(.move(edge: .leading).combined(with: .opacity))
+                    }
                     VStack(spacing: 0) {
                         TabStrip()
                         BoardView()
@@ -161,6 +166,7 @@ struct HUDBar: View {
                 .buttonStyle(.capsule)
                 .fixedSize()
                 HStack(spacing: 0) {
+                    toggle("sidebar.left", on: model.showLane, help: "Needs-you lane (⌥⌘\\)") { model.toggleLane() }
                     toggle(model.privacyMode ? "eye.slash.fill" : "eye", on: model.privacyMode,
                            help: "Privacy mode (⇧⌘P): terminals and conversations stay lively but unreadable") { model.togglePrivacy() }
                     toggle("sidebar.right", on: model.showSidebar, help: "Accounts (⌘\\)") { model.toggleSidebar() }

@@ -49,6 +49,10 @@ final class AppModel {
                                                      close: { [weak self] in self?.close($0) })
     var showPalette = false
     var showSidebar = true
+    /// The Needs-you lane, as the user left it.
+    var showLane = Preferences.store.object(forKey: "tessera.lane") as? Bool ?? true {
+        didSet { Preferences.store.set(showLane, forKey: "tessera.lane") }
+    }
     /// Screenshot-safe: terminals, conversations and pages stay lively but unreadable.
     var privacyMode = Preferences.store.bool(forKey: "tessera.privacy") {
         didSet { Preferences.store.set(privacyMode, forKey: "tessera.privacy") }
@@ -66,6 +70,12 @@ final class AppModel {
     private(set) var filterFocus = 0
     /// The filter field has the keyboard, and keeps it while the board changes under it.
     @ObservationIgnored var isFiltering = false
+    /// The last one-tap answer from the lane (see `answer`).
+    @ObservationIgnored private var lastAnswer: (id: String, at: Date)?
+    #if DEBUG
+    /// The lane row a scripted run's pointer rests on (`hover=<title>`): it has no pointer to move.
+    var debugHover: String?
+    #endif
     /// The last close, while its toast offers to undo it.
     private(set) var closedToast: ClosedToast?
     /// The closes Edit ▸ Undo can still undo, the latest last.
@@ -243,6 +253,11 @@ final class AppModel {
         act(Style.Motion.standard) { showSidebar.toggle() }
     }
 
+    /// ⌥⌘\ and View ▸ Needs You Lane.
+    func toggleLane() {
+        act(Style.Motion.standard) { showLane.toggle() }
+    }
+
     // MARK: The filter
 
     /// What the filter field holds: the board narrows as it is typed.
@@ -265,6 +280,16 @@ final class AppModel {
     func clearFilter() {
         isFiltering = false
         onBoard { $0.query = BoardQuery() }
+    }
+
+    /// A one-tap answer from the lane, typed into the terminal unopened. Its row leaves as it is
+    /// answered and the next one slides under the pointer: a click that lands there straight after
+    /// (the second of a double-click) answers nothing.
+    func answer(_ id: String, with answer: QuickAnswer) {
+        let now = Date()
+        if let last = lastAnswer, last.id != id, now.timeIntervalSince(last.at) < NSEvent.doubleClickInterval { return }
+        lastAnswer = (id, now)
+        workspace.answer(id, with: answer)
     }
 
     /// Puts the keyboard where the user is, after anything that took it away (the palette, a

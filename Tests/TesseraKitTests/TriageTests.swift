@@ -42,6 +42,15 @@ final class AttentionQueueTests: XCTestCase {
         XCTAssertEqual([ask].next(after: done), "ask")
     }
 
+    func testEveryWaitingTileSaysWhy() {
+        XCTAssertEqual(tile("q", .needsInput, detail: "Allow command: rm -rf build/ ?").reason, "Allow command: rm -rf build/ ?")
+        XCTAssertEqual(tile("f", .failed, detail: "exit 1").reason, "exit 1")
+        // With nothing of its own to say, its state says it.
+        XCTAssertEqual(tile("q", .needsInput).reason, "Waiting for an answer")
+        XCTAssertEqual(tile("f", .failed).reason, "Failed")
+        XCTAssertEqual(tile("d", .done, attention: true).reason, "Finished")
+    }
+
     func testBoardStateCountsEachTileUnderItsOwnState() {
         let state = BoardState([tile("w", .working, attention: true), tile("q", .needsInput, attention: true, age: 9),
                                 tile("seen", .needsInput, age: 5), tile("d", .done, attention: true), tile("f", .failed, attention: true),

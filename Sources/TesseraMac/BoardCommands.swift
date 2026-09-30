@@ -31,6 +31,13 @@ struct BoardCommands: Commands {
             Button("Redo") { NSApp.sendAction(Selector(("redo:")), to: nil, from: nil) }
                 .keyboardShortcut("z", modifiers: [.command, .shift])
         }
+        // The View menu: the columns beside the board.
+        CommandGroup(replacing: .sidebar) {
+            Button(model.showLane ? "Hide Needs You Lane" : "Show Needs You Lane") { model.toggleLane() }
+                .keyboardShortcut("\\", modifiers: [.command, .option])
+            Button(model.showSidebar ? "Hide Accounts" : "Show Accounts") { model.toggleSidebar() }
+                .keyboardShortcut("\\")
+        }
         CommandMenu("Board") {
             Button("Command Palette") {
                 // From the ⌘L palette, ⌘K goes to the full one rather than closing it.
@@ -55,8 +62,6 @@ struct BoardCommands: Commands {
             Divider()
             Button(model.privacyMode ? "Turn Off Privacy Mode" : "Privacy Mode") { model.togglePrivacy() }
                 .keyboardShortcut("p", modifiers: [.command, .shift])
-            Button(model.showSidebar ? "Hide Accounts" : "Show Accounts") { model.toggleSidebar() }
-                .keyboardShortcut("\\")
             Divider()
             // These act on the tab being viewed; the two below them on every terminal.
             ForEach(BoardCommand.allCases.filter { !$0.everyTab }) { command in

@@ -368,6 +368,11 @@ public final class Workspace {
         return text
     }
 
+    /// A one-tap answer to a terminal's question, from the Needs-you lane: typed into it unopened.
+    public func answer(_ id: String, with answer: QuickAnswer) {
+        terminals[id]?.send(answer.bytes)
+    }
+
     /// Keeps the selection on a tile the board shows: when it isn't (a tab change, a tile closed or
     /// filed elsewhere), it goes to the first one.
     private func reconcileSelection() {

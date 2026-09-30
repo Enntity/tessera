@@ -545,6 +545,13 @@ final class TerminalSnapshotTests: XCTestCase {
         wait(for: [redraw], timeout: 1)
     }
 
+    func testOneTapAnswersAreTheKeysThemselves() {
+        XCTAssertEqual(QuickAnswer.allCases.map(\.label), ["1", "2", "3", "y", "n", "⏎"])
+        XCTAssertEqual(QuickAnswer.yes.bytes, Array("y".utf8))
+        XCTAssertEqual(QuickAnswer.two.bytes, [0x32])
+        XCTAssertEqual(QuickAnswer.enter.bytes, [0x0D])
+    }
+
     func testSmartPunctuationIsUndone() {
         XCTAssertEqual(RemoteSession.undoSmartPunctuation("echo “hi” — it’s…"), "echo \"hi\" -- it's...")
     }

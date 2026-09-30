@@ -144,6 +144,16 @@ public struct TileInfo: Codable, Identifiable, Hashable, Sendable {
     /// 0...1 when the program reports progress (OSC 9;4).
     public var progress: Double?
 
+    /// Why the tile waits on the user, in a line: its question, its error, what it finished with.
+    public var reason: String {
+        if let detail { return detail }
+        switch activity {
+        case .needsInput: return "Waiting for an answer"
+        case .failed: return "Failed"
+        default: return "Finished"
+        }
+    }
+
     /// Attention in a state that still wants the user; a tile that went back to work has moved on.
     public var isUnseen: Bool { attention && activity.isAttention }
     /// Waiting on the user: an open question or an unseen result.

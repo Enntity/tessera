@@ -83,18 +83,13 @@ struct TerminalScreen: View {
         VStack(spacing: Style.Space.m) {
             if needsInput {
                 HStack(spacing: Style.Space.m) {
-                    ForEach(["1", "2", "3", "y", "n"], id: \.self) { answer in
-                        Button(answer) { session.type(answer, into: id) }
+                    ForEach(QuickAnswer.allCases) { answer in
+                        Button(answer.label) { session.answer(answer, into: id) }
                             .font(Style.mono(15, .bold))
                             .frame(maxWidth: .infinity, minHeight: 36)
-                            .background(Style.amber.opacity(Style.Tint.fill), in: Style.shape(Style.Radius.m))
+                            .background(Style.amber.opacity(answer == .enter ? Style.Tint.strong : Style.Tint.fill), in: Style.shape(Style.Radius.m))
                             .foregroundStyle(Style.amber)
                     }
-                    Button("⏎") { session.key(.enter, into: id) }
-                        .font(Style.mono(15, .bold))
-                        .frame(maxWidth: .infinity, minHeight: 36)
-                        .background(Style.amber.opacity(Style.Tint.strong), in: Style.shape(Style.Radius.m))
-                        .foregroundStyle(Style.amber)
                 }
                 .transition(.move(edge: .bottom).combined(with: .opacity))
             }

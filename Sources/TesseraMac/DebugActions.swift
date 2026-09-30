@@ -21,14 +21,16 @@ extension AppModel {
     /// Actions, separated by `;`:
     /// - set-up, straight into the workspace: `cwd=<dir>` (where the next tiles start), `launch=<cmd>`,
     ///   `url=<url>`, `tab=<name>` (a tab holding the first two tiles), `shutdown`, `rename=<title>` (the
-    ///   selected tile), `machine=<ssh host>`, `remote`, `pairurl=<file>`, `privacy[=off]`, `size=<w>x<h>`,
-    ///   `wait=<s>`, `pace=<s>` (the gap between the actions that follow; 1 s unless set);
+    ///   selected tile), `machine=<ssh host>`, `remote`, `pairurl=<file>`, `privacy[=off]`, `lane[=off]`,
+    ///   `size=<w>x<h>`, `wait=<s>`, `pace=<s>` (the gap between the actions that follow; 1 s unless set);
     /// - what a user does: `select=<title>`, `open[=terminal|web|<title>|<id>]` (never an app conversation),
     ///   `click=<title>` or `click=<x>,<y>` (a tile, or a point in the window) and `dblclick=…`,
-    ///   `key=up,down,left,right,return,esc`, `type=<text>`, `cmd=[shift+][option+]<key>` and `ctrl=<key>`
-    ///   (a ⌘ or ⌃ shortcut, through the menu bar; `<key>` may be `return` or `tab`), `undo` (Edit ▸ Undo,
-    ///   with the board's window in front), `run=<BoardCommand>`, `closefront=<window title>`,
-    ///   `filter=all|attention|<tab>`, `pane=<label>` (a pane of the open Settings window);
+    ///   `hover=<x>,<y>` or `hover=<title>` (the pointer moved there, or onto that tile's row in the lane),
+    ///   `key=up,down,left,right,return,esc,delete`, `type=<text>`, `cmd=[shift+][option+]<key>` and
+    ///   `ctrl=<key>` (a ⌘ or ⌃ shortcut, through the menu bar; `<key>` may be `return` or `tab`), `undo`
+    ///   (Edit ▸ Undo, with the board's window in front), `run=<BoardCommand>`, `closefront=<window title>`,
+    ///   `filter=all|<tab>`, `chip=<BoardQuery.Chip>` (a filter chip, toggled), `pane=<label>` (a pane of
+    ///   the open Settings window);
     /// - `dump=<file>[?<query>]`: what is selected, open, on show, waiting and closed, each tile's state,
     ///   who has the keyboard, and the palette's rows for `<query>`, as JSON;
     /// - `shot=<file>[?<window title>]`: a capture of the board's window (or the window so titled) as it
@@ -53,6 +55,7 @@ extension AppModel {
             case "remote": server.start() // not persisted: normal launches keep the user's setting
             case "pairurl": try? server.pairingURL?.absoluteString.write(toFile: arg, atomically: true, encoding: .utf8)
             case "privacy": privacyMode = arg != "off"
+            case "lane": showLane = arg != "off"
             case "size":
                 let side = arg.split(separator: "x").compactMap { Double($0) }
                 if side.count == 2, let window { window.setContentSize(CGSize(width: side[0], height: side[1])) }
@@ -75,6 +78,22 @@ extension AppModel {
                 if parts[0] == "dblclick" {
                     // The second click of a real double-click arrives once the panel has begun to open.
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { self.debugClick(at: point, count: 2) }
+                }
+            case "hover":
+                // A row of the lane by its tile's title (it changes size under the pointer, and would
+                // then look for the real one), or a point.
+                debugHover = arg.contains(",") ? nil : debugTile(arg)
+                guard debugHover == nil, let point = debugPoint(arg), let window, let content = window.contentView else { break }
+                let at = CGPoint(x: point.x, y: content.bounds.height - point.y)
+                if let event = NSEvent.mouseEvent(with: .mouseMoved, location: at, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                                                  windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 0, pressure: 0) {
+                    // No tracking area fires for an event the window server didn't send: the views
+                    // under the point are told themselves.
+                    var view = content.hitTest(content.convert(at, from: nil))
+                    while let v = view {
+                        v.mouseMoved(with: event)
+                        view = v.superview
+                    }
                 }
             case "key":
                 let keys: [String: (UInt16, String)] = ["up": (126, "\u{F700}"), "down": (125, "\u{F701}"), "left": (123, "\u{F702}"),
@@ -165,6 +184,10 @@ extension AppModel {
             "openURL": workspace.expandedId.flatMap(workspace.info)?.url ?? "",
             "visible": workspace.visibleIds.map(title), "tiles": workspace.order.count,
             "filter": "\(workspace.filter)", "tabs": workspace.groups.list.map { [$0.name: $0.tileIds.map(title)] },
+            "query": workspace.query.text, "chips": Dictionary(uniqueKeysWithValues: BoardQuery.Chip.allCases.map {
+                ($0.rawValue + (workspace.query.chips.contains($0) ? " on" : ""), workspace.count($0))
+            }),
+            "lane": showLane, "places": workspace.allTiles.map { "\($0.title): \($0.subtitle)" },
             "palette": showPalette ? "\(paletteMode)" : "",
             "firstResponder": window?.firstResponder.map { String(describing: type(of: $0)) } ?? "",
             "keyWindow": key === window ? "board" : key?.title ?? "",

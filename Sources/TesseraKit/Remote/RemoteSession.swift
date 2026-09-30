@@ -176,6 +176,10 @@ public final class RemoteSession {
         send(.input(TerminalInput(id: id, bytes: Data(key.bytes(applicationCursor: appCursor)))))
     }
 
+    public func answer(_ answer: QuickAnswer, into id: String) {
+        send(.input(TerminalInput(id: id, bytes: Data(answer.bytes))))
+    }
+
     public func action(_ kind: TileAction.Kind, on id: String) {
         send(.action(TileAction(id: id, kind: kind)))
     }
@@ -233,6 +237,19 @@ public final class RemoteSession {
                 state = .failed(text)
             }
         }
+    }
+}
+
+/// The one-tap answers to a terminal's question, on the phone and in the Mac's Needs-you lane: the
+/// same bytes from both.
+public enum QuickAnswer: String, CaseIterable, Identifiable, Sendable {
+    case one = "1", two = "2", three = "3", yes = "y", no = "n", enter = "⏎"
+
+    public var id: String { rawValue }
+    public var label: String { rawValue }
+
+    public var bytes: [UInt8] {
+        self == .enter ? TerminalKey.enter.bytes(applicationCursor: false) : Array(rawValue.utf8)
     }
 }
 

@@ -1,0 +1,127 @@
+import SwiftUI
+import TesseraHost
+import TesseraKit
+
+/// The Needs-you lane, down the left of the board: everything waiting on the user, in the order ⌘J
+/// visits it. It reads the queue alone; each row reads only its own tile.
+struct AttentionLane: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        let queue = model.workspace.state.queue
+        VStack(spacing: 0) {
+            // As tall as the tab strip beside it, so the first row lines up with the first row of tiles.
+            HStack(alignment: .firstTextBaseline, spacing: Style.Space.s) {
+                Text(TileActivity.needsInput.label).micro()
+                if !queue.isEmpty {
+                    Text("\(queue.count)").font(Style.caption).foregroundStyle(Style.muted).contentTransition(.numericText())
+                }
+                Spacer()
+            }
+            .foregroundStyle(Style.dim)
+            .padding(.horizontal, Style.Space.l)
+            .frame(height: Style.Metrics.strip)
+            .overlay(alignment: .bottom) { Hairline() }
+
+            ScrollView {
+                VStack(spacing: Style.Space.m) {
+                    ForEach(queue, id: \.self) { id in
+                        LaneRow(id: id, isNext: id == queue.first)
+                            .transition(.scale(scale: 0.9).combined(with: .opacity))
+                    }
+                }
+                .frame(maxWidth: .infinity)
+                .padding(Style.Space.l)
+            }
+            .overlay(alignment: .top) {
+                if queue.isEmpty {
+                    VStack(spacing: Style.Space.m) {
+                        Image(systemName: "checkmark.circle").font(Style.title).foregroundStyle(Style.faint)
+                        Text("All caught up").font(Style.ui(.label, .medium)).foregroundStyle(Style.muted)
+                    }
+                    .padding(.top, Style.Space.xxl)
+                    .transition(.opacity)
+                }
+            }
+        }
+        .chromeSurface(rule: .trailing)
+        .animation(Style.Motion.standard, value: queue)
+    }
+}
+
+/// One waiting tile: what it is, why it waits (its question, its error, what it finished with), and
+/// for how long. A click opens it, as a click on its tile does. Under the pointer, a terminal with
+/// a question grows a row of the answers a phone offers, typed into it without opening it.
+struct LaneRow: View {
+    @Environment(AppModel.self) private var model
+    @Environment(\.tesseraPrivacy) private var privacy
+    let id: String
+    /// The first in the queue: where ⌘J goes.
+    let isNext: Bool
+    @State private var hovering = false
+
+    var body: some View {
+        if let info = model.workspace.info(id) {
+            #if DEBUG
+            let hovering = hovering || model.debugHover == id
+            #endif
+            VStack(alignment: .leading, spacing: Style.Space.xxs) {
+                HStack(spacing: Style.Space.xs) {
+                    Image(systemName: info.flavor.symbol)
+                        .font(Style.ui(.caption, .semibold))
+                        .foregroundStyle(Style.accent(info.flavor))
+                        .frame(width: Style.Space.xl)
+                    Text(info.title).font(Style.label).foregroundStyle(Style.ink).lineLimit(1)
+                    if info.activity == .done { Dot(Style.mint).padding(.leading, Style.Space.xxs) }
+                    Spacer(minLength: Style.Space.xs)
+                    Age(of: info.lastActivityAt).font(Style.caption).foregroundStyle(Style.muted)
+                }
+                HStack(alignment: .firstTextBaseline, spacing: Style.Space.xs) {
+                    Text(privacy ? AttributedString(info.reason.obscured(true)) : info.reason.markdownPreview(120))
+                        .foregroundStyle(info.activity == .done ? Style.muted : Style.state(info.activity))
+                        // All of it under the pointer, where an answer may be about to be given.
+                        .lineLimit(hovering ? 6 : 2)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Spacer(minLength: Style.Space.xs)
+                    if isNext { Text("⌘J").foregroundStyle(Style.muted) }
+                }
+                .font(Style.caption)
+                // Under the title, past the glyph.
+                .padding(.leading, Style.Space.xl + Style.Space.xs)
+                if hovering, info.kind == .terminal, info.activity == .needsInput { answers }
+            }
+            .padding(.leading, Style.Space.s)
+            .padding(.trailing, Style.Space.m)
+            .padding(.vertical, Style.Space.s)
+            .background(model.workspace.selectedId == id ? Style.Neutral.selected : hovering ? Style.Neutral.hover : .clear,
+                        in: Style.shape(Style.Radius.m))
+            .cardSurface()
+            .contentShape(Rectangle())
+            .onTapGesture { model.open(id) }
+            .onHover { self.hovering = $0 }
+            .animation(Style.Motion.quick, value: hovering)
+            .help([info.title, privacy ? nil : info.reason].compactMap { $0 }.joined(separator: "\n"))
+        }
+    }
+
+    private var answers: some View {
+        HStack(spacing: Style.Space.xs) {
+            ForEach(QuickAnswer.allCases) { answer in
+                Button { model.answer(id, with: answer) } label: {
+                    Text(answer.label)
+                        .font(Style.mono(.label, .bold))
+                        .foregroundStyle(Style.amber)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: Style.Metrics.key)
+                        .background(Style.amber.opacity(answer == .enter ? Style.Tint.strong : Style.Tint.fill), in: Style.shape(Style.Radius.xs))
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help("Type \(answer.label) into this terminal")
+            }
+        }
+        .padding(.top, Style.Space.xs)
+        .padding(.leading, Style.Space.xxs)
+        .transition(.opacity)
+    }
+}
