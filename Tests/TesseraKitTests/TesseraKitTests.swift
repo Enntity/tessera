@@ -49,6 +49,42 @@ final class GridLayoutTests: XCTestCase {
     }
 }
 
+/// The open panel on its way out of its tile and back into it.
+final class PanelZoomTests: XCTestCase {
+    let tile = CGRect(x: 600, y: 300, width: 260, height: 170)
+    let open = CGRect(x: 100, y: 12, width: 1300, height: 850)
+
+    func testStartsAsTheTileAndEndsOpen() {
+        let start = PanelZoom(from: tile, to: open, progress: 0)
+        XCTAssertEqual(start.origin, tile.origin)
+        // What is on show, scaled, is exactly the tile.
+        XCTAssertEqual(start.shown.width * start.scale, tile.width, accuracy: 0.01)
+        XCTAssertEqual(start.shown.height * start.scale, tile.height, accuracy: 0.01)
+        let end = PanelZoom(from: tile, to: open, progress: 1)
+        XCTAssertEqual(end.scale, 1)
+        XCTAssertEqual(end.shown, open.size)
+        XCTAssertEqual(end.origin, open.origin)
+    }
+
+    func testOneScaleForBothAxesAndNeverMoreThanThePanel() {
+        for progress in stride(from: CGFloat(0), through: 1.1, by: 0.1) {
+            let zoom = PanelZoom(from: tile, to: open, progress: progress)
+            // Never more on show than the panel has, even while the spring overshoots.
+            XCTAssertLessThanOrEqual(zoom.shown.width, open.width + 0.01)
+            XCTAssertLessThanOrEqual(zoom.shown.height, open.height + 0.01)
+        }
+        // The overshoot is in the scale, which both axes share.
+        XCTAssertGreaterThan(PanelZoom(from: tile, to: open, progress: 1.05).scale, 1)
+    }
+
+    func testABoardWithNoRoomYetGivesFiniteFrames() {
+        for (tile, open) in [(CGRect.zero, CGRect.zero), (tile, .zero), (.zero, open)] {
+            let zoom = PanelZoom(from: tile, to: open, progress: 0.5)
+            XCTAssertTrue([zoom.scale, zoom.shown.width, zoom.shown.height, zoom.origin.x, zoom.origin.y].allSatisfy(\.isFinite))
+        }
+    }
+}
+
 /// Arrow keys on the board: the real columns, no wrap-around, and the view follows.
 final class GridNavigationTests: XCTestCase {
     // Seven tiles in three columns:  0 1 2 / 3 4 5 / 6

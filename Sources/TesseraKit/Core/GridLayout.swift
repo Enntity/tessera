@@ -69,6 +69,29 @@ public struct GridLayout: Equatable, Sendable {
     }
 }
 
+/// An open panel part-way between its tile and its open frame. It is laid out at its open size and
+/// scaled down, by one factor for both axes so nothing inside is stretched; on its tile that leaves
+/// it wider or taller than the tile, so only `shown` of it is on show, which makes the tile's shape.
+public struct PanelZoom: Equatable, Sendable {
+    public var scale: CGFloat
+    /// How much of the panel (at its open size, before scaling) is on show.
+    public var shown: CGSize
+    /// Where the scaled panel's top-left corner is.
+    public var origin: CGPoint
+
+    /// `progress` runs from 0 (on the tile) to 1 (open); a spring may take it a little past 1, which
+    /// the scale and place follow and `shown` doesn't.
+    public init(from tile: CGRect, to open: CGRect, progress: CGFloat) {
+        // (Nothing to scale before the board has any room.)
+        let start = tile.isEmpty || open.isEmpty ? 1 : max(tile.width / open.width, tile.height / open.height)
+        func between(_ a: CGFloat, _ b: CGFloat, _ t: CGFloat) -> CGFloat { a + (b - a) * t }
+        let reveal = min(progress, 1)
+        scale = between(start, 1, progress)
+        shown = CGSize(width: between(tile.width / start, open.width, reveal), height: between(tile.height / start, open.height, reveal))
+        origin = CGPoint(x: between(tile.minX, open.minX, progress), y: between(tile.minY, open.minY, progress))
+    }
+}
+
 /// A step of the selection across the grid.
 public enum GridMove: Sendable {
     case left, right, up, down

@@ -23,14 +23,14 @@ enum ExpandedPanel {
     static func zoom(from source: CGRect?, board: CGRect, in area: CGRect) -> AnyTransition {
         let tile = origin(from: source, board: board).offsetBy(dx: -area.minX, dy: -area.minY)
         let open = target(from: source, board: board).offsetBy(dx: -area.minX, dy: -area.minY)
-        return .modifier(active: PanelZoom(progress: 0, tile: tile, open: open), identity: PanelZoom(progress: 1, tile: tile, open: open))
+        return .modifier(active: PanelZoomEffect(progress: 0, tile: tile, open: open),
+                         identity: PanelZoomEffect(progress: 1, tile: tile, open: open))
     }
 }
 
-/// Lays the panel out at its open size, then shows it at `progress` of the way from its tile: one
-/// scale for both axes, so nothing inside is stretched, and as much of it as the tile's shape
-/// allows. The content never changes size, so a terminal inside is never resized.
-struct PanelZoom: ViewModifier, Animatable {
+/// The open panel at `progress` of the way from its tile (see `PanelZoom`). The content keeps its
+/// open size throughout, so a terminal inside is never resized.
+struct PanelZoomEffect: ViewModifier, Animatable {
     /// 0: on the tile. 1: open.
     var progress: CGFloat
     let tile: CGRect
@@ -42,18 +42,15 @@ struct PanelZoom: ViewModifier, Animatable {
     }
 
     func body(content: Content) -> some View {
-        let start = max(tile.width / open.width, tile.height / open.height)
-        // The spring overshoots a little; what the panel shows of itself doesn't.
-        let shown = min(progress, 1)
-        func between(_ a: CGFloat, _ b: CGFloat, _ t: CGFloat) -> CGFloat { a + (b - a) * t }
-        return content
+        let zoom = PanelZoom(from: tile, to: open, progress: progress)
+        content
             .frame(width: open.width, height: open.height)
-            .frame(width: between(tile.width / start, open.width, shown), height: between(tile.height / start, open.height, shown),
-                   alignment: .top)
+            .frame(width: zoom.shown.width, height: zoom.shown.height, alignment: .top)
             .overlaySurface()
-            .scaleEffect(between(start, 1, progress), anchor: .topLeading)
-            .offset(x: between(tile.minX, open.minX, progress), y: between(tile.minY, open.minY, progress))
-            .opacity(between(0.3, 1, shown))
+            .scaleEffect(zoom.scale, anchor: .topLeading)
+            .offset(x: zoom.origin.x, y: zoom.origin.y)
+            // Faint on the tile, solid by the time it is open.
+            .opacity(0.3 + 0.7 * min(progress, 1))
     }
 }
 
@@ -134,7 +131,7 @@ struct PanelHeader: View {
                     .font(Style.mono(.label))
                     .foregroundStyle(Style.ink)
                     .padding(.horizontal, Style.Space.m).padding(.vertical, Style.Space.xs)
-                    .background(Style.glass, in: Style.shape(Style.Radius.s))
+                    .background(Style.Neutral.hover, in: Style.shape(Style.Radius.s))
                     .focused($addressFocused)
                     .onAppear { urlText = info.url ?? "" }
                     .onChange(of: info.url) { _, u in urlText = u ?? "" }

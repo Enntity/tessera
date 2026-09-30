@@ -17,7 +17,9 @@ struct BoardView: View {
             // needs the room), and when it scrolls the inset scrolls with it.
             let inset = Style.Space.l
             let area = geo.frame(in: .named("window"))
-            let board = area.insetBy(dx: inset, dy: inset)
+            // (`insetBy` would answer an area smaller than the inset with a rectangle at infinity.)
+            let board = CGRect(x: area.minX + inset, y: area.minY + inset,
+                               width: max(area.width - 2 * inset, 0), height: max(area.height - 2 * inset, 0))
             let layout = Self.grid(count: ids.count, in: board.size)
             ZStack(alignment: .topLeading) {
                 if ids.isEmpty {
