@@ -380,8 +380,9 @@ final class TerminalSnapshotTests: XCTestCase {
     func testScreenTailFollowsContentNotBottomRows() {
         let m = TerminalMirror(cols: 40, rows: 30)
         m.feed(Array("tick 1\r\ntick 2\r\nDo you want to proceed? (y/n) ".utf8))
+        XCTAssertEqual(m.terminal.liveEdgeRow, 2)
         let tail = m.terminal.screenTail(14)
-        XCTAssertEqual(tail.last, "Do you want to proceed? (y/n)")
+        XCTAssertEqual(tail, ["tick 1", "tick 2", "Do you want to proceed? (y/n)"])
         XCTAssertNotNil(TerminalActivityTracker.promptLine(in: tail))
     }
 

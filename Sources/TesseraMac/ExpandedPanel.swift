@@ -71,7 +71,7 @@ struct PanelContent: View {
                     if let session = workspace.terminals[id] {
                         ReparentHost(view: session.view, focus: true)
                             .overlay {
-                                // Same minimap look as the tiles; the live terminal underneath keeps the keyboard.
+                                // Same word blocks as the tiles; the live terminal underneath keeps the keyboard.
                                 if model.privacyMode {
                                     TerminalTileContent(session: session).allowsHitTesting(false)
                                 }

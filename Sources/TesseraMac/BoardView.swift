@@ -380,7 +380,7 @@ struct PrivateWebCover: View {
     }
 
     /// Downsample to wide, short cells; drawn without interpolation, lines of text become bars —
-    /// the same look as a terminal minimap.
+    /// the same look as a terminal's word blocks.
     static func mosaic(_ image: NSImage) -> NSImage? {
         guard let cg = image.cgImage(forProposedRect: nil, context: nil, hints: nil) else { return nil }
         let w = max(1, cg.width / 16), h = max(1, cg.height / 5)

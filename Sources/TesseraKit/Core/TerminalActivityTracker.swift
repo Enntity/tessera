@@ -102,7 +102,7 @@ public struct TerminalActivityTracker: Sendable {
 
         let quietFor = lastOutputAt.map { now.timeIntervalSince($0) } ?? .infinity
         let tail = screenTail.suffix(24)
-        let spinnerVisible = tail.contains { $0.lowercased().contains("esc to interrupt") }
+        let spinnerVisible = tail.contains { $0.range(of: "esc to interrupt", options: .caseInsensitive) != nil }
 
         if quietFor < Self.workingWindow || spinnerVisible {
             if activity != .working { detail = nil }

@@ -37,16 +37,20 @@ public struct TerminalTheme: Sendable {
     }
 }
 
-/// Draws a SwiftTerm screen into any CGContext. At thumbnail scale glyphs become a colored
-/// "minimap" of blocks, which reads as live activity and costs almost nothing; once cells are
-/// big enough to read, real text is drawn.
+/// Draws a SwiftTerm screen into a CGContext: the whole screen when cells are at least
+/// `textThreshold` tall, else a readable crop at `focusCellHeight` ending at the live edge.
 public final class MiniTerminalRenderer {
     public let theme: TerminalTheme
     private let palette: [RGB]
     private var fontCache: [Int: CTFont] = [:]
-    private var colorCache: [RGB: CGColor] = [:]
+    private var colorCache: [ColorKey: CGColor] = [:]
 
-    /// Below this cell height (points) text is unreadable, so draw blocks.
+    private struct ColorKey: Hashable {
+        var rgb: RGB
+        var alpha: CGFloat
+    }
+
+    /// Below this cell height the whole screen isn't readable, so a crop is drawn.
     public var textThreshold: CGFloat = 5.5
 
     public init(theme: TerminalTheme = .midnight) {
@@ -62,14 +66,14 @@ public final class MiniTerminalRenderer {
         return CGSize(width: min(w, h / 1.6), height: h)
     }
 
-    /// `ctx` must be in a top-left-origin, y-down coordinate space (SwiftUI Canvas, flipped NSView, UIView).
-    /// `obscured` (privacy mode) draws a block per word in place of the text, at the same size and place.
     /// Cell height used when the whole screen won't fit readably: text at roughly 6 pt.
     public var focusCellHeight: CGFloat = 8
 
     /// Draws the terminal into `size`. If the whole screen fits at a readable size it is drawn as
     /// text; if not, the tile shows a readable crop anchored at the live edge (where agents print
     /// their latest output).
+    /// `ctx` must be in a top-left-origin, y-down coordinate space (SwiftUI Canvas, flipped NSView, UIView).
+    /// `obscured` (privacy mode) draws a block per word in place of the text, at the same size and place.
     public func draw(_ terminal: Terminal, in ctx: CGContext, size: CGSize, showCursor: Bool = true, obscured: Bool = false) {
         ctx.setFillColor(color(theme.background))
         ctx.fill(CGRect(origin: .zero, size: size))
@@ -91,8 +95,7 @@ public final class MiniTerminalRenderer {
         let cell = CGSize(width: focusCellHeight * 0.78 * 0.6, height: focusCellHeight)
         let visibleRows = max(1, Int(size.height / cell.height))
         let visibleCols = max(1, Int(ceil(size.width / cell.width)))
-        let edge = max(lastTextRow(terminal), terminal.getCursorLocation().y)
-        let first = max(0, min(edge - visibleRows + 1, rows - visibleRows))
+        let first = max(0, min(terminal.liveEdgeRow - visibleRows + 1, rows - visibleRows))
         let range = first..<min(rows, first + visibleRows)
         drawRows(terminal, rows: range, cols: min(cols, visibleCols), cell: cell, origin: .zero,
                  font: obscured ? nil : self.font(size: cell.height * 0.78), in: ctx)
@@ -126,7 +129,7 @@ public final class MiniTerminalRenderer {
                 }
                 if attr.style.contains(.invisible) { continue }
                 if let font {
-                    drawText(text, font: font, color: fg.cgColor(alpha: alpha), at: CGPoint(x: runRect.minX, y: y + cell.height * 0.8), in: ctx)
+                    drawText(text, font: font, color: color(fg, alpha: alpha), at: CGPoint(x: runRect.minX, y: y + cell.height * 0.8), in: ctx)
                 } else {
                     drawBlocks(text, fg: fg, alpha: alpha, origin: runRect.origin, cell: cell, in: ctx)
                 }
@@ -137,26 +140,13 @@ public final class MiniTerminalRenderer {
     private func drawCursor(_ terminal: Terminal, firstRow: Int, rows: Int, cell: CGSize, origin: CGPoint, in ctx: CGContext) {
         let loc = terminal.getCursorLocation()
         guard loc.y >= firstRow, loc.y < rows else { return }
-        ctx.setFillColor(theme.cursor.cgColor(alpha: 0.85))
+        ctx.setFillColor(color(theme.cursor, alpha: 0.85))
         ctx.fill(CGRect(x: origin.x + CGFloat(loc.x) * cell.width, y: origin.y + CGFloat(loc.y - firstRow) * cell.height,
                         width: max(cell.width, 1), height: cell.height))
     }
 
-    /// The lowest visible row with any text on it.
-    private func lastTextRow(_ terminal: Terminal) -> Int {
-        var row = terminal.rows - 1
-        while row > 0 {
-            if let line = terminal.getLine(row: row) {
-                let n = min(line.count, terminal.cols)
-                if (0..<n).contains(where: { let c = line[$0].getCharacter(); return c != " " && c != "\u{0}" }) { return row }
-            }
-            row -= 1
-        }
-        return 0
-    }
-
     private func drawBlocks(_ text: String, fg: RGB, alpha: CGFloat, origin: CGPoint, cell: CGSize, in ctx: CGContext) {
-        ctx.setFillColor(fg.cgColor(alpha: alpha * 0.75))
+        ctx.setFillColor(color(fg, alpha: alpha * 0.75))
         var x = origin.x
         let h = max(cell.height * 0.7, 0.6)
         let inset = (cell.height - h) / 2
@@ -201,14 +191,15 @@ public final class MiniTerminalRenderer {
             return palette[bold && idx < 8 ? idx + 8 : min(idx, palette.count - 1)]
         case .trueColor(let r, let g, let b): return RGB(r, g, b)
         case .defaultColor: return isForeground ? theme.foreground : theme.background
-        case .defaultInvertedColor: return isForeground ? theme.background : theme.background
+        case .defaultInvertedColor: return theme.background  // SwiftTerm's Attribute.empty uses it as the plain background
         }
     }
 
-    private func color(_ c: RGB) -> CGColor {
-        if let hit = colorCache[c] { return hit }
-        let made = c.cgColor
-        colorCache[c] = made
+    private func color(_ c: RGB, alpha: CGFloat = 1) -> CGColor {
+        let key = ColorKey(rgb: c, alpha: alpha)
+        if let hit = colorCache[key] { return hit }
+        let made = c.cgColor(alpha: alpha)
+        colorCache[key] = made
         return made
     }
 
@@ -222,18 +213,29 @@ public final class MiniTerminalRenderer {
 }
 
 public extension Terminal {
-    /// The `count` visible rows ending at the live edge — the cursor or the last row with text,
-    /// whichever is lower — trailing spaces trimmed. Feeds prompt detection. (A fresh terminal's
-    /// content sits at the top, so "the bottom rows" would be blank.)
+    /// Where the latest output is: the cursor's row or the last row with text, whichever is lower.
+    /// (A fresh terminal's content sits at the top, so "the bottom rows" would be blank.) The tile
+    /// thumbnail's crop and prompt detection both follow it.
+    var liveEdgeRow: Int {
+        var row = rows - 1
+        while row > 0 {
+            if let line = getLine(row: row),
+               (0..<min(line.count, cols)).contains(where: { let c = line[$0].getCharacter(); return c != " " && c != "\u{0}" }) {
+                break
+            }
+            row -= 1
+        }
+        return max(row, getCursorLocation().y)
+    }
+
+    /// The `count` visible rows ending at the live edge, trailing spaces trimmed. Feeds prompt detection.
     func screenTail(_ count: Int) -> [String] {
-        let all: [String] = (0..<rows).map { row in
+        let end = min(rows, liveEdgeRow + 1)
+        return (max(0, end - count)..<end).map { row in
             var text = getLine(row: row)?.translateToString(trimRight: true) ?? ""
             while text.last == " " { text.removeLast() }
             return text
         }
-        let lastText = all.lastIndex { !$0.isEmpty } ?? 0
-        let end = min(rows, max(lastText, getCursorLocation().y) + 1)
-        return Array(all[max(0, end - count)..<end])
     }
 }
 

@@ -101,7 +101,7 @@ public extension EnvironmentValues {
 
 public extension String {
     /// Privacy mode: every word becomes a solid bar of the same length, keeping the shape and color
-    /// of the text but none of its content — the same look as a terminal minimap.
+    /// of the text but none of its content — the same word blocks as an obscured terminal.
     func obscured(_ on: Bool) -> String {
         guard on else { return self }
         return String(map { $0.isWhitespace ? $0 : "▆" })
