@@ -72,6 +72,8 @@ public final class Workspace {
     private var agentAcknowledged: [String: Date] = [:]
     /// Names the user gave app sessions (terminals and pages carry their own).
     private var agentTitles: [String: String] = [:]
+    /// Conversations whose question the user set aside, and when: until it moves on, it isn't asking.
+    private var agentDismissed: [String: Date] = [:]
     /// Observed: the tab strip offers them back.
     private var hiddenAgents: [String: Date] = [:]
     /// The order last saved, app sessions included: they take their places again as they reappear.
@@ -488,6 +490,14 @@ public final class Workspace {
         if agents.sessions[id] != nil { agentAcknowledged[id] = Date() }
     }
 
+    /// Takes a tile out of what needs the user without answering it (Mark as Seen, Dismiss): its
+    /// result counts as seen, its question as set aside until the next one.
+    public func dismiss(_ id: String) {
+        acknowledge(id)
+        terminals[id]?.dismissQuestion()
+        if agents.sessions[id] != nil { agentDismissed[id] = Date() }
+    }
+
     private func setViewed(_ id: String, _ viewed: Bool) {
         terminals[id]?.setViewed(viewed)
         browsers[id]?.setViewed(viewed)
@@ -618,8 +628,11 @@ public final class Workspace {
         var detail = a.snapshot.detail
         if detail == nil, a.snapshot.activity != .working { detail = a.summary }
         let unseen = a.snapshot.activity.isAttention && last > ack && !isOnShow(a.id)
-        // Finished work the user has already seen is just idle, same as a terminal.
-        let activity: TileActivity = a.snapshot.activity == .done && !unseen ? .idle : a.snapshot.activity
+        // Finished work the user has already seen is just idle, same as a terminal; so is a question
+        // set aside, until the conversation moves on.
+        let dismissed = agentDismissed[a.id].map { $0 >= last } ?? false
+        let activity: TileActivity = (a.snapshot.activity == .done && !unseen) || (a.snapshot.activity == .needsInput && dismissed)
+            ? .idle : a.snapshot.activity
         return TileInfo(id: a.id, kind: .agentSession, flavor: a.flavor, title: agentTitles[a.id] ?? a.title,
                         subtitle: a.cwd.abbreviatingHome, activity: activity,
                         attention: unseen,

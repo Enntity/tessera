@@ -88,6 +88,16 @@ public struct TerminalActivityTracker: Sendable {
         self = TerminalActivityTracker()
     }
 
+    /// The user set the question aside without answering: it counts as answered, so it isn't asked
+    /// again while it stays on screen; a different one is.
+    public mutating func dismissQuestion() {
+        guard activity == .needsInput else { return }
+        if let visiblePrompt { answeredPrompt = visiblePrompt }
+        activity = .idle
+        detail = nil
+        attention = false
+    }
+
     /// The user opened the tile: clear the unseen marker and settle finished work to idle.
     public mutating func acknowledge() {
         attention = false

@@ -283,6 +283,9 @@ struct TileHoverControls: View {
 
     var body: some View {
         HStack(spacing: Style.Space.gutter) {
+            if info.needsUser {
+                button(TileAction(title: info.dismissLabel, symbol: "checkmark") { model.workspace.dismiss(info.id) })
+            }
             if info.kind == .terminal, let action = model.actions(for: info).first { button(action) }
             button(model.closeAction(for: info))
         }

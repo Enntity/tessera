@@ -354,7 +354,7 @@ final class RemoteClient {
             workspace.terminals[input.id]?.send([UInt8](input.bytes))
         case .action(let action):
             switch action.kind {
-            case .acknowledge: workspace.acknowledge(action.id)
+            case .acknowledge: workspace.dismiss(action.id)
             case .openOnHost:
                 NSApp.activate()
                 open(action.id)

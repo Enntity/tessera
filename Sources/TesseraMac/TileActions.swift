@@ -71,7 +71,7 @@ struct TileMenu: View {
         Button(dock.title, action: dock.run)
         Button("Rename…", action: rename)
         ForEach(model.actions(for: info)) { action in Button(action.title, action: action.run) }
-        if info.attention { Button("Mark as Seen") { workspace.acknowledge(info.id) } }
+        if info.needsUser { Button(info.dismissLabel) { workspace.dismiss(info.id) } }
         Menu("Move to Tab") {
             let current = workspace.groups.group(of: info.id)?.id
             ForEach(workspace.groups.list) { group in

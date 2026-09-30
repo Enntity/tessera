@@ -250,7 +250,7 @@ final class AppModel {
         switch command {
         case .closeExited, .hideIdle: close(ids)
         case .showHidden: reopen(ids)
-        case .markAllSeen: ids.forEach(workspace.acknowledge)
+        case .markAllSeen: ids.forEach(workspace.dismiss)
         case .restartFailed: ids.forEach(workspace.restart)
         case .shutDownAll: ids.forEach(workspace.shutDown)
         case .resumeAll: ids.forEach(workspace.resume)

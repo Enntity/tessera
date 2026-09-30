@@ -161,6 +161,8 @@ public struct TileInfo: Codable, Identifiable, Hashable, Sendable {
     public var isUnseen: Bool { attention && activity.isAttention }
     /// Waiting on the user: an open question or an unseen result.
     public var needsUser: Bool { isUnseen || activity == .needsInput }
+    /// What taking it out of the queue without answering is called.
+    public var dismissLabel: String { activity == .needsInput ? "Dismiss Question" : "Mark as Seen" }
 
     public init(id: String, kind: TileKind, flavor: AgentFlavor, title: String, subtitle: String = "",
                 activity: TileActivity = .starting, attention: Bool = false, lastActivityAt: Date = Date(),

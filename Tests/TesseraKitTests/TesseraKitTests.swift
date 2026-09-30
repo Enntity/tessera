@@ -199,6 +199,23 @@ final class TerminalActivityTrackerTests: XCTestCase {
         XCTAssertFalse(t.attention)
     }
 
+    func testADismissedQuestionStaysDismissedUntilANewOneIsAsked() {
+        var t = TerminalActivityTracker()
+        t.noteOutput(bytes: 100, at: t0)
+        t.tick(now: t0.addingTimeInterval(2), screenTail: ["Do you want to proceed? (y/n)"])
+        XCTAssertEqual(t.activity, .needsInput)
+        t.dismissQuestion()
+        XCTAssertEqual(t.activity, .idle)
+        XCTAssertFalse(t.attention)
+        // Still on screen, it isn't asked again.
+        t.tick(now: t0.addingTimeInterval(4), screenTail: ["Do you want to proceed? (y/n)"])
+        XCTAssertEqual(t.activity, .idle)
+        // A new question is.
+        t.noteOutput(bytes: 100, at: t0.addingTimeInterval(5))
+        t.tick(now: t0.addingTimeInterval(7), screenTail: ["Allow command: rm -rf build/ (y/n)"])
+        XCTAssertEqual(t.activity, .needsInput)
+    }
+
     func testOnlyAttentionStatesNeedTheUser() {
         var tile = TileInfo(id: "t", kind: .terminal, flavor: .shell, title: "t", activity: .working, attention: true)
         XCTAssertFalse(tile.isUnseen)

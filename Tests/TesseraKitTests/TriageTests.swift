@@ -252,7 +252,8 @@ final class BoardCommandTests: XCTestCase {
     }
 
     func testEachCommandPicksItsOwnTiles() {
-        XCTAssertEqual(targets(.markAllSeen), ["unseen", "failed"])
+        // Questions too: dismissed, as much as results are seen.
+        XCTAssertEqual(targets(.markAllSeen), ["unseen", "asking", "failed"])
         // A terminal the user shut down is kept for Resume, not swept away.
         XCTAssertEqual(targets(.closeExited, suspended: ["down"]), ["exited"])
         XCTAssertEqual(targets(.restartFailed), ["failed"])

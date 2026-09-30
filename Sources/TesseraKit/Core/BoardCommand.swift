@@ -35,7 +35,7 @@ public enum BoardCommand: String, CaseIterable, Identifiable, Sendable {
     /// Whether it would act on `tile`, a tile on the board (`suspended`: a terminal that was shut down).
     public func applies(to tile: TileInfo, suspended: Bool) -> Bool {
         switch self {
-        case .markAllSeen: tile.attention
+        case .markAllSeen: tile.needsUser
         // A terminal the user shut down is kept for Resume.
         case .closeExited: tile.kind == .terminal && tile.activity == .exited && !suspended
         case .restartFailed: tile.kind == .terminal && tile.activity == .failed

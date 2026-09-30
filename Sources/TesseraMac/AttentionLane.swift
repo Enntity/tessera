@@ -73,7 +73,8 @@ struct LaneRow: View {
                             Text(info.title).font(Style.label).foregroundStyle(Style.ink).lineLimit(1)
                             if info.activity == .done { Dot(Style.mint).padding(.leading, Style.Space.xxs) }
                             Spacer(minLength: Style.Space.xs)
-                            Age(of: info.lastActivityAt).font(Style.caption).foregroundStyle(Style.muted)
+                            // Under the pointer, the age makes way for the dismiss button over it.
+                            Age(of: info.lastActivityAt).font(Style.caption).foregroundStyle(Style.muted).opacity(hovering ? 0 : 1)
                         }
                         HStack(alignment: .firstTextBaseline, spacing: Style.Space.xs) {
                             Text(hidden(info) ? AttributedString(info.reason.obscured(true)) : info.reason.markdownPreview(120))
@@ -97,6 +98,21 @@ struct LaneRow: View {
                 .buttonStyle(.plain)
                 if hovering, info.kind == .terminal, info.activity == .needsInput {
                     answers.padding(.horizontal, Style.Space.m).padding(.bottom, Style.Space.m)
+                }
+            }
+            .overlay(alignment: .topTrailing) {
+                if hovering {
+                    Button { model.workspace.dismiss(id) } label: {
+                        Image(systemName: "checkmark")
+                            .font(Style.ui(.caption, .bold))
+                            .frame(width: Style.Metrics.key, height: Style.Metrics.key)
+                            .background(Style.Neutral.selected, in: Circle())
+                            .foregroundStyle(Style.ink)
+                    }
+                    .buttonStyle(.plain)
+                    .help(info.dismissLabel)
+                    .padding(Style.Space.xs)
+                    .transition(.opacity)
                 }
             }
             .background(model.workspace.selectedId == id ? Style.Neutral.selected : hovering ? Style.Neutral.hover : .clear,

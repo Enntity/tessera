@@ -125,6 +125,7 @@ Every gesture means the same thing on every kind of tile.
 | ⌘⏎ (board) | Open the selected tile |
 | ⌘W (board) | Close the selected tile, with Undo; a Claude or Codex conversation is only hidden. In another window (Settings), ⌘W closes that window |
 | Hover ✕ | Close the tile, with Undo. On a Claude or Codex conversation the button is an eye (Hide): nothing is stopped |
+| Hover ✓ (tile or lane row) · Dismiss Question / Mark as Seen | Take it out of what needs you without answering: a question you won't answer in text is set aside (it isn't raised again while it stays on screen; the next one is), a result counts as seen. Mark All Seen does it for the whole tab |
 | ⌘Z · Undo in the toast | Bring back the tile just closed or hidden, where it was (in a text field, ⌘Z undoes typing as usual) |
 | ←↑→↓ | Move the selection across the grid; it stops at the edges and a scrolling board follows |
 | ⌘[ ⌘] | Previous / next tile, round and round. With a tile open, the open tile changes in place (a Claude or Codex conversation shows its transcript; ⌘O goes to the app), passing over docked tiles |
@@ -143,7 +144,7 @@ Every gesture means the same thing on every kind of tile.
 | Asking · Failed · Done · Working (top bar) | Open the next tile in that state, oldest first (a counter shows only while something is in its state) |
 | ⌘1 / ⌘3…9 | All / your tabs |
 | ⌘2 | Only what needs you, in the tab you're on (the Needs you chip); again for everything |
-| Click a row in the lane | Open that tile, as a click on it does. Hovering a terminal's question: `1 2 3 y n ⏎` answer it in place |
+| Click a row in the lane | Open that tile, as a click on it does. Hovering a terminal's question: `1 2 3 y n ⏎` answer it in place, ✓ dismisses it |
 | ⌥⌘\ / ⌘\ | Toggle the Needs-you lane / the accounts sidebar (also in the View menu) |
 | ⇧⌘P | Privacy mode |
 | ⌥⇧⌘W / ⌥⇧⌘R | Shut down / resume all terminals |

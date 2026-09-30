@@ -326,6 +326,11 @@ public final class TerminalSession: NSObject {
         refreshInfo()
     }
 
+    public func dismissQuestion() {
+        tracker.dismissQuestion()
+        refreshInfo()
+    }
+
     public func rename(_ newTitle: String?) {
         customTitle = newTitle?.isEmpty == true ? nil : newTitle
         refreshInfo()
