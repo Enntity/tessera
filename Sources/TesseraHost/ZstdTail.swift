@@ -20,37 +20,51 @@ final class ZstdTail {
         return decoded.isEmpty ? nil : decoded
     }
 
-    /// Decodes the leading complete frames of `data`; returns the output and how many input bytes
-    /// they spanned. A trailing partial frame (still being written) is left for next time.
+    /// Decodes the leading complete frames of `data`, one at a time; returns the output and how many
+    /// input bytes they spanned. A trailing partial frame (still being written) is left for next
+    /// time. A damaged frame is skipped whole, so it can neither repeat what came before it nor
+    /// stall what comes after.
     static func decodeCompleteFrames(_ data: Data) -> (Data, Int) {
         var consumed = 0
         var output = Data()
         data.withUnsafeBytes { (raw: UnsafeRawBufferPointer) in
-            guard let base = raw.baseAddress else { return }
-            // Find the extent of complete frames.
-            var end = 0
-            while end < raw.count {
-                let frame = ZSTD_findFrameCompressedSize(base + end, raw.count - end)
-                if ZSTD_isError(frame) != 0 { break }
-                end += frame
-            }
-            guard end > 0, let stream = ZSTD_createDStream() else { return }
+            guard let base = raw.baseAddress, let stream = ZSTD_createDStream() else { return }
             defer { ZSTD_freeDStream(stream) }
-            ZSTD_initDStream(stream)
-            var input = ZSTD_inBuffer(src: base, size: end, pos: 0)
-            let chunk = ZSTD_DStreamOutSize()
-            var buffer = [UInt8](repeating: 0, count: chunk)
-            while input.pos < input.size {
-                let result = buffer.withUnsafeMutableBytes { out -> Int in
-                    var o = ZSTD_outBuffer(dst: out.baseAddress, size: chunk, pos: 0)
-                    let r = ZSTD_decompressStream(stream, &o, &input)
-                    if ZSTD_isError(r) == 0 { output.append(out.bindMemory(to: UInt8.self).baseAddress!, count: o.pos) }
-                    return r
+            var buffer = [UInt8](repeating: 0, count: ZSTD_DStreamOutSize())
+            while consumed < raw.count {
+                let size = ZSTD_findFrameCompressedSize(base + consumed, raw.count - consumed)
+                if ZSTD_isError(size) != 0 {
+                    // Not a whole frame: one still being written, unless another frame follows it.
+                    guard let next = nextFrame(in: data, after: consumed) else { return }
+                    consumed = next
+                    continue
                 }
-                if ZSTD_isError(result) != 0 { return }
+                ZSTD_initDStream(stream)
+                var input = ZSTD_inBuffer(src: base + consumed, size: size, pos: 0)
+                var frame = Data()
+                var result = 1
+                // A frame is done when the decoder says so (0); an error, or no progress, means damage.
+                while result != 0 {
+                    let before = (input.pos, frame.count)
+                    result = buffer.withUnsafeMutableBytes { out -> Int in
+                        var o = ZSTD_outBuffer(dst: out.baseAddress, size: out.count, pos: 0)
+                        let r = ZSTD_decompressStream(stream, &o, &input)
+                        if ZSTD_isError(r) == 0 { frame.append(out.bindMemory(to: UInt8.self).baseAddress!, count: o.pos) }
+                        return r
+                    }
+                    if ZSTD_isError(result) != 0 || before == (input.pos, frame.count) { frame = Data(); break }
+                }
+                output.append(frame)
+                consumed += size
             }
-            consumed = end
         }
         return (output, consumed)
+    }
+
+    /// Where the next frame starts after `offset` (its magic number, 0xFD2FB528 little-endian).
+    private static func nextFrame(in data: Data, after offset: Int) -> Int? {
+        let from = data.startIndex + offset + 1
+        guard from < data.endIndex else { return nil }
+        return data.range(of: Data([0x28, 0xB5, 0x2F, 0xFD]), in: from..<data.endIndex).map { $0.lowerBound - data.startIndex }
     }
 }

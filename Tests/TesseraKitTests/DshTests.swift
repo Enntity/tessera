@@ -11,6 +11,29 @@ final class ZstdTailTests: XCTestCase {
         return Data(dst[0..<n])
     }
 
+    /// A frame with a content checksum; damaging it keeps the structure but fails decoding.
+    private func checkedFrame(_ text: String) -> Data {
+        let src = Array(text.utf8)
+        var dst = [UInt8](repeating: 0, count: ZSTD_compressBound(src.count))
+        let cctx = ZSTD_createCCtx()
+        defer { ZSTD_freeCCtx(cctx) }
+        ZSTD_CCtx_setParameter(cctx, ZSTD_c_checksumFlag, 1)
+        let n = ZSTD_compress2(cctx, &dst, dst.count, src, src.count)
+        return Data(dst[0..<n])
+    }
+
+    /// Damage in the middle of a log costs only the damaged part: nothing repeats, nothing stalls.
+    func testDamagedFramesAreSkipped() throws {
+        var bad = checkedFrame("{\"bad\":1}\n")
+        bad[bad.count - 1] ^= 0xFF
+        let data = frame("{\"a\":1}\n") + bad + Data("not zstd".utf8) + frame("{\"c\":3}\n")
+        let (decoded, consumed) = ZstdTail.decodeCompleteFrames(data)
+        XCTAssertEqual(String(decoding: decoded, as: UTF8.self), "{\"a\":1}\n{\"c\":3}\n")
+        XCTAssertEqual(consumed, data.count)
+        // Garbage at the end may be a frame still being written: wait for more.
+        XCTAssertEqual(ZstdTail.decodeCompleteFrames(frame("x") + Data("partial".utf8)).1, frame("x").count)
+    }
+
     func testDecodesOnlyCompleteAppendedFrames() throws {
         let path = NSTemporaryDirectory() + "tessera-zstd-\(UUID().uuidString).zst"
         defer { try? FileManager.default.removeItem(atPath: path) }
