@@ -147,7 +147,7 @@ enum LoginShell {
         p.standardInput = FileHandle.nullDevice
         do { try p.run() } catch { return nil }
         // Interactive shells ignore SIGTERM, and whatever a startup file started holds the output
-        // open too: stop the whole process group.
+        // open too: stop the whole process group (Process starts the shell as its leader).
         let pid = p.processIdentifier
         let killer = DispatchWorkItem { kill(-pid, SIGKILL); kill(pid, SIGKILL) }
         DispatchQueue.global().asyncAfter(deadline: .now() + timeout, execute: killer)
