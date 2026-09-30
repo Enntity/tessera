@@ -408,9 +408,21 @@ final class UsageAPITests: XCTestCase {
     func testClaudePlanWindows() throws {
         let config = UsageProviderConfig(id: "cp", kind: .claudePlan)
         let r = try UsageAPI.parse(Data(#"{"five_hour":{"utilization":42.0,"resets_at":null},"seven_day":{"utilization":80}}"#.utf8), for: config)
-        XCTAssertEqual(r.headline, "5h 42%")
+        // One number: what is left of the window nearest its limit, as the gauge shows.
+        XCTAssertEqual(r.headline, "20% left")
         XCTAssertEqual(r.remaining!, 0.2, accuracy: 0.001)
-        XCTAssertEqual(r.lines.count, 2)
+        XCTAssertEqual(r.lines, ["5h 42% used", "Week 80% used"])
+    }
+
+    func testCodexPlanSaysWhatIsLeft() {
+        let config = UsageProviderConfig(id: "cx", kind: .codexPlan)
+        let now = Date(timeIntervalSince1970: 1_000_000)
+        let limits = CodexRateLimits(json: ["primary": ["used_percent": 37.5, "window_minutes": 300, "resets_in_seconds": 600],
+                                            "secondary": ["used_percent": 12, "window_minutes": 10080], "plan_type": "pro"], recordedAt: now)
+        let r = UsageAPI.reading(for: limits, config: config, now: now)
+        XCTAssertEqual(r.headline, "62% left")
+        XCTAssertEqual(r.remaining!, 0.625, accuracy: 0.001)
+        XCTAssertEqual(r.lines, ["5h 38% used · resets in 10m", "Week 12% used", "Plan: pro"])
     }
 
     func testCustomDotPath() throws {

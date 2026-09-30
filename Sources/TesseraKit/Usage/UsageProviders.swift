@@ -247,19 +247,12 @@ public enum UsageAPI {
             if let name = obj["name"] as? String { reading.lines = [name] }
         case .claudePlan:
             let windows: [(String, String)] = [("five_hour", "5h"), ("seven_day", "Week"), ("seven_day_opus", "Opus wk"), ("seven_day_sonnet", "Sonnet wk")]
-            var parts: [String] = []
-            var worst = 0.0
-            for (key, label) in windows {
-                guard let w = obj[key] as? [String: Any], let util = number(w["utilization"]) else { continue }
-                worst = max(worst, util)
-                var line = "\(label) \(Int(util.rounded()))%"
-                if let reset = TranscriptSupport.date(w["resets_at"]) { line += " · resets \(relative(reset, now: now))" }
-                parts.append(line)
+            let used = windows.compactMap { key, label -> PlanWindow? in
+                guard let w = obj[key] as? [String: Any], let util = number(w["utilization"]) else { return nil }
+                return PlanWindow(label: label, usedPercent: util, resetsAt: TranscriptSupport.date(w["resets_at"]))
             }
-            guard !parts.isEmpty else { throw Failure.shape("No plan windows in response") }
-            reading.headline = parts[0].components(separatedBy: " · ").first ?? parts[0]
-            reading.remaining = max(0, 1 - worst / 100)
-            reading.lines = parts
+            guard !used.isEmpty else { throw Failure.shape("No plan windows in response") }
+            applyPlan(used, to: &reading, now: now)
         case .custom:
             let path = config.customJSONPath ?? ""
             guard let value = number(dig(json, path: path)) else { throw Failure.shape("No number at `\(path)`") }
@@ -280,19 +273,33 @@ public enum UsageAPI {
             reading.message = "Codex has not recorded plan limits recently (API-key sessions don't report them)."
             return reading
         }
-        var parts: [String] = []
-        for (window, fallback) in [(limits.primary, "5h"), (limits.secondary, "Week")] {
-            guard let w = window else { continue }
-            let label = w.windowMinutes.map { $0 >= 1440 ? ($0 >= 10080 ? "Week" : "\($0 / 1440)d") : "\($0 / 60)h" } ?? fallback
-            var line = "\(label) \(Int(w.usedPercent.rounded()))%"
-            if let reset = w.resetsAt { line += " · resets \(relative(reset, now: now))" }
-            parts.append(line)
-        }
-        let worst = [limits.primary?.usedPercent, limits.secondary?.usedPercent].compactMap { $0 }.max() ?? 0
-        reading.headline = parts.first?.components(separatedBy: " · ").first ?? ""
-        reading.remaining = max(0, 1 - worst / 100)
-        reading.lines = parts + (limits.planType.map { ["Plan: \($0)"] } ?? [])
+        applyPlan([(limits.primary, "5h"), (limits.secondary, "Week")].compactMap { window, fallback in
+            window.map { w in
+                PlanWindow(label: w.windowMinutes.map { $0 >= 1440 ? ($0 >= 10080 ? "Week" : "\($0 / 1440)d") : "\($0 / 60)h" } ?? fallback,
+                           usedPercent: w.usedPercent, resetsAt: w.resetsAt)
+            }
+        }, to: &reading, now: now)
+        reading.lines += limits.planType.map { ["Plan: \($0)"] } ?? []
         return reading
+    }
+
+    /// One of a plan's usage windows (five hours, a week).
+    struct PlanWindow {
+        var label: String
+        var usedPercent: Double
+        var resetsAt: Date?
+    }
+
+    /// A plan's reading: the headline and the gauge both say how much is left of the window
+    /// nearest its limit, and a line per window says how much of it is used.
+    static func applyPlan(_ windows: [PlanWindow], to reading: inout UsageReading, now: Date) {
+        let used = windows.map(\.usedPercent).max() ?? 0
+        // Rounded as the lines below round it, so the two add up.
+        reading.headline = "\(max(0, 100 - Int(used.rounded())))% left"
+        reading.remaining = max(0, 1 - used / 100)
+        reading.lines = windows.map { w in
+            "\(w.label) \(Int(w.usedPercent.rounded()))% used" + (w.resetsAt.map { " · resets \(relative($0, now: now))" } ?? "")
+        }
     }
 
     /// The Claude plan row from locally counted usage, when the official limits aren't available.
