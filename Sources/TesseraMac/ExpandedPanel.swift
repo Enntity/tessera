@@ -12,6 +12,9 @@ struct ExpandedPanel: View {
     let board: CGRect
     let source: CGRect?
     @State private var settled = false
+    /// Off while the panel grows out of its tile: a double-click's second click lands then, and
+    /// must not reach the terminal or page inside (nor the backdrop, which would close the panel).
+    @State private var takesClicks = false
 
     /// Where the panel grows from: the tile, or the board's centre.
     static func origin(from source: CGRect?, board: CGRect) -> CGRect {
@@ -36,7 +39,7 @@ struct ExpandedPanel: View {
             Color.black.opacity(settled ? 0.5 : 0)
                 .contentShape(Rectangle())
                 .onTapGesture { model.collapse() }
-            PanelContent(id: id, frame: target)
+            PanelContent(id: id)
                 .frame(width: target.width, height: target.height)
                 .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                 .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(Style.ink.opacity(0.18)))
@@ -45,13 +48,17 @@ struct ExpandedPanel: View {
                 .offset(x: at.x - board.minX, y: at.y - board.minY)
                 .opacity(settled ? 1 : 0.3)
         }
+        .overlay { if !takesClicks { Color.clear.contentShape(Rectangle()).onTapGesture {} } }
         .onAppear {
-            model.expandedFrame = target
             withAnimation(.spring(duration: 0.36, bounce: 0.1)) { settled = true }
         }
         .onChange(of: id) { _, _ in
             settled = false
             withAnimation(.spring(duration: 0.36, bounce: 0.1)) { settled = true }
+        }
+        .task(id: id) {
+            takesClicks = false
+            if (try? await Task.sleep(for: .seconds(min(NSEvent.doubleClickInterval, 0.5)))) != nil { takesClicks = true }
         }
     }
 }
@@ -59,26 +66,28 @@ struct ExpandedPanel: View {
 struct PanelContent: View {
     @Environment(AppModel.self) private var model
     let id: String
-    let frame: CGRect
 
     var body: some View {
         let workspace = model.workspace
         if let info = workspace.info(id) {
             VStack(spacing: 0) {
-                PanelHeader(info: info, frame: frame)
+                PanelHeader(info: info)
                 switch info.kind {
                 case .terminal:
                     if let session = workspace.terminals[id] {
-                        ReparentHost(view: session.view, focus: true)
+                        ReparentHost(view: session.view, focus: !info.activity.hasEnded)
                             .overlay {
                                 // Same word blocks as the tiles; the live terminal underneath keeps the keyboard.
                                 if model.privacyMode {
                                     TerminalTileContent(session: session).allowsHitTesting(false)
                                 }
                             }
+                            .overlay { EndedOverlay(info: info, inPanel: true) }
                             .padding(.horizontal, 8)
                             .padding(.vertical, 6)
                             .background(Style.terminalBackground)
+                            // The keyboard leaves a terminal that ends while open, and returns once it runs again.
+                            .onChange(of: info.activity.hasEnded) { model.restoreFocus() }
                     }
                 case .browser:
                     if let browser = workspace.browsers[id] {
@@ -86,7 +95,7 @@ struct PanelContent: View {
                             .overlay { if model.privacyMode { PrivateWebCover(browser: browser) } }
                     }
                 case .agentSession:
-                    AgentPanel(id: id, frame: frame)
+                    AgentPanel(id: id)
                         .id(id)  // a fresh panel per session, so switching sessions reselects
                 }
             }
@@ -98,8 +107,9 @@ struct PanelContent: View {
 struct PanelHeader: View {
     @Environment(AppModel.self) private var model
     let info: TileInfo
-    let frame: CGRect
     @State private var urlText = ""
+    @State private var renaming = false
+    @FocusState private var addressFocused: Bool
 
     var body: some View {
         let workspace = model.workspace
@@ -108,16 +118,18 @@ struct PanelHeader: View {
             if info.kind == .browser, let browser = workspace.browsers[info.id] {
                 Button { browser.webView.goBack() } label: { Image(systemName: "chevron.left") }.buttonStyle(.plain)
                 Button { browser.webView.goForward() } label: { Image(systemName: "chevron.right") }.buttonStyle(.plain)
-                Button { browser.webView.reload() } label: { Image(systemName: "arrow.clockwise") }.buttonStyle(.plain)
                 TextField("URL", text: $urlText)
                     .textFieldStyle(.plain)
                     .font(Style.mono(12))
                     .padding(.horizontal, 8).padding(.vertical, 4)
                     .background(Style.glass, in: RoundedRectangle(cornerRadius: 6))
+                    .focused($addressFocused)
                     .onAppear { urlText = info.url ?? "" }
                     .onChange(of: info.url) { _, u in urlText = u ?? "" }
+                    .onChange(of: model.addressFocus) { addressFocused = true }
                     .onSubmit {
                         if let url = WebAddress.normalize(urlText) { browser.load(url) }
+                        model.restoreFocus()
                     }
             } else {
                 VStack(alignment: .leading, spacing: 1) {
@@ -130,21 +142,23 @@ struct PanelHeader: View {
             if let cols = info.cols, let rows = info.rows {
                 Text("\(cols)×\(rows)").font(Style.mono(10)).foregroundStyle(Style.faint)
             }
-            if info.kind == .terminal {
-                if workspace.terminals[info.id]?.isSuspended == true {
-                    headerButton("play.fill", "Resume") { workspace.resume(info.id) }
-                } else {
-                    headerButton("power", "Shut down (keeps the conversation for Resume)") { workspace.shutDown(info.id) }
-                    headerButton("arrow.clockwise", "Restart") { workspace.restart(info.id) }
-                }
+            ForEach(model.actions(for: info)) { headerButton($0) }
+            Menu {
+                TileMenu(info: info, inPanel: true) { renaming = true }
+            } label: {
+                Image(systemName: "ellipsis.circle").font(.system(size: 13))
             }
-            if info.kind == .browser, let url = workspace.browsers[info.id]?.url {
-                headerButton("safari", "Open in default browser") { NSWorkspace.shared.open(url) }
-            }
-            headerButton("xmark.circle", info.kind == .agentSession ? "Hide tile" : "Close tile") {
-                workspace.close(info.id)
-            }
-            headerButton("arrow.down.right.and.arrow.up.left", "Back to board (⌘⏎)") { model.collapse() }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .fixedSize()
+            .help("More")
+            .modifier(RenamePopover(info: info, isPresented: $renaming))
+            headerButton(model.closeAction(for: info))
+            // Closing ends the tile; going back doesn't. They sit apart.
+            Divider().frame(height: 18).overlay(Style.hairline)
+            Button { model.collapse() } label: { Image(systemName: "arrow.down.right.and.arrow.up.left").font(.system(size: 13)) }
+                .buttonStyle(.plain)
+                .help("Back to board (⌘⏎)")
         }
         .foregroundStyle(Style.dim)
         .padding(.horizontal, 12)
@@ -153,10 +167,10 @@ struct PanelHeader: View {
         .overlay(alignment: .bottom) { Rectangle().fill(Style.hairline).frame(height: 1) }
     }
 
-    private func headerButton(_ symbol: String, _ help: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) { Image(systemName: symbol).font(.system(size: 13)) }
+    private func headerButton(_ action: TileAction) -> some View {
+        Button(action: action.run) { Image(systemName: action.symbol).font(.system(size: 13)) }
             .buttonStyle(.plain)
-            .help(help)
+            .help(action.title)
     }
 }
 
@@ -165,7 +179,6 @@ struct PanelHeader: View {
 struct AgentPanel: View {
     @Environment(AppModel.self) private var model
     let id: String
-    let frame: CGRect
     @State private var opened = false
     /// dsh sessions: the live dsh web page or Tessera's own transcript.
     @State private var showLive = true
@@ -192,19 +205,21 @@ struct AgentPanel: View {
                 } else {
                     if let resume = session?.resumeCommand {
                         Button {
-                            workspace.launch(command: resume, cwd: session?.cwd)
-                            model.collapse()
+                            model.create { $0.launch(command: resume, cwd: session?.cwd) }
                         } label: { Label("Continue in Terminal", systemImage: "terminal") }
                             .buttonStyle(.bordered)
                             .controlSize(.small)
                     }
-                    Button {
-                        openNative()
-                    } label: { Label("Open in \(session?.flavor.displayName ?? "App")", systemImage: "arrow.up.forward.app") }
-                        .buttonStyle(.borderedProminent)
-                        .tint(Style.accent(session?.flavor ?? .claudeDesktop).opacity(0.8))
-                        .controlSize(.small)
-                        .keyboardShortcut("o")
+                    // Only where the app is there to open it; the panel closes as the app comes forward.
+                    if workspace.opensInApp(id) {
+                        Button {
+                            model.open(id)
+                        } label: { Label("Open in \(session?.flavor.displayName ?? "App")", systemImage: "arrow.up.forward.app") }
+                            .buttonStyle(.borderedProminent)
+                            .tint(Style.accent(session?.flavor ?? .claudeDesktop).opacity(0.8))
+                            .controlSize(.small)
+                            .keyboardShortcut("o")
+                    }
                 }
             }
             .padding(.horizontal, 14)
@@ -217,6 +232,7 @@ struct AgentPanel: View {
                     .overlay { if model.privacyMode { PrivateWebCover(browser: page) } }
             } else {
                 ConversationDetail(snapshot: session?.snapshot, flavor: session?.flavor ?? .claudeDesktop)
+                    .background { EscToBoard() }
             }
         }
         .onAppear {
@@ -225,10 +241,6 @@ struct AgentPanel: View {
             // Brings up dsh web (if needed) and selects this session in it.
             if isDsh { workspace.openNative(id, at: nil) }
         }
-    }
-
-    private func openNative() {
-        model.workspace.openNative(id, at: model.screenRect(fromWindow: frame))
     }
 }
 
@@ -255,6 +267,7 @@ struct ReparentHost: NSViewRepresentable {
 
     final class HostContainer: NSView {
         private weak var hosted: NSView?
+        private var focus = false
 
         func adopt(_ view: NSView, focus: Bool) {
             // Switching tiles while open reuses this container: evict the previous view.
@@ -264,8 +277,18 @@ struct ReparentHost: NSViewRepresentable {
             addSubview(view)
             hosted = view
             needsLayout = true
-            if focus {
-                DispatchQueue.main.async { [weak self] in self?.window?.makeFirstResponder(view) }
+            self.focus = focus
+            takeFocus()
+        }
+
+        /// A panel that has just been created may reach its window only after `adopt`.
+        override func viewDidMoveToWindow() { takeFocus() }
+
+        private func takeFocus() {
+            guard focus else { return }
+            DispatchQueue.main.async { [weak self] in
+                guard let self, let hosted else { return }
+                window?.makeFirstResponder(hosted)
             }
         }
 

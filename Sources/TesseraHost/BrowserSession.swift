@@ -11,6 +11,8 @@ import WebKit
 public final class BrowserSession: NSObject {
     public let id: String
     public private(set) var info: TileInfo
+    /// A name of the user's own; it wins over the page's title.
+    public private(set) var customTitle: String?
     public private(set) var snapshot: NSImage?
     /// The snapshot as a coarse, unreadable mosaic, for privacy mode.
     public private(set) var mosaic: NSImage?
@@ -21,16 +23,16 @@ public final class BrowserSession: NSObject {
     @ObservationIgnored private var lastSnapshotAt: Date = .distantPast
     @ObservationIgnored private var pendingScript: String?
 
-
-    public init(id: String = UUID().uuidString, url: URL) {
+    public init(id: String = UUID().uuidString, url: URL, title: String? = nil) {
         self.id = id
+        customTitle = title
         let config = WKWebViewConfiguration()
         config.websiteDataStore = .default()
         config.preferences.isElementFullscreenEnabled = true
         webView = WKWebView(frame: CGRect(x: 0, y: 0, width: 1280, height: 800), configuration: config)
         webView.allowsBackForwardNavigationGestures = true
         webView.allowsMagnification = true
-        info = TileInfo(id: id, kind: .browser, flavor: .web, title: url.host ?? url.absoluteString,
+        info = TileInfo(id: id, kind: .browser, flavor: .web, title: title ?? url.host ?? url.absoluteString,
                         subtitle: url.host ?? "", activity: .starting, url: url.absoluteString)
         super.init()
         webView.navigationDelegate = self
@@ -68,10 +70,15 @@ public final class BrowserSession: NSObject {
         if info.activity == .done { info.activity = .idle }
     }
 
+    public func rename(_ title: String?) {
+        customTitle = title?.isEmpty == true ? nil : title
+        info.title = customTitle ?? webView.title.flatMap { $0.isEmpty ? nil : $0 } ?? url?.host ?? ""
+    }
+
     /// Unread counts in titles ("(3) Inbox") are the web's universal "needs you" signal.
     private func titleChanged() {
         let title = webView.title ?? ""
-        if !title.isEmpty { info.title = title }
+        if !title.isEmpty, customTitle == nil { info.title = title }
         let badge = Self.badgeCount(in: title)
         if badge > lastBadge, !viewed {
             info.attention = true

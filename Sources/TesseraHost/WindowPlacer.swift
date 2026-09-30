@@ -1,9 +1,15 @@
 import AppKit
 import ApplicationServices
 
-/// Opens another app's content and snaps its window onto a rectangle of the screen, so opening a
-/// tile lands the real app exactly where the tile was.
+/// Opens another app's content and places its window on a rectangle of the screen, so opening a
+/// tile lands the real app where the opened tile would sit.
 public enum WindowPlacer {
+    #if DEBUG
+    /// A scripted development run (TESSERA_DEBUG_ACTIONS) must never drive the Claude or Codex app
+    /// someone is using: it only records what it would have opened.
+    @MainActor public private(set) static var dryRun: [String]? = ProcessInfo.processInfo.environment["TESSERA_DEBUG_ACTIONS"].map { _ in [] }
+    #endif
+
     public static var isTrusted: Bool { AXIsProcessTrusted() }
 
     /// Shows the system prompt that sends the user to Privacy & Security → Accessibility.
@@ -15,6 +21,12 @@ public enum WindowPlacer {
     /// `rect` is in AppKit screen coordinates (origin bottom-left of the primary display).
     @MainActor
     public static func open(_ url: URL?, bundleID: String, placeAt rect: CGRect?) {
+        #if DEBUG
+        if dryRun != nil {
+            dryRun?.append(url?.absoluteString ?? bundleID)
+            return
+        }
+        #endif
         if let url {
             NSWorkspace.shared.open(url)
         } else if let appURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) {

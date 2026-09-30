@@ -98,7 +98,7 @@ struct CommandPalette: View {
         if model.paletteMode == .url {
             if !q.isEmpty {
                 out.append(Item(id: "url", symbol: "globe", color: Style.violet, title: "Open \(q)", subtitle: "New web tile") {
-                    workspace.openBrowser(q)
+                    model.create { $0.openBrowser(q) }
                 })
             }
             return out
@@ -108,7 +108,7 @@ struct CommandPalette: View {
         for p in presets {
             out.append(Item(id: "preset-\(p.name)", symbol: p.flavor.symbol, color: Style.accent(p.flavor),
                             title: "New \(p.name)", subtitle: "Terminal · " + (p.command ?? "login shell") + " · " + cwd.abbreviatingHome) {
-                workspace.launch(command: p.command, cwd: cwd)
+                model.create { $0.launch(command: p.command, cwd: cwd) }
             })
         }
         // Desktop agent apps: a blank conversation, or one seeded with what's been typed. They lead
@@ -135,11 +135,11 @@ struct CommandPalette: View {
             let looksLikeURL = WebAddress.looksLikeAddress(q)
             if looksLikeURL {
                 out.insert(Item(id: "url", symbol: "globe", color: Style.violet, title: "Open \(q)", subtitle: "New web tile") {
-                    workspace.openBrowser(q)
+                    model.create { $0.openBrowser(q) }
                 }, at: 0)
             }
             out.append(Item(id: "run", symbol: "play.fill", color: Style.cyan, title: "Run \(q)", subtitle: "New terminal tile in " + cwd.abbreviatingHome) {
-                workspace.launch(command: q, cwd: cwd)
+                model.create { $0.launch(command: q, cwd: cwd) }
             })
             for tile in workspace.allTiles where tile.title.localizedCaseInsensitiveContains(q) || tile.subtitle.localizedCaseInsensitiveContains(q) {
                 out.append(Item(id: "tile-\(tile.id)", symbol: "arrow.up.right.square", color: Style.state(tile.activity),
@@ -149,7 +149,7 @@ struct CommandPalette: View {
             }
             if !looksLikeURL {
                 out.append(Item(id: "search", symbol: "magnifyingglass", color: Style.violet, title: "Search the web for “\(q)”", subtitle: "New web tile") {
-                    workspace.openBrowser(q)
+                    model.create { $0.openBrowser(q) }
                 })
             }
         } else {

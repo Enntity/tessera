@@ -38,12 +38,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
 }
 
-/// App-wide state the views share: the workspace, the remote server, and transient UI state.
+/// App-wide state the views share: the workspace, the remote server, and transient UI state. Every
+/// open, new tile, close and hand-off of the keyboard goes through here, whoever asks for it
+/// (a click, a shortcut, the palette, a notification, the phone).
 @Observable
 @MainActor
 final class AppModel {
     let workspace = Workspace()
-    @ObservationIgnored lazy var server = HostServer(workspace: workspace)
+    @ObservationIgnored lazy var server = HostServer(workspace: workspace, open: { [weak self] in self?.open($0) },
+                                                     close: { [weak self] in self?.close($0) })
     var showPalette = false
     var showSidebar = true
     /// Screenshot-safe: terminals, conversations and pages stay lively but unreadable.
@@ -55,7 +58,10 @@ final class AppModel {
     /// The "watch a machine" sheet in Settings → Machines.
     var showAddMachine = false
     var paletteMode: PaletteMode = .all
-    var expandedFrame: CGRect?
+    /// Bumped to hand the keyboard to the board (see `restoreFocus`).
+    private(set) var boardFocus = 0
+    /// Bumped to put the cursor in the open web tile's address field (⌘L).
+    private(set) var addressFocus = 0
     @ObservationIgnored weak var window: NSWindow?
     @ObservationIgnored private var started = false
     @ObservationIgnored private var notifier: AttentionNotifier?
@@ -66,6 +72,7 @@ final class AppModel {
         guard !started else { return }
         started = true
         if handOffToRunningCopy() { return }
+        workspace.onLink = { [weak self] url in self?.create { $0.openBrowser(url.absoluteString) } }
         workspace.start()
         reportUnreadableFiles()
         if Preferences.store.bool(forKey: "tessera.remoteEnabled") { server.start() }
@@ -80,87 +87,9 @@ final class AppModel {
         // The Dock badge and alerts follow the board's attention state.
         observe({ [weak self] in self?.workspace.state }) { [weak self] _ in self?.attentionChanged() }
         #if DEBUG
-        if let actions = ProcessInfo.processInfo.environment["TESSERA_DEBUG_ACTIONS"] {
-            runDebugActions(actions.split(separator: ";").map(String.init))
-        }
-        if let path = ProcessInfo.processInfo.environment["TESSERA_SNAPSHOT"] {
-            Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
-                MainActor.assumeIsolated { self?.writeSnapshot(to: path) }
-            }
-        }
+        startDebugRun()
         #endif
     }
-
-    #if DEBUG
-    /// Development aid: `launch=<cmd>`, `url=<url>`, `open=terminal|app|web`, `palette`, `remote`, `machine=<ssh host>`, `pairurl=<file>`,
-    /// `filter=<name>`, `wait=<s>`, separated by `;`. Only read from the TESSERA_DEBUG_ACTIONS environment variable.
-    private func runDebugActions(_ actions: [String], after delay: Double = 2) {
-        guard let first = actions.first else { return }
-        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [self] in
-            let parts = first.split(separator: "=", maxSplits: 1).map(String.init)
-            var next = 1.0
-            switch parts[0] {
-            case "launch": workspace.launch(command: parts.count > 1 ? parts[1] : nil)
-            case "url": if parts.count > 1 { workspace.openBrowser(parts[1]) }
-            case "palette": showPalette = true
-            case "privacy": privacyMode = true
-            case "responder":
-                let r = window?.firstResponder.map { String(describing: type(of: $0)) } ?? "nil"
-                if parts.count > 1 { try? r.write(toFile: parts[1], atomically: true, encoding: .utf8) }
-            case "openlast":
-                if let id = workspace.selectedId { open(id) }
-            case "key":
-                // Synthesizes key presses (up,down,left,right,esc) into the window.
-                let keys: [String: (UInt16, Int)] = ["up": (126, NSUpArrowFunctionKey), "down": (125, NSDownArrowFunctionKey),
-                                                     "left": (123, NSLeftArrowFunctionKey), "right": (124, NSRightArrowFunctionKey),
-                                                     "esc": (53, 0x1B)]
-                for name in (parts.count > 1 ? parts[1] : "").split(separator: ",").map(String.init) {
-                    guard let (code, char) = keys[name], let window else { continue }
-                    let chars = String(UnicodeScalar(UInt32(char)).map(Character.init) ?? " ")
-                    let flags: NSEvent.ModifierFlags = char > 0xF000 ? [.function, .numericPad] : []
-                    for type in [NSEvent.EventType.keyDown, .keyUp] {
-                        if let e = NSEvent.keyEvent(with: type, location: .zero, modifierFlags: flags, timestamp: ProcessInfo.processInfo.systemUptime,
-                                                    windowNumber: window.windowNumber, context: nil, characters: chars,
-                                                    charactersIgnoringModifiers: chars, isARepeat: false, keyCode: code) {
-                            // Straight to the window: works while the test copy is in the background.
-                            window.sendEvent(e)
-                        }
-                    }
-                }
-            case "opendsh":
-                if let tile = workspace.allTiles.first(where: { $0.flavor == .dsh }) { open(tile.id) }
-            case "machine": if parts.count > 1 { workspace.machines.add(host: parts[1], name: nil) }
-            case "remote": server.start() // not persisted: normal launches keep the user's setting
-            case "pairurl":
-                if parts.count > 1 { try? server.pairingURL?.absoluteString.write(toFile: parts[1], atomically: true, encoding: .utf8) }
-            case "filter": workspace.filter = parts.count > 1 && parts[1] == "attention" ? .attention : .all
-            case "tab":
-                if parts.count > 1 {
-                    let id = workspace.createGroup(named: parts[1])
-                    for tile in workspace.allTiles.prefix(2) { workspace.move(tile: tile.id, toGroup: id) }
-                }
-            case "wait": next = Double(parts.count > 1 ? parts[1] : "1") ?? 1
-            case "open":
-                let kind: TileKind = parts.count > 1 ? (parts[1] == "app" ? .agentSession : parts[1] == "web" ? .browser : .terminal) : .terminal
-                if let id = workspace.visibleIds.first(where: { workspace.info($0)?.kind == kind }) { open(id) }
-            default: break
-            }
-            runDebugActions(Array(actions.dropFirst()), after: next)
-        }
-    }
-
-    /// Development aid: captures the board window to a PNG so layout can be checked without screen capture rights.
-    /// Apps may always capture their own windows; the symbol is looked up dynamically because the SDK hides it.
-    private func writeSnapshot(to path: String) {
-        typealias Capture = @convention(c) (CGRect, UInt32, UInt32, UInt32) -> Unmanaged<CGImage>?
-        guard let window, let sym = dlsym(UnsafeMutableRawPointer(bitPattern: -2), "CGWindowListCreateImage") else { return }
-        let capture = unsafeBitCast(sym, to: Capture.self)
-        // .null rect = window bounds; option 8 = including window; 1 = ignore framing.
-        guard let image = capture(.null, 8, UInt32(window.windowNumber), 1)?.takeRetainedValue() else { return }
-        let rep = NSBitmapImageRep(cgImage: image)
-        try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path))
-    }
-    #endif
 
     func setRemote(_ on: Bool) {
         Preferences.store.set(on, forKey: "tessera.remoteEnabled")
@@ -174,28 +103,117 @@ final class AppModel {
         notifier?.update(with: workspace.allTiles)
     }
 
+    // MARK: Open, create, close
+
+    /// One user action is one SwiftUI transaction. Changes split across two (say a plain one, then
+    /// an animated one) make SwiftUI redraw in between, and a view redrawn then can miss the second.
+    private func act(_ animation: Animation, _ change: () -> Void) {
+        withAnimation(animation, change)
+        restoreFocus()
+    }
+
+    private static let zoom = Animation.spring(duration: 0.38, bounce: 0.12)
+
+    /// Opens a tile: in place on the board, or for a Claude or Codex conversation, straight in its
+    /// app, landing where the opened tile would have. `inApp: false` shows such a conversation's
+    /// transcript in Tessera instead.
+    func open(_ id: String, inApp: Bool = true) {
+        let rect = openedRect(from: tileFrame(id)).flatMap(screenRect(fromWindow:))
+        act(Self.zoom) { workspace.open(id, inApp: inApp, nativeAt: rect) }
+    }
+
+    /// Every way of starting a tile ends here: `make` starts it, and it opens at once.
+    func create(_ make: (Workspace) -> String?) {
+        act(Self.zoom) { if let id = make(workspace) { workspace.open(id) } }
+    }
+
+    /// Back to the board; the tile stays selected.
+    func collapse() {
+        act(.spring(duration: 0.3, bounce: 0.05)) { workspace.collapse() }
+    }
+
+    /// Closes a tile (an app conversation: hides it). Every close comes through here.
+    func close(_ id: String) {
+        act(.spring(duration: 0.3)) { workspace.close(id) }
+    }
+
+    /// Tab clicks, ⌘1…9 and new tabs change the board itself, so an open panel closes first.
+    func onBoard(_ change: (Workspace) -> Void) {
+        act(.spring(duration: 0.35)) {
+            workspace.collapse()
+            change(workspace)
+        }
+    }
+
+    /// Puts the keyboard where the user is, after anything that took it away (the palette, a
+    /// popover, a panel closing): in the open tile's terminal or page, else on the board.
+    func restoreFocus() {
+        DispatchQueue.main.async { [self] in
+            guard !showPalette, let window else { return }
+            guard let id = workspace.expandedId else {
+                window.makeFirstResponder(window.contentView)
+                boardFocus &+= 1
+                return
+            }
+            let view: NSView?
+            if let terminal = workspace.terminals[id] {
+                // A terminal that isn't running takes no typing: the window keeps the keys, so ⏎
+                // and Esc reach its Resume / Restart panel.
+                view = terminal.isRunning ? terminal.view : nil
+            } else {
+                view = workspace.browsers[id]?.webView ?? workspace.dshPage?.webView
+            }
+            window.makeFirstResponder(view?.window === window ? view : nil)
+        }
+    }
+
+    /// ⌘W closes what is in front: another window (Settings), the palette, the open panel (back to
+    /// the board), and on the board itself the selected tile. `key` is the window with the keyboard.
+    func closeFront(key: NSWindow? = NSApp.keyWindow) {
+        if let key, key !== window { return key.performClose(nil) }
+        if showPalette {
+            showPalette = false
+        } else if workspace.expandedId != nil {
+            collapse()
+        } else if let id = workspace.selectedId {
+            close(id)
+        }
+    }
+
+    /// Arrow keys and ⌘[ ⌘]. On the board the selection moves; with a panel open the open tile
+    /// changes in place and never leaves Tessera (a Claude or Codex conversation shows its transcript).
+    func move(_ step: GridMove) {
+        let ids = workspace.visibleIds
+        let layout = BoardView.grid(count: ids.count, in: boardFrame?.size ?? .zero)
+        guard let i = layout.index(moving: step, from: workspace.selectedId.flatMap(ids.firstIndex(of:)), count: ids.count) else { return }
+        if workspace.expandedId != nil { open(ids[i], inApp: false) } else { workspace.select(ids[i]) }
+    }
+
+    /// The HUD counters and ⌘J: opens the next of `ids`, oldest first.
+    func jump(to ids: Set<String>) {
+        if let id = workspace.next(in: ids) { open(id) }
+    }
+
+    /// The web tile that is open, if one is.
+    var openPage: BrowserSession? { workspace.expandedId.flatMap { workspace.browsers[$0] } }
+
+    /// ⌘L: the open web tile's address field, or a new web tile.
+    func openLocation() {
+        if openPage != nil {
+            addressFocus &+= 1
+        } else {
+            paletteMode = .url
+            showPalette = true
+        }
+    }
+
+    // MARK: Geometry
+
     /// Converts a window-space rect (top-left origin) to AppKit screen coordinates.
     func screenRect(fromWindow rect: CGRect) -> CGRect? {
         guard let window, let content = window.contentView else { return nil }
         let flipped = NSRect(x: rect.minX, y: content.bounds.height - rect.maxY, width: rect.width, height: rect.height)
         return window.convertToScreen(flipped)
-    }
-
-    /// Opens a tile: in place on the board, or for a Claude or Codex conversation, straight in its
-    /// app, landing where the opened tile would have.
-    func open(_ id: String) {
-        guard workspace.opensInApp(id) else {
-            withAnimation(.spring(duration: 0.38, bounce: 0.12)) { workspace.expand(id) }
-            return
-        }
-        if workspace.expandedId != nil { collapse() }
-        workspace.selectedId = id
-        workspace.openNative(id, at: openedRect(from: tileFrame(id)).flatMap(screenRect(fromWindow:)))
-    }
-
-    /// Tessera's own transcript of a desktop-app conversation.
-    func showTranscript(_ id: String) {
-        withAnimation(.spring(duration: 0.38, bounce: 0.12)) { workspace.expand(id) }
     }
 
     /// Set by the board: its rectangle in the window, and how far it is scrolled.
@@ -217,24 +235,6 @@ final class AppModel {
         boardFrame.map { ExpandedPanel.target(from: source, board: $0) }
     }
 
-    func collapse() {
-        withAnimation(.spring(duration: 0.3, bounce: 0.05)) { workspace.collapse() }
-        DispatchQueue.main.async { self.window?.makeFirstResponder(self.window?.contentView) }
-    }
-
-    func jumpToAttention() {
-        if let id = workspace.nextAttention() { open(id) }
-    }
-
-    func cycle(_ delta: Int) {
-        let ids = workspace.visibleIds
-        guard !ids.isEmpty else { return }
-        let current = workspace.expandedId ?? workspace.selectedId
-        let i = ids.firstIndex { $0 == current } ?? 0
-        let next = ids[(i + delta + ids.count) % ids.count]
-        if workspace.expandedId != nil { open(next) } else { workspace.selectedId = next }
-    }
-
     /// Starts a conversation in the Claude or Codex app and lands its window where an opened tile
     /// sits, so the eye doesn't leave the board.
     func newAppConversation(_ app: AgentApp, prompt: String? = nil) {
@@ -252,61 +252,60 @@ final class AppModel {
 struct BoardCommands: Commands {
     let model: AppModel
 
-    private func show(_ filter: Workspace.Filter) {
-        withAnimation(.spring(duration: 0.35)) { model.workspace.filter = filter }
-    }
-
     var body: some Commands {
+        let workspace = model.workspace
         CommandGroup(replacing: .newItem) {
-            Button("New Shell") { model.workspace.launch(command: nil, cwd: model.contextDirectory) }
+            Button("New Shell") { model.create { $0.launch(command: nil, cwd: model.contextDirectory) } }
                 .keyboardShortcut("t")
-            Button("New Claude Code") { model.workspace.launch(command: "claude", cwd: model.contextDirectory) }
+            Button("New Claude Code") { model.create { $0.launch(command: "claude", cwd: model.contextDirectory) } }
                 .keyboardShortcut("t", modifiers: [.command, .shift])
-            Button("New Codex") { model.workspace.launch(command: "codex", cwd: model.contextDirectory) }
+            Button("New Codex") { model.create { $0.launch(command: "codex", cwd: model.contextDirectory) } }
                 .keyboardShortcut("t", modifiers: [.command, .option])
-            ForEach(model.workspace.installedApps, id: \.self) { app in
-                Button(app == .claude ? "New Claude App Session" : "New Codex App Thread") { model.newAppConversation(app) }
+            ForEach(workspace.installedApps, id: \.self) { app in
+                Button(app.newLabel) { model.newAppConversation(app) }
             }
-            Button("Open Web Tile…") { model.paletteMode = .url; model.showPalette = true }
+            Button(model.openPage == nil ? "Open Web Tile…" : "Edit Address") { model.openLocation() }
                 .keyboardShortcut("l")
             Divider()
-            Button("Close Tile") {
-                if let id = model.workspace.expandedId ?? model.workspace.selectedId { model.workspace.close(id) }
-            }
-            .keyboardShortcut("w")
+            Button("Close") { model.closeFront() }
+                .keyboardShortcut("w")
         }
         CommandMenu("Board") {
-            Button("Command Palette") { model.paletteMode = .all; model.showPalette.toggle() }
-                .keyboardShortcut("k")
+            Button("Command Palette") {
+                // From the ⌘L palette, ⌘K goes to the full one rather than closing it.
+                model.showPalette = !(model.showPalette && model.paletteMode == .all)
+                model.paletteMode = .all
+            }
+            .keyboardShortcut("k")
             Button("Open / Close Tile") {
-                if model.workspace.expandedId != nil { model.collapse() } else if let id = model.workspace.selectedId { model.open(id) }
+                if workspace.expandedId != nil { model.collapse() } else if let id = workspace.selectedId { model.open(id) }
             }
             .keyboardShortcut(.return, modifiers: .command)
-            Button("Next Tile Needing Me") { model.jumpToAttention() }
+            Button("Next Tile Needing Me") { model.jump(to: workspace.state.needsUser) }
                 .keyboardShortcut("j")
-            Button("Next Tile") { model.cycle(1) }
+            Button("Next Tile") { model.move(.next) }
                 .keyboardShortcut("]")
-            Button("Previous Tile") { model.cycle(-1) }
+            Button("Previous Tile") { model.move(.previous) }
                 .keyboardShortcut("[")
             Divider()
             Button(model.privacyMode ? "Turn Off Privacy Mode" : "Privacy Mode") {
                 withAnimation(.easeInOut(duration: 0.25)) { model.privacyMode.toggle() }
             }
             .keyboardShortcut("p", modifiers: [.command, .shift])
-                        Button(model.showSidebar ? "Hide Accounts" : "Show Accounts") {
+            Button(model.showSidebar ? "Hide Accounts" : "Show Accounts") {
                 withAnimation(.spring(duration: 0.3)) { model.showSidebar.toggle() }
             }
             .keyboardShortcut("\\")
             Divider()
-            Button("Shut Down All Terminals") { model.workspace.shutDownAll() }
+            Button("Shut Down All Terminals") { workspace.shutDownAll() }
                 .keyboardShortcut("w", modifiers: [.command, .option, .shift])
-            Button("Resume All Terminals") { model.workspace.resumeAll() }
+            Button("Resume All Terminals") { workspace.resumeAll() }
                 .keyboardShortcut("r", modifiers: [.command, .option, .shift])
             Divider()
-            Button("Show All") { show(.all) }.keyboardShortcut("1")
-            Button("Show Needs You") { show(.attention) }.keyboardShortcut("2")
-            ForEach(Array(model.workspace.groups.list.prefix(7).enumerated()), id: \.element.id) { i, group in
-                Button("Show \(group.name)") { show(.group(group.id)) }
+            Button("Show All") { model.onBoard { $0.filter = .all } }.keyboardShortcut("1")
+            Button("Show Needs You") { model.onBoard { $0.filter = .attention } }.keyboardShortcut("2")
+            ForEach(Array(workspace.groups.list.prefix(7).enumerated()), id: \.element.id) { i, group in
+                Button("Show \(group.name)") { model.onBoard { $0.filter = .group(group.id) } }
                     .keyboardShortcut(KeyEquivalent(Character("\(i + 3)")))
             }
         }

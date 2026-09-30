@@ -9,14 +9,13 @@ public struct AgentAppSession: Identifiable, Equatable, Sendable {
     public var flavor: AgentFlavor
     public var title: String
     public var cwd: String
+    /// The deep link that opens it in its app (dsh has none: it opens in Tessera).
     public var openURL: URL?
-    public var bundleID: String
     /// Shell command that continues this conversation in a terminal tile.
     public var resumeCommand: String?
     public var snapshot: ConversationSnapshot
     /// The desktop app's own one-line turn summary (Claude writes these).
     public var summary: String?
-    public var needsAction: String?
     public var lastActivityAt: Date
 }
 
@@ -46,7 +45,6 @@ public final class AgentAppWatcher {
     @ObservationIgnored public var onChange: (() -> Void)?
 
     @ObservationIgnored private let scanner = TranscriptScanner()
-    @ObservationIgnored private var timer: Timer?
     @ObservationIgnored private var scanning = false
 
     public init() {}
@@ -55,15 +53,10 @@ public final class AgentAppWatcher {
 
     public func start() {
         scan()
-        timer = Timer.scheduledTimer(withTimeInterval: 1.5, repeats: true) { [weak self] _ in
+        let timer = Timer.scheduledTimer(withTimeInterval: 1.5, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.scan() }
         }
-        timer?.tolerance = 0.3
-    }
-
-    public func stop() {
-        timer?.invalidate()
-        timer = nil
+        timer.tolerance = 0.3
     }
 
     private func scan() {
@@ -201,14 +194,12 @@ final class TranscriptScanner: @unchecked Sendable {
                 }
             }
             let cwd = meta["cwd"] as? String ?? parser.cwd ?? ""
-            var components = URLComponents(string: "claude://code/continue")
-            components?.queryItems = [URLQueryItem(name: "session", value: localId)]
             out.append(AgentAppSession(
                 id: "claude:" + localId, flavor: .claudeDesktop,
                 title: (meta["title"] as? String) ?? parser.title ?? "Claude session",
-                cwd: cwd, openURL: components?.url, bundleID: "com.anthropic.claudefordesktop",
+                cwd: cwd, openURL: AgentApp.claude.conversationURL(localId),
                 resumeCommand: "claude --resume \(cliId) --fork-session",
-                snapshot: snapshot, summary: summary, needsAction: needsAction,
+                snapshot: snapshot, summary: summary,
                 lastActivityAt: max(lastActivity, parser.lastEventAt ?? .distantPast)))
         }
         return out
@@ -312,8 +303,8 @@ final class TranscriptScanner: @unchecked Sendable {
                     ?? snapshot.items.first(where: { $0.role == .user })?.text.preview(60) ?? "DeepSeek session"
                 out.append(AgentAppSession(
                     id: "dsh:" + id, flavor: .dsh, title: title, cwd: parser.cwd ?? "",
-                    openURL: nil, bundleID: "", resumeCommand: nil,
-                    snapshot: snapshot, summary: nil, needsAction: nil,
+                    openURL: nil, resumeCommand: nil,
+                    snapshot: snapshot, summary: nil,
                     lastActivityAt: parser.lastEventAt ?? modified))
             }
         }
@@ -359,9 +350,9 @@ final class TranscriptScanner: @unchecked Sendable {
             out.append(AgentAppSession(
                 id: "codex:" + head.id, flavor: .codexDesktop,
                 title: codexTitles[head.id] ?? snapshot.items.first(where: { $0.role == .user })?.text.preview(60) ?? "Codex thread",
-                cwd: head.cwd, openURL: URL(string: "codex://threads/\(head.id)"), bundleID: "com.openai.codex",
+                cwd: head.cwd, openURL: AgentApp.codex.conversationURL(head.id),
                 resumeCommand: "codex resume \(head.id)",
-                snapshot: snapshot, summary: nil, needsAction: nil,
+                snapshot: snapshot, summary: nil,
                 lastActivityAt: parser.lastEventAt ?? tail.modified))
         }
         return out

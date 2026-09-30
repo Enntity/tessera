@@ -54,10 +54,14 @@ final class StateFileTests: XCTestCase {
 
         let board = url.deletingLastPathComponent().appendingPathComponent("workspace.json")
         let tile = Workspace.Saved.Tile(id: "t", kind: .terminal, command: "claude", cwd: "/w", sessionId: "S")
-        StateFile.save(Workspace.Saved(tiles: [Lossy(tile)], order: ["t", "claude:x"], hidden: ["claude:y": Date(timeIntervalSince1970: 5)],
-                                       agentLookbackHours: 12), to: board)
+        let page = Workspace.Saved.Tile(id: "w", kind: .browser, title: "Docs", url: "https://example.com")
+        StateFile.save(Workspace.Saved(tiles: [Lossy(tile), Lossy(page)], order: ["t", "claude:x"], hidden: ["claude:y": Date(timeIntervalSince1970: 5)],
+                                       agentLookbackHours: 12, titles: ["claude:x": "Release notes"]), to: board)
         let saved = try XCTUnwrap(StateFile.load(Workspace.Saved.self, from: board))
-        XCTAssertEqual(saved.tiles.compactMap(\.value).map(\.sessionId), ["S"])
+        XCTAssertEqual(saved.tiles.compactMap(\.value).map(\.sessionId), ["S", nil])
+        // A name the user gave a tile is kept, whatever its kind.
+        XCTAssertEqual(saved.tiles.compactMap(\.value).map(\.title), [nil, "Docs"])
+        XCTAssertEqual(saved.titles, ["claude:x": "Release notes"])
         XCTAssertEqual(saved.order, ["t", "claude:x"])
         XCTAssertEqual(saved.hidden, ["claude:y": Date(timeIntervalSince1970: 5)])
         XCTAssertEqual(saved.agentLookbackHours, 12)
@@ -74,6 +78,14 @@ final class BoardOrderTests: XCTestCase {
         XCTAssertEqual(Workspace.restoredIndex(of: "claude:a", saved: saved, in: ["t2"]), 0)
         // Never saved: a new session goes last.
         XCTAssertEqual(Workspace.restoredIndex(of: "dsh:new", saved: saved, in: ["t1", "t2"]), 2)
+    }
+
+    func testClosingATileSelectsItsNeighbourOnShow() {
+        // The tile that takes its place, else the one before it; never one the tab hides.
+        XCTAssertEqual(Workspace.neighbor(of: "b", in: ["a", "b", "c"]), "c")
+        XCTAssertEqual(Workspace.neighbor(of: "c", in: ["a", "b", "c"]), "b")
+        XCTAssertNil(Workspace.neighbor(of: "a", in: ["a"]))
+        XCTAssertEqual(Workspace.neighbor(of: "elsewhere", in: ["a", "b"]), "a")
     }
 
     func testSavedOrderKeepsOnlyWhatShouldComeBack() {

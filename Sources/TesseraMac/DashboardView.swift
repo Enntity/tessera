@@ -32,6 +32,7 @@ struct DashboardView: View {
         .background(WindowAccessor { model.window = $0 })
         .ignoresSafeArea()
         .animation(.spring(duration: 0.25), value: model.showPalette)
+        .onChange(of: model.showPalette) { _, shown in if !shown { model.restoreFocus() } }
     }
 }
 
@@ -84,6 +85,11 @@ struct WindowAccessor: NSViewRepresentable {
                 w.isMovableByWindowBackground = false
                 w.titlebarAppearsTransparent = true
                 w.backgroundColor = NSColor(Style.void)
+                #if DEBUG
+                // A development copy shares the app's bundle id: its window must not become the
+                // frame the real app opens with next time.
+                if Preferences.store !== UserDefaults.standard { w.setFrameAutosaveName("") }
+                #endif
                 onWindow(w)
             }
         }
@@ -97,21 +103,21 @@ struct HUDBar: View {
     @Environment(AppModel.self) private var model
 
     var body: some View {
-        let workspace = model.workspace
-        let state = workspace.state
+        let state = model.workspace.state
         HStack(spacing: 14) {
             Wordmark()
                 .padding(.leading, 78) // clear the traffic lights
             Divider().frame(height: 18).overlay(Style.hairline)
             HStack(spacing: 8) {
+                // Each counter opens the next tile in its state, oldest first.
                 CountChip(value: state.needsInput.count, label: "need you", color: Style.amber, pulse: !state.needsInput.isEmpty) {
-                    model.jumpToAttention()
+                    model.jump(to: state.needsInput)
                 }
-                CountChip(value: state.done, label: "done", color: Style.mint, pulse: false) {
-                    model.jumpToAttention()
+                CountChip(value: state.results.count, label: "done", color: Style.mint, pulse: false) {
+                    model.jump(to: state.results)
                 }
                 CountChip(value: state.working.count, label: "working", color: Style.cyan, pulse: false) {
-                    withAnimation(.spring(duration: 0.35)) { workspace.filter = .all }
+                    model.jump(to: state.working)
                 }
             }
             Spacer()
@@ -241,14 +247,13 @@ struct MachineStrip: View {
     private func chips(_ monitor: MachineMonitor, compact: Bool) -> some View {
         HStack(spacing: 5) {
             ForEach(monitor.ordered) { vitals in
+                let host = monitor.config(vitals.id)?.sshHost
+                let connect = { model.create { $0.launch(command: host.map { "ssh \($0)" }, title: vitals.name) } }
                 MachineChip(vitals: vitals, compact: compact)
-                    .onTapGesture {
-                        guard let host = monitor.config(vitals.id)?.sshHost else { return }
-                        model.workspace.launch(command: "ssh \(host)", title: vitals.name)
-                    }
+                    .onTapGesture { if host != nil { connect() } }
                     .contextMenu {
-                        if let host = monitor.config(vitals.id)?.sshHost {
-                            Button("Open Terminal on \(vitals.name)") { model.workspace.launch(command: "ssh \(host)", title: vitals.name) }
+                        if host != nil {
+                            Button("Open Terminal on \(vitals.name)", action: connect)
                             Button("Stop Watching", role: .destructive) { monitor.remove(id: vitals.id) }
                         }
                     }
@@ -271,9 +276,9 @@ struct TabStrip: View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 2) {
                 TabChip(title: "All", count: workspace.order.count, attention: false,
-                        selected: workspace.filter == .all, dropTile: { file($0, into: nil) }) { select(.all) }
+                        selected: workspace.filter == .all, dropTile: { file($0, into: nil) }) { model.onBoard { $0.filter = .all } }
                 TabChip(title: "Needs you", count: needsUser.count, attention: false,
-                        selected: workspace.filter == .attention, tint: Style.amber) { select(.attention) }
+                        selected: workspace.filter == .attention, tint: Style.amber) { model.onBoard { $0.filter = .attention } }
                 if !workspace.groups.list.isEmpty {
                     Rectangle().fill(Style.hairline).frame(width: 1, height: 14).padding(.horizontal, 4)
                 }
@@ -282,7 +287,7 @@ struct TabStrip: View {
                     TabChip(title: group.name, count: members.filter(workspace.exists).count,
                             attention: !members.isDisjoint(with: needsUser),
                             selected: workspace.filter == .group(group.id), dropTile: { file($0, into: group.id) }) {
-                        select(.group(group.id))
+                        model.onBoard { $0.filter = .group(group.id) }
                     }
                         .contextMenu {
                             Button("Rename…") {
@@ -311,9 +316,7 @@ struct TabStrip: View {
                 .foregroundStyle(Style.dim)
                 .help("New tab — then drag tiles onto it")
                 .popover(isPresented: $naming) {
-                    nameField("New tab") { name in
-                        withAnimation(.spring(duration: 0.3)) { _ = workspace.createGroup(named: name) }
-                    }
+                    nameField("New tab") { name in model.onBoard { _ = $0.createGroup(named: name) } }
                 }
             }
             .padding(3)
@@ -323,10 +326,6 @@ struct TabStrip: View {
         .background(Style.glass.opacity(0.7), in: Capsule())
         .overlay(Capsule().strokeBorder(Style.hairline))
         .animation(.spring(duration: 0.3), value: workspace.groups)
-    }
-
-    private func select(_ filter: Workspace.Filter) {
-        withAnimation(.spring(duration: 0.35)) { model.workspace.filter = filter }
     }
 
     private func file(_ tileId: String, into groupId: String?) {

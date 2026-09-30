@@ -19,22 +19,34 @@ struct BoardView: View {
                 if ids.isEmpty {
                     EmptyBoard(filter: workspace.filter).frame(width: geo.size.width, height: geo.size.height)
                 }
-                ScrollView(layout.scrolls ? .vertical : [], showsIndicators: layout.scrolls) {
-                    ZStack(alignment: .topLeading) {
-                        ForEach(Array(ids.enumerated()), id: \.element) { index, id in
-                            let origin = layout.origin(of: index, in: geo.size)
-                            BoardTile(id: id, size: layout.tileSize)
-                                .frame(width: layout.tileSize.width, height: layout.tileSize.height)
-                                .offset(x: origin.x, y: origin.y)
-                                .transition(.scale(scale: 0.85).combined(with: .opacity))
+                ScrollViewReader { proxy in
+                    ScrollView(layout.scrolls ? .vertical : [], showsIndicators: layout.scrolls) {
+                        ZStack(alignment: .topLeading) {
+                            ForEach(Array(ids.enumerated()), id: \.element) { index, id in
+                                let origin = layout.origin(of: index, in: geo.size)
+                                BoardTile(id: id, size: layout.tileSize)
+                                    .frame(width: layout.tileSize.width, height: layout.tileSize.height)
+                                    .offset(x: origin.x, y: origin.y)
+                                    .transition(.scale(scale: 0.85).combined(with: .opacity))
+                            }
                         }
+                        .frame(width: geo.size.width, height: max(geo.size.height, layout.contentHeight), alignment: .topLeading)
+                        .id(Self.gridId)
+                        .onGeometryChange(for: CGFloat.self) { -$0.frame(in: .scrollView).minY } action: { model.boardScroll = $0 }
+                        .animation(.spring(duration: 0.45, bounce: 0.15), value: ids)
+                        .animation(.spring(duration: 0.45, bounce: 0.15), value: layout)
                     }
-                    .frame(width: geo.size.width, height: max(geo.size.height, layout.contentHeight), alignment: .topLeading)
-                    .onGeometryChange(for: CGFloat.self) { -$0.frame(in: .scrollView).minY } action: { model.boardScroll = $0 }
-                    .animation(.spring(duration: 0.45, bounce: 0.15), value: ids)
-                    .animation(.spring(duration: 0.45, bounce: 0.15), value: layout)
+                    .scrollDisabled(!layout.scrolls)
+                    // A scrolling board follows the selection, moving only as far as it takes to show it.
+                    .onChange(of: workspace.selectedId) { _, selected in
+                        guard layout.scrolls, let index = selected.flatMap(ids.firstIndex(of:)) else { return }
+                        let offset = layout.scrollOffset(showing: index, height: geo.size.height, current: model.boardScroll)
+                        let range = layout.contentHeight - geo.size.height
+                        guard offset != model.boardScroll, range > 0 else { return }
+                        // Aligning the same fraction of the grid and of the view puts it at exactly `offset`.
+                        withAnimation(.spring(duration: 0.3)) { proxy.scrollTo(Self.gridId, anchor: UnitPoint(x: 0, y: offset / range)) }
+                    }
                 }
-                .scrollDisabled(!layout.scrolls)
 
                 if let id = workspace.expandedId, workspace.exists(id) {
                     ExpandedPanel(id: id, board: board, source: model.tileFrame(id))
@@ -48,42 +60,31 @@ struct BoardView: View {
         .focused($focused)
         .focusEffectDisabled()
         .onAppear { focused = true }
-        // An open tile owns the keyboard: the board lets go of focus so its shortcuts can't
-        // intercept keys meant for a terminal or page, and takes it back on close.
-        .onChange(of: model.workspace.expandedId) { _, open in focused = open == nil }
-        .onKeyPress(.leftArrow) { move(-1) }
-        .onKeyPress(.rightArrow) { move(1) }
-        .onKeyPress(.upArrow) { moveRow(-1) }
-        .onKeyPress(.downArrow) { moveRow(1) }
+        // An open tile owns the keyboard: its terminal or page becomes first responder, which takes
+        // focus from the board, and the board takes it back on close (see `AppModel.restoreFocus`).
+        .onChange(of: model.workspace.expandedId) { _, open in if open == nil { focused = true } }
+        .onChange(of: model.boardFocus) { focused = true }
+        .onKeyPress(.leftArrow) { move(.left) }
+        .onKeyPress(.rightArrow) { move(.right) }
+        .onKeyPress(.upArrow) { move(.up) }
+        .onKeyPress(.downArrow) { move(.down) }
         .onKeyPress(.return) {
             guard model.workspace.expandedId == nil, let id = model.workspace.selectedId else { return .ignored }
             model.open(id)
             return .handled
         }
-        .onKeyPress(.escape) {
-            // Terminals and pages use Esc themselves (agents: interrupt), so it only closes a
-            // conversation transcript; ⌘⏎ closes anything.
-            guard let open = model.workspace.expandedId, model.workspace.info(open)?.kind == .agentSession else { return .ignored }
-            model.collapse()
-            return .handled
-        }
     }
 
     /// Arrow keys move the selection only while the board itself is showing.
-    private func move(_ delta: Int) -> KeyPress.Result {
+    private func move(_ step: GridMove) -> KeyPress.Result {
         guard model.workspace.expandedId == nil else { return .ignored }
-        model.cycle(delta)
+        model.move(step)
         return .handled
     }
 
-    private func moveRow(_ delta: Int) -> KeyPress.Result {
-        guard model.workspace.expandedId == nil, let window = model.window else { return .ignored }
-        let size = window.contentView?.bounds.size ?? .zero
-        let cols = Self.grid(count: model.workspace.visibleIds.count, in: size).columns
-        model.cycle(delta * max(cols, 1))
-        return .handled
-    }
+    private static let gridId = "grid"
 
+    /// The board's one layout: what is drawn, where a tile opens from, and what the arrow keys walk.
     static func grid(count: Int, in size: CGSize) -> TesseraKit.GridLayout {
         GridLayout.fit(count: count, in: size, spacing: 10, aspect: 16.0 / 10.5, minTileWidth: 230)
     }
@@ -112,7 +113,7 @@ struct EmptyBoard: View {
                 HStack(spacing: 10) {
                     ForEach(model.workspace.installedApps, id: \.self) { app in
                         Button { model.newAppConversation(app) } label: {
-                            Label(app.flavor.displayName + " app", systemImage: app.flavor.symbol)
+                            Label(app.name, systemImage: app.flavor.symbol)
                                 .font(Style.ui(12, .semibold))
                                 .padding(.horizontal, 12).padding(.vertical, 7)
                                 .background(Style.accent(app.flavor).opacity(0.14), in: Capsule())
@@ -122,7 +123,7 @@ struct EmptyBoard: View {
                     }
                     ForEach(model.workspace.presets.prefix(4)) { preset in
                         Button {
-                            model.workspace.launch(command: preset.command, cwd: model.contextDirectory)
+                            model.create { $0.launch(command: preset.command, cwd: model.contextDirectory) }
                         } label: {
                             Label(preset.name, systemImage: preset.flavor.symbol)
                                 .font(Style.ui(12, .semibold))
@@ -158,7 +159,6 @@ struct TileView: View {
     let size: CGSize
     @State private var hovering = false
     @State private var renaming = false
-    @State private var draftTitle = ""
     /// Scrolled out of view, a tile's continuous effects stop.
     @State private var onScreen = true
 
@@ -166,7 +166,7 @@ struct TileView: View {
         let workspace = model.workspace
         let compact = size.width < 280
         TileCard(info: info, isSelected: workspace.selectedId == info.id, compact: compact) {
-            content(compact: compact)
+            content
         }
         .environment(\.tesseraMotion, onScreen)
         .onGeometryChange(for: Bool.self) { g in
@@ -174,59 +174,32 @@ struct TileView: View {
         } action: { onScreen = $0 }
         .overlay(alignment: .topTrailing) {
             if hovering {
-                HStack(spacing: 2) {
-                    if info.kind == .terminal {
-                        if workspace.terminals[info.id]?.isSuspended == true {
-                            tileButton("play.fill") { workspace.resume(info.id) }
-                        } else {
-                            tileButton("power") { workspace.shutDown(info.id) }
-                        }
-                    }
-                    tileButton("xmark") { withAnimation(.spring(duration: 0.3)) { workspace.close(info.id) } }
-                }
-                .padding(.trailing, 4)
-                .padding(.top, compact ? 24 : 28)
-                .transition(.opacity)
+                TileHoverControls(info: info)
+                    .padding(.trailing, 4)
+                    .padding(.top, compact ? 24 : 28)
+                    .transition(.opacity)
             }
         }
         .scaleEffect(hovering ? 1.012 : 1)
         .animation(.spring(duration: 0.25), value: hovering)
         .onHover { hovering = $0 }
-        .onTapGesture(count: 1) {
-            workspace.selectedId = info.id
-            model.open(info.id)
-        }
+        .onTapGesture(count: 1) { model.open(info.id) }
         .onDrag {
             NSItemProvider(object: info.id as NSString)
         }
         .onDrop(of: [.text], delegate: TileDropDelegate(target: info.id, workspace: workspace))
-        .contextMenu { menu }
-        .popover(isPresented: $renaming) {
-            TextField("Title", text: $draftTitle)
-                .textFieldStyle(.roundedBorder)
-                .frame(width: 240)
-                .padding()
-                .onSubmit {
-                    workspace.rename(info.id, to: draftTitle)
-                    renaming = false
-                }
-        }
+        .contextMenu { TileMenu(info: info) { renaming = true } }
+        .modifier(RenamePopover(info: info, isPresented: $renaming))
     }
 
     @ViewBuilder
-    private func content(compact: Bool) -> some View {
+    private var content: some View {
         let workspace = model.workspace
         switch info.kind {
         case .terminal:
             if let session = workspace.terminals[info.id] {
                 TerminalTileContent(session: session)
-                    .overlay {
-                        if session.isSuspended {
-                            ExitedOverlay(info: info, title: "Shut down", action: "Resume") { workspace.resume(info.id) }
-                        } else if info.activity == .exited || info.activity == .failed {
-                            ExitedOverlay(info: info, title: nil, action: "Restart") { workspace.restart(info.id) }
-                        }
-                    }
+                    .overlay { EndedOverlay(info: info) }
             }
         case .browser:
             if let browser = workspace.browsers[info.id] {
@@ -238,71 +211,31 @@ struct TileView: View {
                                   fontScale: ConversationThumbnail.terminalMatchedScale)
         }
     }
+}
 
-    private func tileButton(_ symbol: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Image(systemName: symbol)
+/// The buttons a hovered tile shows: a terminal's Shut Down, Resume or Restart, and, set apart from
+/// it because it ends the tile, Close (for an app conversation, Hide).
+struct TileHoverControls: View {
+    @Environment(AppModel.self) private var model
+    let info: TileInfo
+
+    var body: some View {
+        HStack(spacing: 10) {
+            if info.kind == .terminal, let action = model.actions(for: info).first { button(action) }
+            button(model.closeAction(for: info))
+        }
+    }
+
+    private func button(_ action: TileAction) -> some View {
+        Button(action: action.run) {
+            Image(systemName: action.symbol)
                 .font(.system(size: 9, weight: .bold))
                 .frame(width: 20, height: 20)
                 .background(.black.opacity(0.55), in: Circle())
                 .foregroundStyle(Style.ink)
         }
         .buttonStyle(.plain)
-    }
-
-    @ViewBuilder
-    private var menu: some View {
-        let workspace = model.workspace
-        if workspace.opensInApp(info.id) {
-            Button("Open in \(info.flavor.displayName)") { model.open(info.id) }
-            Button("Show Transcript") { model.showTranscript(info.id) }
-        } else {
-            Button("Open") { model.open(info.id) }
-        }
-        if info.kind == .agentSession {
-            if let session = workspace.agents.session(info.id), let resume = session.resumeCommand {
-                Button("Continue in Terminal") { workspace.launch(command: resume, cwd: session.cwd) }
-            }
-        }
-        if info.kind == .terminal {
-            Button("Rename…") {
-                draftTitle = info.title
-                renaming = true
-            }
-            if workspace.terminals[info.id]?.isSuspended == true {
-                Button("Resume") { workspace.resume(info.id) }
-            } else {
-                Button("Shut Down") { workspace.shutDown(info.id) }
-                Button("Restart") { workspace.restart(info.id) }
-            }
-        }
-        if info.attention { Button("Mark as Seen") { workspace.acknowledge(info.id) } }
-        Menu("Move to Tab") {
-            let current = workspace.groups.group(of: info.id)?.id
-            ForEach(workspace.groups.list) { group in
-                Button(group.name) { withAnimation(.spring(duration: 0.4)) { workspace.move(tile: info.id, toGroup: group.id) } }
-                    .disabled(group.id == current)
-            }
-            if !workspace.groups.list.isEmpty { Divider() }
-            Button("New Tab with This Tile") {
-                withAnimation(.spring(duration: 0.4)) {
-                    _ = workspace.createGroup(named: Self.suggestedTabName(info), with: info.id)
-                }
-            }
-            if current != nil {
-                Button("Remove from Tab") { withAnimation(.spring(duration: 0.4)) { workspace.move(tile: info.id, toGroup: nil) } }
-            }
-        }
-        Divider()
-        Button(info.kind == .agentSession ? "Hide" : "Close", role: .destructive) { workspace.close(info.id) }
-    }
-}
-
-extension TileView {
-    /// A new tab is named after the tile's folder or site; rename it from the tab's menu.
-    static func suggestedTabName(_ info: TileInfo) -> String {
-        let last = (info.subtitle as NSString).lastPathComponent
-        return last.isEmpty || last == "~" ? info.title : last
+        .help(action.title)
     }
 }
 
@@ -384,31 +317,51 @@ struct PrivateWebCover: View {
     }
 }
 
-struct ExitedOverlay: View {
+/// Over a terminal that isn't running, on its tile and in its open panel alike: what happened, and
+/// the way back (Resume after a shut-down, Restart after an exit). In the panel ⏎ presses it and
+/// Esc goes back to the board; typing has nowhere to go.
+struct EndedOverlay: View {
+    @Environment(AppModel.self) private var model
     let info: TileInfo
-    /// Headline; nil shows the exit detail alone.
-    let title: String?
-    let action: String
-    let perform: () -> Void
+    var inPanel = false
 
     var body: some View {
-        ZStack {
-            Color.black.opacity(0.6)
-            VStack(spacing: 6) {
-                if let title {
-                    Label(title, systemImage: "power").font(Style.ui(12, .semibold)).foregroundStyle(Style.ink)
+        if info.activity.hasEnded, let action = model.actions(for: info).first {
+            let suspended = model.workspace.isSuspended(info.id)
+            ZStack {
+                Color.black.opacity(0.6)
+                VStack(spacing: 6) {
+                    if suspended {
+                        Label("Shut down", systemImage: "power").font(Style.ui(12, .semibold)).foregroundStyle(Style.ink)
+                    }
+                    Text(info.detail ?? "Exited")
+                        .font(Style.mono(9.5))
+                        .foregroundStyle(suspended ? Style.dim : Style.state(info.activity))
+                        .multilineTextAlignment(.center)
+                        .lineLimit(2)
+                        .padding(.horizontal, 10)
+                    Button(action.title, action: action.run)
+                        .buttonStyle(.borderedProminent)
+                        .tint(Style.cyan.opacity(0.6))
+                        .controlSize(.small)
+                        .keyboardShortcut(inPanel ? .defaultAction : nil)
                 }
-                Text(info.detail ?? "Exited")
-                    .font(Style.mono(9.5))
-                    .foregroundStyle(title == nil ? Style.state(info.activity) : Style.dim)
-                    .multilineTextAlignment(.center)
-                    .lineLimit(2)
-                    .padding(.horizontal, 10)
-                Button(action, action: perform)
-                    .buttonStyle(.borderedProminent)
-                    .tint(Style.cyan.opacity(0.6))
-                    .controlSize(.small)
+                if inPanel { EscToBoard() }
             }
         }
+    }
+}
+
+/// Esc goes back to the board wherever the content has no use for it: a transcript, a terminal
+/// that has ended. (A live terminal or page gets the key itself.)
+struct EscToBoard: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        Button("") { model.collapse() }
+            .keyboardShortcut(.cancelAction)
+            .opacity(0)
+            .frame(width: 0, height: 0)
+            .accessibilityHidden(true)
     }
 }

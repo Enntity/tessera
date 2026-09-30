@@ -195,7 +195,7 @@ struct GeneralSettings: View {
                 }
             }
             Section("Claude & Codex apps") {
-                Toggle("Snap the app's window onto the tile when opening a session", isOn: $workspace.placeNativeWindows)
+                Toggle("Place the app's window where the opened tile would sit", isOn: $workspace.placeNativeWindows)
                     .onChange(of: workspace.placeNativeWindows) { _, _ in workspace.save() }
                 HStack {
                     Image(systemName: trusted ? "checkmark.seal.fill" : "exclamationmark.triangle.fill")

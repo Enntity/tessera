@@ -13,7 +13,34 @@ public enum AgentApp: String, Codable, CaseIterable, Sendable {
 
     public var flavor: AgentFlavor { self == .claude ? .claudeDesktop : .codexDesktop }
 
+    /// The app whose conversations have this flavor.
+    public init?(flavor: AgentFlavor) {
+        guard let app = Self.allCases.first(where: { $0.flavor == flavor }) else { return nil }
+        self = app
+    }
+
+    /// The app a tile of `flavor` opens in, or nil when it opens on the board instead: terminals,
+    /// pages and dsh sessions, a conversation whose app isn't installed, and anything opened with
+    /// `inApp` off (paging between open tiles, Show Transcript).
+    public static func opening(_ flavor: AgentFlavor, installed: [AgentApp], inApp: Bool = true) -> AgentApp? {
+        guard inApp, let app = AgentApp(flavor: flavor), installed.contains(app) else { return nil }
+        return app
+    }
+
+    public var name: String { flavor.displayName + " app" }
+
     public var newLabel: String { self == .claude ? "New Claude session (app)" : "New Codex thread (app)" }
+
+    /// The deep link to an existing conversation: `claude://code/continue?session=…` / `codex://threads/…`.
+    public func conversationURL(_ id: String) -> URL? {
+        switch self {
+        case .claude:
+            var c = URLComponents(string: "claude://code/continue")
+            c?.queryItems = [URLQueryItem(name: "session", value: id)]
+            return c?.url
+        case .codex: return URL(string: "codex://threads/\(id)")
+        }
+    }
 
     /// `claude://code/new?folder=…&q=…` / `codex://threads/new?path=…&prompt=…`. The prompt is
     /// placed in the app's composer; nothing is sent until the user sends it.

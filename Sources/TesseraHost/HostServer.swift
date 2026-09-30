@@ -17,6 +17,9 @@ public final class HostServer {
     public let hostName = Host.current().localizedName ?? "Mac"
 
     @ObservationIgnored private weak var workspace: Workspace?
+    /// The app's own open and close, so the phone's "Open on Mac" and Close act like a click there.
+    @ObservationIgnored private let open: (String) -> Void
+    @ObservationIgnored private let closeTile: (String) -> Void
     @ObservationIgnored private var listener: NWListener?
     @ObservationIgnored private var clients: [UUID: RemoteClient] = [:]
     /// Streams to connected devices; runs only while there are any.
@@ -28,8 +31,10 @@ public final class HostServer {
     @ObservationIgnored private var failure: String?
     @ObservationIgnored private let hostId: String
 
-    public init(workspace: Workspace) {
+    public init(workspace: Workspace, open: @escaping (String) -> Void, close: @escaping (String) -> Void) {
         self.workspace = workspace
+        self.open = open
+        closeTile = close
         do {
             if let saved = try Keychain.read(account: "pairing-code") {
                 pairingCode = saved
@@ -116,7 +121,8 @@ public final class HostServer {
         let pending = clients.values.filter { !$0.authenticated }
         guard clients.count - pending.count < Self.maxClients else { return connection.cancel() }
         if pending.count >= Self.maxPending { pending.min { $0.openedAt < $1.openedAt }?.close() }
-        let client = RemoteClient(connection: connection, workspace: workspace, hello: HostHello(hostName: hostName, hostId: hostId))
+        let client = RemoteClient(connection: connection, workspace: workspace, hello: HostHello(hostName: hostName, hostId: hostId),
+                                  open: open, closeTile: closeTile)
         clients[client.id] = client
         client.onClose = { [weak self] id in
             guard let self else { return }
@@ -194,6 +200,8 @@ final class RemoteClient {
     private let connection: NWConnection
     private weak var workspace: Workspace?
     private let hello: HostHello
+    private let open: (String) -> Void
+    private let closeTile: (String) -> Void
     private(set) var authenticated = false
     private var watched: Set<String> = []
     private var pendingOutput: [String: [UInt8]] = [:]
@@ -213,10 +221,13 @@ final class RemoteClient {
     static let lowWater = 512 * 1024
     static let helloDeadline: TimeInterval = 10
 
-    init(connection: NWConnection, workspace: Workspace, hello: HostHello) {
+    init(connection: NWConnection, workspace: Workspace, hello: HostHello,
+         open: @escaping (String) -> Void, closeTile: @escaping (String) -> Void) {
         self.connection = connection
         self.workspace = workspace
         self.hello = hello
+        self.open = open
+        self.closeTile = closeTile
     }
 
     func start() {
@@ -322,7 +333,7 @@ final class RemoteClient {
             authenticated = true
             send(.hello(hello))
             send(.launchers(workspace.presets + workspace.installedApps.map {
-                LaunchPreset(name: $0 == .claude ? "Claude app" : "Codex app", command: nil, flavor: $0.flavor)
+                LaunchPreset(name: $0.name, command: nil, flavor: $0.flavor)
             }))
             sendTiles()
             send(.usage(workspace.usage.orderedReadings))
@@ -344,14 +355,9 @@ final class RemoteClient {
             case .acknowledge: workspace.acknowledge(action.id)
             case .openOnHost:
                 NSApp.activate()
-                if workspace.opensInApp(action.id) {
-                    workspace.selectedId = action.id
-                    workspace.openNative(action.id, at: nil)
-                } else {
-                    workspace.expand(action.id)
-                }
+                open(action.id)
             case .restart: workspace.restart(action.id)
-            case .close: workspace.close(action.id)
+            case .close: closeTile(action.id)
             }
         case .launch(let request):
             if let app = request.app {

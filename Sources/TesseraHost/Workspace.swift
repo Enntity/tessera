@@ -26,11 +26,12 @@ public final class Workspace {
         NSWorkspace.shared.urlForApplication(withBundleIdentifier: $0.bundleID) != nil
     }
 
-    public var selectedId: String?
+    /// Always a tile the board shows, or nil on an empty board (see `reconcileSelection`).
+    public private(set) var selectedId: String?
     public private(set) var expandedId: String?
-    public var filter: Filter = .all
+    public var filter: Filter = .all { didSet { reconcileSelection() } }
     public private(set) var groups = TileGroups()
-    /// Snap the Claude / Codex window onto the tile when an app session is opened.
+    /// Place the Claude / Codex window where the opened tile would sit when an app session is opened.
     public var placeNativeWindows = true
     /// Bring terminals back into their conversations when Tessera opens (else they wait, shut down).
     public var resumeOnLaunch = true
@@ -40,8 +41,14 @@ public final class Workspace {
     /// Kept current as tiles change (see `BoardState`).
     public private(set) var state = BoardState()
 
+    /// A link clicked in a terminal (e.g. the URL a dev server or `dsh web` prints): the app opens
+    /// it as a web tile.
+    @ObservationIgnored public var onLink: ((URL) -> Void)?
+
     /// Observed: acknowledging an agent session changes how its tile looks.
     private var agentAcknowledged: [String: Date] = [:]
+    /// Names the user gave app sessions (terminals and pages carry their own).
+    private var agentTitles: [String: String] = [:]
     @ObservationIgnored private var hiddenAgents: [String: Date] = [:]
     /// The order last saved, app sessions included: they take their places again as they reappear.
     @ObservationIgnored private var savedOrder: [String] = []
@@ -64,7 +71,10 @@ public final class Workspace {
     public func start() {
         restore()
         observe({ [weak self] in BoardState(self?.allTiles ?? []) }) { [weak self] state in
-            if self?.state != state { self?.state = state }
+            guard let self, self.state != state else { return }
+            self.state = state
+            // Needs you shows only what waits: a tile that stops waiting takes the selection off with it.
+            if filter == .attention { reconcileSelection() }
         }
         agents.onChange = { [weak self] in self?.agentsChanged() }
         agents.start()
@@ -118,7 +128,7 @@ public final class Workspace {
 
     @discardableResult
     public func openBrowser(_ raw: String) -> String? {
-        guard let url = Self.normalizeURL(raw) else { return nil }
+        guard let url = WebAddress.normalize(raw) else { return nil }
         let session = BrowserSession(url: url)
         browsers[session.id] = session
         insert(session.id)
@@ -151,12 +161,20 @@ public final class Workspace {
     public func move(tile tileId: String, toGroup groupId: String?) {
         guard info(tileId) != nil else { return }  // e.g. an account row dropped on a tab
         groups.assign(tileId, to: groupId)
+        reconcileSelection()
         save()
     }
 
+    /// New work belongs in the tab being viewed. From Needs you, where it wouldn't show, the view
+    /// goes to All.
+    private func tabForNewTiles() -> String? {
+        if filter == .attention { filter = .all }
+        if case .group(let g) = filter { return g }
+        return nil
+    }
+
     private func insert(_ id: String) {
-        // Viewing a tab? New work belongs there.
-        if case .group(let g) = filter { groups.assign(id, to: g) }
+        groups.assign(id, to: tabForNewTiles())
         // New tiles land after the selection so related work clusters.
         if let sel = selectedId, let i = order.firstIndex(of: sel) {
             order.insert(id, at: i + 1)
@@ -167,16 +185,24 @@ public final class Workspace {
         save()
     }
 
+    /// Closes a terminal or page for good; an app conversation is only hidden until it is active again.
     public func close(_ id: String) {
+        guard exists(id) else { return }
         if expandedId == id { collapse() }
+        let visible = visibleIds
         if let t = terminals.removeValue(forKey: id) { t.terminate() }
         if let b = browsers.removeValue(forKey: id) { b.webView.stopLoading() }
         if agents.sessions[id] != nil { hiddenAgents[id] = Date() } else { groups.assign(id, to: nil) }
-        if let i = order.firstIndex(of: id) {
-            order.remove(at: i)
-            if selectedId == id { selectedId = order.indices.contains(i) ? order[i] : order.last }
-        }
+        order.removeAll { $0 == id }
+        if selectedId == id { selectedId = Self.neighbor(of: id, in: visible) }
         save()
+    }
+
+    /// What is selected once `id` leaves the tiles on show: the one that takes its place, else the
+    /// one before it.
+    nonisolated static func neighbor(of id: String, in visible: [String]) -> String? {
+        guard let i = visible.firstIndex(of: id) else { return visible.first }
+        return i + 1 < visible.count ? visible[i + 1] : i > 0 ? visible[i - 1] : nil
     }
 
     public func move(_ id: String, before target: String) {
@@ -220,23 +246,57 @@ public final class Workspace {
         browsers[id]?.webView.reload()
     }
 
+    public func isSuspended(_ id: String) -> Bool { terminals[id]?.isSuspended == true }
+
+    /// Gives any tile a name of the user's own; an empty one goes back to the tile's own title.
     public func rename(_ id: String, to title: String) {
-        terminals[id]?.rename(title)
+        let name = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        terminals[id]?.rename(name)
+        browsers[id]?.rename(name)
+        if agents.sessions[id] != nil { agentTitles[id] = name.isEmpty ? nil : name }
         save()
     }
 
-    // MARK: Focus
+    // MARK: Selection and the open tile
 
-    public func expand(_ id: String) {
-        if let prev = expandedId, prev != id { setViewed(prev, false) }
-        expandedId = id
+    /// Selects a tile, going to All when the tab or filter being viewed hides it.
+    public func select(_ id: String) {
+        guard exists(id) else { return }
+        if !visibleIds.contains(id) { filter = .all }
         selectedId = id
-        setViewed(id, true)
     }
 
+    /// Keeps the selection on a tile the board shows: when it isn't (a tab change, a tile closed or
+    /// filed elsewhere), it goes to the first one.
+    private func reconcileSelection() {
+        let visible = visibleIds
+        guard selectedId.map(visible.contains) != true, selectedId != visible.first else { return }
+        selectedId = visible.first
+    }
+
+    /// Opens a tile: zoomed open on the board, or, for a Claude or Codex conversation whose app is
+    /// installed, straight in that app, placed at `rect` (AppKit screen coordinates). `inApp: false`
+    /// keeps such a conversation in Tessera, as its transcript. An id not on the board opens nothing.
+    public func open(_ id: String, inApp: Bool = true, nativeAt rect: CGRect? = nil) {
+        guard exists(id) else { return }
+        if app(opening: id, inApp: inApp) != nil {
+            collapse()
+            select(id)
+            openNative(id, at: rect)
+        } else {
+            if let prev = expandedId, prev != id { setViewed(prev, false) }
+            select(id)
+            expandedId = id
+            setViewed(id, true)
+        }
+    }
+
+    /// Back to the board; the tile stays selected.
     public func collapse() {
-        if let id = expandedId { setViewed(id, false) }
+        guard let id = expandedId else { return }
+        setViewed(id, false)
         expandedId = nil
+        reconcileSelection()
     }
 
     public func acknowledge(_ id: String) {
@@ -251,42 +311,40 @@ public final class Workspace {
         if agents.sessions[id] != nil { agentAcknowledged[id] = Date() }
     }
 
-    /// Jump to the next tile that is waiting on the user, oldest first.
-    public func nextAttention() -> String? {
-        let waiting = allTiles.filter(\.needsUser)
-        guard !waiting.isEmpty else { return nil }
-        let sorted = waiting.sorted { $0.lastActivityAt < $1.lastActivityAt }
-        if let current = expandedId, let i = sorted.firstIndex(where: { $0.id == current }) {
-            return sorted[(i + 1) % sorted.count].id
-        }
-        return sorted.first?.id
+    /// The next of `ids` to visit (the HUD counters, ⌘J): oldest activity first, moving on from the
+    /// tile the user is on.
+    public func next(in ids: Set<String>) -> String? {
+        ids.compactMap(info).next(after: selectedId)
     }
 
     /// Claude and Codex conversations open straight in their app; Tessera's transcript panel is only
     /// for when that app isn't installed, or when asked for. (dsh's live page lives in the panel.)
-    public func opensInApp(_ id: String) -> Bool {
-        guard let flavor = agents.session(id)?.flavor else { return false }
-        return installedApps.contains { $0.flavor == flavor }
+    public func opensInApp(_ id: String) -> Bool { app(opening: id) != nil }
+
+    private func app(opening id: String, inApp: Bool = true) -> AgentApp? {
+        agents.session(id).flatMap { AgentApp.opening($0.flavor, installed: installedApps, inApp: inApp) }
     }
 
-    /// Open a desktop-app conversation in its own app, snapped to `rect` (AppKit screen coordinates).
+    /// Open a desktop-app conversation in its own app, placed at `rect` (AppKit screen coordinates).
     public func openNative(_ id: String, at rect: CGRect?) {
         guard let a = agents.session(id) else { return }
         agentAcknowledged[id] = Date()
         if a.flavor == .dsh { return openDsh(a) }
-        WindowPlacer.open(a.openURL, bundleID: a.bundleID, placeAt: placeNativeWindows ? rect : nil)
+        guard let app = AgentApp(flavor: a.flavor) else { return }
+        WindowPlacer.open(a.openURL, bundleID: app.bundleID, placeAt: placeNativeWindows ? rect : nil)
     }
 
     // MARK: New app conversations
 
-    /// A conversation just started in a desktop app: when its tile appears, open it in place.
-    @ObservationIgnored private var pendingAppConversation: (app: AgentApp, since: Date)?
+    /// A conversation just started in a desktop app: when its tile appears, it joins the tab it was
+    /// started from and is selected.
+    @ObservationIgnored private var pendingAppConversation: (app: AgentApp, since: Date, tab: String?)?
 
     /// Starts a new conversation in the Claude or Codex app (in `folder`, with `prompt` placed in its
-    /// composer), snapping the app window onto `rect` (AppKit screen coordinates) when allowed.
+    /// composer), placing the app window at `rect` (AppKit screen coordinates) when allowed.
     public func newAppConversation(_ app: AgentApp, folder: String?, prompt: String? = nil, placeAt rect: CGRect? = nil) {
         guard let url = app.newConversationURL(folder: folder, prompt: prompt) else { return }
-        pendingAppConversation = (app, Date())
+        pendingAppConversation = (app, Date(), tabForNewTiles())
         WindowPlacer.open(url, bundleID: app.bundleID, placeAt: placeNativeWindows ? rect : nil)
     }
 
@@ -298,8 +356,10 @@ public final class Workspace {
         else { return }
         pendingAppConversation = nil
         agentAcknowledged[match.id] = Date()
-        // The app already shows it; the board just points at its new tile.
-        selectedId = match.id
+        if let tab = pending.tab { groups.assign(match.id, to: tab) }
+        // The app already shows it; the board just points at its new tile, where that is on show.
+        if visibleIds.contains(match.id) { selectedId = match.id }
+        save()
     }
 
     // MARK: DeepSeek Harness
@@ -371,7 +431,7 @@ public final class Workspace {
         let unseen = a.snapshot.activity.isAttention && last > ack && expandedId != a.id
         // Finished work the user has already seen is just idle, same as a terminal.
         let activity: TileActivity = a.snapshot.activity == .done && !unseen ? .idle : a.snapshot.activity
-        return TileInfo(id: a.id, kind: .agentSession, flavor: a.flavor, title: a.title,
+        return TileInfo(id: a.id, kind: .agentSession, flavor: a.flavor, title: agentTitles[a.id] ?? a.title,
                         subtitle: a.cwd.abbreviatingHome, activity: activity,
                         attention: unseen,
                         lastActivityAt: a.lastActivityAt, detail: detail)
@@ -397,9 +457,11 @@ public final class Workspace {
         openPendingAppConversation(newlyAdded: added)
         // Write only a real change: even an empty removal would re-render everything reading `order`.
         let kept = order.filter { id in !(id.contains(":") && live[id] == nil && terminals[id] == nil && browsers[id] == nil) }
-        guard kept.count != order.count else { return }
-        order = kept
-        if let e = expandedId, !order.contains(e) { expandedId = nil }
+        if kept.count != order.count {
+            order = kept
+            if let e = expandedId, !order.contains(e) { expandedId = nil }
+        }
+        reconcileSelection()
     }
 
     private func agentsChanged() {
@@ -409,13 +471,7 @@ public final class Workspace {
 
     private func adopt(_ session: TerminalSession) {
         session.onResumableChange = { [weak self] in self?.save() }
-        // A link clicked in a terminal (e.g. the URL a dev server or `dsh web` prints) opens as a
-        // web tile right after that terminal, and comes forward.
-        session.onOpenLink = { [weak self, weak session] url in
-            guard let self, let session else { return }
-            self.selectedId = session.id
-            if let id = self.openBrowser(url.absoluteString) { self.expand(id) }
-        }
+        session.onOpenLink = { [weak self] url in self?.onLink?(url) }
         terminals[session.id] = session
     }
 
@@ -479,6 +535,8 @@ public final class Workspace {
         /// App sessions the user closed, and when.
         var hidden: [String: Date]?
         var agentLookbackHours: Double?
+        /// Names the user gave app sessions (a terminal's or page's is in its tile).
+        var titles: [String: String]?
     }
 
     private var saveURL: URL { directory.appendingPathComponent("workspace.json") }
@@ -492,7 +550,7 @@ public final class Workspace {
                 return .init(id: id, kind: .terminal, command: t.command, cwd: t.liveDirectory() ?? t.cwd, title: t.customTitle,
                              sessionId: session, suspended: t.isSuspended)
             }
-            if let b = browsers[id] { return .init(id: id, kind: .browser, url: b.url?.absoluteString) }
+            if let b = browsers[id] { return .init(id: id, kind: .browser, title: b.customTitle, url: b.url?.absoluteString) }
             return nil
         }
         // App sessions not on the board now (closed, or not rescanned yet since launch) keep their places.
@@ -502,9 +560,11 @@ public final class Workspace {
         // Closed longer ago than the lookback: that session can't be on the board anyway.
         let now = Date()
         hiddenAgents = hiddenAgents.filter { now.timeIntervalSince($0.value) < agents.lookback }
+        // A name lasts as long as its session is remembered at all.
+        for id in agentTitles.keys where !savedOrder.contains(id) { agentTitles[id] = nil }
         StateFile.save(Saved(tiles: tiles.map(Lossy.init), defaultDirectory: defaultDirectory, placeNativeWindows: placeNativeWindows,
                              groups: groups.list, resumeOnLaunch: resumeOnLaunch, order: savedOrder, hidden: hiddenAgents,
-                             agentLookbackHours: agents.lookback / 3600), to: saveURL)
+                             agentLookbackHours: agents.lookback / 3600, titles: agentTitles), to: saveURL)
     }
 
     /// Where a tile that reappears (an app session found again after launch) goes: right after the
@@ -538,6 +598,7 @@ public final class Workspace {
         resumeOnLaunch = saved.resumeOnLaunch ?? true
         savedOrder = saved.order ?? []
         hiddenAgents = saved.hidden ?? [:]
+        agentTitles = saved.titles ?? [:]
         if let hours = saved.agentLookbackHours, AgentAppWatcher.lookbackHours.contains(hours) { agents.lookback = hours * 3600 }
         // One tile per conversation; "continue latest" only where it can't collide (see RestorePlan).
         let plan = RestorePlan.plan(tiles.filter { $0.kind == .terminal }.map { tile in
@@ -555,7 +616,7 @@ public final class Workspace {
                 order.append(s.id)
             case .browser:
                 if let raw = tile.url, let url = URL(string: raw) {
-                    let b = BrowserSession(id: tile.id, url: url)
+                    let b = BrowserSession(id: tile.id, url: url, title: tile.title)
                     browsers[b.id] = b
                     order.append(b.id)
                 }
@@ -565,6 +626,4 @@ public final class Workspace {
         }
         selectedId = order.first
     }
-
-    static func normalizeURL(_ raw: String) -> URL? { WebAddress.normalize(raw) }
 }

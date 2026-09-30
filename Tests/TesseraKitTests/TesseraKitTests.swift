@@ -161,6 +161,27 @@ final class TerminalActivityTrackerTests: XCTestCase {
         XCTAssertTrue(tile.needsUser)
     }
 
+    func testNextTileIsTheOldestAfterTheCurrentOne() {
+        func tile(_ id: String, _ age: TimeInterval) -> TileInfo {
+            TileInfo(id: id, kind: .terminal, flavor: .shell, title: id, lastActivityAt: Date(timeIntervalSince1970: age))
+        }
+        let tiles = [tile("c", 30), tile("a", 10), tile("b", 20)]
+        XCTAssertEqual(tiles.next(after: nil), "a")
+        XCTAssertEqual(tiles.next(after: "a"), "b")
+        // Round again after the newest, and from a tile that isn't one of them.
+        XCTAssertEqual(tiles.next(after: "c"), "a")
+        XCTAssertEqual(tiles.next(after: "elsewhere"), "a")
+        XCTAssertEqual([tile("only", 1)].next(after: "only"), "only")
+        XCTAssertNil([TileInfo]().next(after: "a"))
+    }
+
+    func testClosingAnAppConversationOnlyHidesIt() {
+        XCTAssertEqual(TileKind.terminal.closeLabel, "Close")
+        XCTAssertEqual(TileKind.browser.closeLabel, "Close")
+        XCTAssertEqual(TileKind.agentSession.closeLabel, "Hide")
+        XCTAssertNotEqual(TileKind.agentSession.closeSymbol, TileKind.terminal.closeSymbol)
+    }
+
     func testBoardStateCountsWhatNeedsTheUser() {
         func tile(_ id: String, _ activity: TileActivity, attention: Bool = false) -> TileInfo {
             TileInfo(id: id, kind: .terminal, flavor: .shell, title: id, activity: activity, attention: attention)
@@ -169,7 +190,7 @@ final class TerminalActivityTrackerTests: XCTestCase {
                                 tile("seen", .needsInput), tile("d", .done, attention: true), tile("i", .idle)])
         XCTAssertEqual(state.working, ["w"])
         XCTAssertEqual(state.needsInput, ["q", "seen"])
-        XCTAssertEqual(state.done, 1)
+        XCTAssertEqual(state.results, ["d"])
         XCTAssertEqual(state.needsUser, ["q", "seen", "d"])
     }
 
@@ -858,5 +879,24 @@ final class AgentAppTests: XCTestCase {
         // Characters meaningful in a query stay inside their parameter.
         let url = AgentApp.claude.newConversationURL(folder: nil, prompt: "a&b=c?d#e C++")!
         XCTAssertEqual(url.absoluteString, "claude://code/new?q=a%26b%3Dc%3Fd%23e%20C%2B%2B")
+    }
+
+    func testConversationLinksAndNames() {
+        XCTAssertEqual(AgentApp.claude.conversationURL("local_1")?.absoluteString, "claude://code/continue?session=local_1")
+        XCTAssertEqual(AgentApp.codex.conversationURL("abc-1")?.absoluteString, "codex://threads/abc-1")
+        XCTAssertEqual(AgentApp.allCases.map(\.name), ["Claude app", "Codex app"])
+    }
+
+    func testOnlyInstalledAppsTakeTheirConversations() {
+        XCTAssertEqual(AgentApp(flavor: .claudeDesktop), .claude)
+        XCTAssertEqual(AgentApp(flavor: .codexDesktop), .codex)
+        // The CLIs and dsh are tiles on the board, not app conversations.
+        XCTAssertNil(AgentApp(flavor: .claude))
+        XCTAssertNil(AgentApp(flavor: .dsh))
+        XCTAssertEqual(AgentApp.opening(.codexDesktop, installed: [.claude, .codex]), .codex)
+        XCTAssertNil(AgentApp.opening(.codexDesktop, installed: [.claude]))
+        XCTAssertNil(AgentApp.opening(.shell, installed: AgentApp.allCases))
+        // Paging between open tiles and Show Transcript stay in Tessera.
+        XCTAssertNil(AgentApp.opening(.claudeDesktop, installed: [.claude], inApp: false))
     }
 }

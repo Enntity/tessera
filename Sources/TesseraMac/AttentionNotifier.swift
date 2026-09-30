@@ -3,7 +3,7 @@ import TesseraKit
 import UserNotifications
 
 /// Posts a system notification when a tile starts needing the user while Tessera isn't frontmost;
-/// clicking it opens that tile in place.
+/// clicking it opens that tile (a Claude or Codex conversation: in its app).
 @MainActor
 final class AttentionNotifier: NSObject, UNUserNotificationCenterDelegate {
     private var notified: Set<String> = []

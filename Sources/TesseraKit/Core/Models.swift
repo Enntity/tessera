@@ -5,6 +5,11 @@ public enum TileKind: String, Codable, Sendable {
     case terminal
     case agentSession   // a conversation living inside a desktop app (Claude, Codex)
     case browser
+
+    /// Closing an app conversation only hides its tile (nothing is stopped), so it reads and looks
+    /// different from closing a terminal or page.
+    public var closeLabel: String { self == .agentSession ? "Hide" : "Close" }
+    public var closeSymbol: String { self == .agentSession ? "eye.slash" : "xmark" }
 }
 
 /// Which tool a tile belongs to. Drives accent color, glyph, and prompt heuristics.
@@ -99,6 +104,10 @@ public enum TileActivity: String, Codable, Sendable {
     /// States that should pull the user's eye until acknowledged.
     public var isAttention: Bool { self == .done || self == .needsInput || self == .failed }
 
+    /// A terminal whose program is gone (exited, failed or shut down): there is nothing to type
+    /// into until it runs again.
+    public var hasEnded: Bool { self == .exited || self == .failed }
+
     public var label: String {
         switch self {
         case .starting: "Starting"
@@ -174,7 +183,17 @@ public struct BoardState: Equatable, Sendable {
     /// Everything waiting on the user (`TileInfo.needsUser`).
     public var needsUser: Set<String> { needsInput.union(unseen) }
     /// Unseen results that aren't questions.
-    public var done: Int { unseen.subtracting(needsInput).count }
+    public var results: Set<String> { unseen.subtracting(needsInput) }
+}
+
+public extension Sequence where Element == TileInfo {
+    /// The next of these tiles to visit: oldest activity first, moving on from `current` and round
+    /// again after the newest.
+    func next(after current: String?) -> String? {
+        let ids = sorted { ($0.lastActivityAt, $0.id) < ($1.lastActivityAt, $1.id) }.map(\.id)
+        guard let i = ids.firstIndex(where: { $0 == current }) else { return ids.first }
+        return ids[(i + 1) % ids.count]
+    }
 }
 
 public struct ConversationItem: Codable, Hashable, Sendable, Identifiable {
