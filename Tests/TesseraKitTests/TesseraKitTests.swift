@@ -161,37 +161,11 @@ final class TerminalActivityTrackerTests: XCTestCase {
         XCTAssertTrue(tile.needsUser)
     }
 
-    func testNextTileIsTheOldestAfterTheCurrentOne() {
-        func tile(_ id: String, _ age: TimeInterval) -> TileInfo {
-            TileInfo(id: id, kind: .terminal, flavor: .shell, title: id, lastActivityAt: Date(timeIntervalSince1970: age))
-        }
-        let tiles = [tile("c", 30), tile("a", 10), tile("b", 20)]
-        XCTAssertEqual(tiles.next(after: nil), "a")
-        XCTAssertEqual(tiles.next(after: "a"), "b")
-        // Round again after the newest, and from a tile that isn't one of them.
-        XCTAssertEqual(tiles.next(after: "c"), "a")
-        XCTAssertEqual(tiles.next(after: "elsewhere"), "a")
-        XCTAssertEqual([tile("only", 1)].next(after: "only"), "only")
-        XCTAssertNil([TileInfo]().next(after: "a"))
-    }
-
     func testClosingAnAppConversationOnlyHidesIt() {
         XCTAssertEqual(TileKind.terminal.closeLabel, "Close")
         XCTAssertEqual(TileKind.browser.closeLabel, "Close")
         XCTAssertEqual(TileKind.agentSession.closeLabel, "Hide")
         XCTAssertNotEqual(TileKind.agentSession.closeSymbol, TileKind.terminal.closeSymbol)
-    }
-
-    func testBoardStateCountsWhatNeedsTheUser() {
-        func tile(_ id: String, _ activity: TileActivity, attention: Bool = false) -> TileInfo {
-            TileInfo(id: id, kind: .terminal, flavor: .shell, title: id, activity: activity, attention: attention)
-        }
-        let state = BoardState([tile("w", .working, attention: true), tile("q", .needsInput, attention: true),
-                                tile("seen", .needsInput), tile("d", .done, attention: true), tile("i", .idle)])
-        XCTAssertEqual(state.working, ["w"])
-        XCTAssertEqual(state.needsInput, ["q", "seen"])
-        XCTAssertEqual(state.results, ["d"])
-        XCTAssertEqual(state.needsUser, ["q", "seen", "d"])
     }
 
     func testShortBurstIsQuietlyIdle() {

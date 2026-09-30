@@ -67,10 +67,8 @@ public final class RemoteSession {
         self.deviceName = deviceName
     }
 
-    public var attentionTiles: [TileInfo] {
-        tiles.filter(\.needsUser)
-            .sorted { $0.lastActivityAt < $1.lastActivityAt }
-    }
+    /// What waits on the user, in the order the Mac's ⌘J visits it.
+    public var attentionTiles: [TileInfo] { tiles.attentionQueue() }
 
     public func connect(to host: PairedHost, code: String) {
         disconnect()

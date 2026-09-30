@@ -40,6 +40,8 @@ public final class Workspace {
     public let boardHolder: pid_t?
     /// Kept current as tiles change (see `BoardState`).
     public private(set) var state = BoardState()
+    /// The tile ⌘J or a HUD counter last went to (see `next(in:)`).
+    @ObservationIgnored private var visited: TileInfo?
 
     /// A link clicked in a terminal (e.g. the URL a dev server or `dsh web` prints): the app opens
     /// it as a web tile.
@@ -111,7 +113,11 @@ public final class Workspace {
     public var visibleIds: [String] {
         switch filter {
         case .all: return order
-        case .attention: return order.filter { state.needsUser.contains($0) || $0 == expandedId }
+        case .attention:
+            // Needs you is the queue itself, in the order ⌘J visits it; a tile answered while open
+            // stays until it closes.
+            let answered = expandedId.flatMap { state.queue.contains($0) ? nil : $0 }
+            return (state.queue + [answered].compactMap { $0 }).filter(exists)
         case .group(let g):
             let members = groups.members(of: g)
             return order.filter { members.contains($0) || $0 == expandedId }
@@ -311,10 +317,13 @@ public final class Workspace {
         if agents.sessions[id] != nil { agentAcknowledged[id] = Date() }
     }
 
-    /// The next of `ids` to visit (the HUD counters, ⌘J): oldest activity first, moving on from the
-    /// tile the user is on.
+    /// The next of `ids` to visit (the HUD counters, ⌘J): the first, or moving on from the tile the
+    /// user is on once they have seen it — as they have an app conversation that opened in its app.
     public func next(in ids: Set<String>) -> String? {
-        ids.compactMap(info).next(after: selectedId)
+        // Opened, the tile last visited may have stopped waiting: it is passed as it was then.
+        let current = visited?.id == selectedId ? visited : selectedId.flatMap(info)
+        visited = ids.compactMap(info).next(after: current).flatMap(info)
+        return visited?.id
     }
 
     /// Claude and Codex conversations open straight in their app; Tessera's transcript panel is only

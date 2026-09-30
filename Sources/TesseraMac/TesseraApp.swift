@@ -189,7 +189,7 @@ final class AppModel {
         if workspace.expandedId != nil { open(ids[i], inApp: false) } else { workspace.select(ids[i]) }
     }
 
-    /// The HUD counters and ⌘J: opens the next of `ids`, oldest first.
+    /// The HUD counters and ⌘J: opens the next of `ids` in the order they are visited.
     func jump(to ids: Set<String>) {
         if let id = workspace.next(in: ids) { open(id) }
     }

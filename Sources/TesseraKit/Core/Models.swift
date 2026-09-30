@@ -101,8 +101,10 @@ public extension TileActivity {
 public enum TileActivity: String, Codable, Sendable {
     case starting, working, idle, done, needsInput, exited, failed
 
-    /// States that should pull the user's eye until acknowledged.
-    public var isAttention: Bool { self == .done || self == .needsInput || self == .failed }
+    /// The states that pull the user's eye until acknowledged, most pressing first: a question, a
+    /// failure, a finished result.
+    public static let attentionOrder: [TileActivity] = [.needsInput, .failed, .done]
+    public var isAttention: Bool { Self.attentionOrder.contains(self) }
 
     /// A terminal whose program is gone (exited, failed or shut down): there is nothing to type
     /// into until it runs again.
@@ -164,35 +166,62 @@ public struct TileInfo: Codable, Identifiable, Hashable, Sendable {
     }
 }
 
-/// Which tiles are working, waiting on the user, or holding an unseen result. The Mac keeps this
-/// current as tiles change, so the HUD and tabs don't depend on every tile's data.
+/// Which tiles are working or waiting on the user. The Mac keeps this current as tiles change, so
+/// the HUD and tabs don't depend on every tile's data.
 public struct BoardState: Equatable, Sendable {
     public var working: Set<String> = []
     public var needsInput: Set<String> = []
-    /// Unseen results and questions (`TileInfo.isUnseen`).
-    public var unseen: Set<String> = []
+    /// Failures and results the user hasn't seen.
+    public var failed: Set<String> = []
+    public var done: Set<String> = []
+    /// Everything waiting on the user, in the order it is visited (`attentionQueue`).
+    public var queue: [String] = []
 
     public init(_ tiles: [TileInfo] = []) {
-        for tile in tiles {
-            if tile.activity == .working { working.insert(tile.id) }
-            if tile.activity == .needsInput { needsInput.insert(tile.id) }
-            if tile.isUnseen { unseen.insert(tile.id) }
+        for tile in tiles where tile.activity == .working { working.insert(tile.id) }
+        for tile in tiles.attentionQueue() {
+            queue.append(tile.id)
+            switch tile.activity {
+            case .needsInput: needsInput.insert(tile.id)
+            case .failed: failed.insert(tile.id)
+            default: done.insert(tile.id)
+            }
         }
     }
 
     /// Everything waiting on the user (`TileInfo.needsUser`).
-    public var needsUser: Set<String> { needsInput.union(unseen) }
-    /// Unseen results that aren't questions.
-    public var results: Set<String> { unseen.subtracting(needsInput) }
+    public var needsUser: Set<String> { Set(queue) }
+
+    /// The most pressing state among `ids` that waits on the user, if any of them does.
+    public func waiting(in ids: Set<String>) -> TileActivity? {
+        zip(TileActivity.attentionOrder, [needsInput, failed, done]).first { !$0.1.isDisjoint(with: ids) }?.0
+    }
 }
 
 public extension Sequence where Element == TileInfo {
-    /// The next of these tiles to visit: oldest activity first, moving on from `current` and round
-    /// again after the newest.
-    func next(after current: String?) -> String? {
-        let ids = sorted { ($0.lastActivityAt, $0.id) < ($1.lastActivityAt, $1.id) }.map(\.id)
-        guard let i = ids.firstIndex(where: { $0 == current }) else { return ids.first }
-        return ids[(i + 1) % ids.count]
+    /// The one order tiles are visited in (⌘J, the HUD counters, ⌘K, the phone's queue): what waits
+    /// on the user first, a question before a failure before an unseen result, and the oldest first.
+    private func visitOrder() -> [TileInfo] { sorted { Self.place($0) < Self.place($1) } }
+
+    private static func place(_ tile: TileInfo) -> (Int, Date, String) {
+        let rank = tile.needsUser ? TileActivity.attentionOrder.firstIndex(of: tile.activity) : nil
+        return (rank ?? TileActivity.attentionOrder.count, tile.lastActivityAt, tile.id)
+    }
+
+    /// The tiles waiting on the user, in the order they are visited.
+    func attentionQueue() -> [TileInfo] { filter(\.needsUser).visitOrder() }
+
+    /// The next of these tiles to visit, given the tile the user is on (nil: none): the first, or
+    /// when they are on one of them and have seen it (a question put off, or opened in its app), the
+    /// one after it, round again after the last. A tile that left them when it was visited (a result
+    /// stops waiting once opened) is passed as it was then, and its old place says what is next.
+    func next(after current: TileInfo?) -> String? {
+        let order = visitOrder()
+        guard let current else { return order.first?.id }
+        if let i = order.firstIndex(where: { $0.id == current.id }) {
+            return order[i].attention ? order.first?.id : order[(i + 1) % order.count].id
+        }
+        return (order.first { Self.place($0) > Self.place(current) } ?? order.first)?.id
     }
 }
 

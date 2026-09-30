@@ -18,7 +18,8 @@ final class AttentionNotifier: NSObject, UNUserNotificationCenterDelegate {
     }
 
     func update(with tiles: [TileInfo]) {
-        let waiting = tiles.filter { $0.attention }
+        // Unseen, and in the order ⌘J visits them: a question is announced before a result.
+        let waiting = tiles.attentionQueue().filter(\.attention)
         let waitingIds = Set(waiting.map(\.id))
         // Forget tiles that were seen, so their next event notifies again, and take their notices
         // out of Notification Center: they no longer need anything.

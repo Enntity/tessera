@@ -113,8 +113,13 @@ struct HUDBar: View {
                 CountChip(value: state.needsInput.count, label: "need you", color: Style.amber, pulse: !state.needsInput.isEmpty) {
                     model.jump(to: state.needsInput)
                 }
-                CountChip(value: state.results.count, label: "done", color: Style.mint, pulse: false) {
-                    model.jump(to: state.results)
+                if !state.failed.isEmpty {
+                    CountChip(value: state.failed.count, label: "failed", color: Style.coral, pulse: false) {
+                        model.jump(to: state.failed)
+                    }
+                }
+                CountChip(value: state.done.count, label: "done", color: Style.mint, pulse: false) {
+                    model.jump(to: state.done)
                 }
                 CountChip(value: state.working.count, label: "working", color: Style.cyan, pulse: false) {
                     model.jump(to: state.working)
@@ -272,12 +277,12 @@ struct TabStrip: View {
 
     var body: some View {
         let workspace = model.workspace
-        let needsUser = workspace.state.needsUser
+        let state = workspace.state
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 2) {
-                TabChip(title: "All", count: workspace.order.count, attention: false,
+                TabChip(title: "All", count: workspace.order.count,
                         selected: workspace.filter == .all, dropTile: { file($0, into: nil) }) { model.onBoard { $0.filter = .all } }
-                TabChip(title: "Needs you", count: needsUser.count, attention: false,
+                TabChip(title: "Needs you", count: state.queue.count,
                         selected: workspace.filter == .attention, tint: Style.amber) { model.onBoard { $0.filter = .attention } }
                 if !workspace.groups.list.isEmpty {
                     Rectangle().fill(Style.hairline).frame(width: 1, height: 14).padding(.horizontal, 4)
@@ -285,7 +290,7 @@ struct TabStrip: View {
                 ForEach(workspace.groups.list) { group in
                     let members = workspace.groups.members(of: group.id)
                     TabChip(title: group.name, count: members.filter(workspace.exists).count,
-                            attention: !members.isDisjoint(with: needsUser),
+                            waiting: state.waiting(in: members),
                             selected: workspace.filter == .group(group.id), dropTile: { file($0, into: group.id) }) {
                         model.onBoard { $0.filter = .group(group.id) }
                     }
@@ -348,7 +353,8 @@ struct TabStrip: View {
 struct TabChip: View {
     let title: String
     let count: Int
-    let attention: Bool
+    /// The most pressing state waiting on the user among the tab's tiles: its dot takes that colour.
+    var waiting: TileActivity?
     let selected: Bool
     var tint: Color = Style.cyan
     /// Accepts a tile dragged onto the tab.
@@ -359,8 +365,8 @@ struct TabChip: View {
     var body: some View {
         Button(action: action) {
             HStack(spacing: 5) {
-                if attention {
-                    Circle().fill(Style.amber).frame(width: 5, height: 5).shadow(color: Style.amber, radius: 3)
+                if let waiting {
+                    Circle().fill(Style.state(waiting)).frame(width: 5, height: 5).shadow(color: Style.state(waiting), radius: 3)
                 }
                 Text(title).font(Style.ui(12, selected ? .semibold : .medium)).lineLimit(1)
                 if count > 0 {
