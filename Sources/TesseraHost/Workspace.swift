@@ -42,6 +42,8 @@ public final class Workspace {
     public private(set) var state = BoardState()
     /// Tiles closed lately, newest first: Undo and ⌘K's "Reopen …" bring one back (see `reopen`).
     public private(set) var recentlyClosed = RecentlyClosed<ClosedTile>()
+    /// What was opened lately, for ⌃Tab.
+    @ObservationIgnored private var opened = OpenHistory()
     /// The tile ⌘J or a HUD counter last went to (see `next(in:)`).
     @ObservationIgnored private var visited: TileInfo?
 
@@ -325,6 +327,7 @@ public final class Workspace {
     /// keeps such a conversation in Tessera, as its transcript. An id not on the board opens nothing.
     public func open(_ id: String, inApp: Bool = true, nativeAt rect: CGRect? = nil) {
         guard exists(id) else { return }
+        opened.note(id)
         if app(opening: id, inApp: inApp) != nil {
             collapse()
             select(id)
@@ -336,6 +339,9 @@ public final class Workspace {
             setViewed(id, true)
         }
     }
+
+    /// Where ⌃Tab goes: the latest tile opened that isn't the one the user is on.
+    public var previousTile: String? { opened.previous(from: expandedId ?? selectedId, where: exists) }
 
     /// Back to the board; the tile stays selected.
     public func collapse() {

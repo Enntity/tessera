@@ -121,6 +121,19 @@ final class TileHistoryTests: XCTestCase {
         XCTAssertEqual(closed.tiles.map(\.id), ["b", "c"])
         XCTAssertEqual(RecentlyClosed([Closed(id: "x"), Closed(id: "y")], limit: 1).tiles.map(\.id), ["x"])
     }
+
+    func testControlTabGoesBackToTheTileOpenedBefore() {
+        var opened = OpenHistory()
+        XCTAssertNil(opened.previous(from: "a") { _ in true })
+        for id in ["a", "b", "c", "b"] { opened.note(id) }
+        XCTAssertEqual(opened.ids, ["b", "c", "a"])
+        // A toggle: from the open tile to the one before, and back.
+        XCTAssertEqual(opened.previous(from: "b") { _ in true }, "c")
+        XCTAssertEqual(opened.previous(from: "c") { _ in true }, "b")
+        // On the board with none of them open, it is the last one opened; closed tiles are passed over.
+        XCTAssertEqual(opened.previous(from: nil) { _ in true }, "b")
+        XCTAssertEqual(opened.previous(from: "b") { $0 != "c" }, "a")
+    }
 }
 
 final class BoardCommandTests: XCTestCase {

@@ -262,6 +262,12 @@ final class AppModel {
         if let id = workspace.next(in: ids) { open(id) }
     }
 
+    /// ⌃Tab: back to the tile opened before this one, and again to return. Like ⌘[ ⌘], it stays in
+    /// Tessera while a panel is open.
+    func openPrevious() {
+        if let id = workspace.previousTile { open(id, inApp: workspace.expandedId == nil) }
+    }
+
     /// The web tile that is open, if one is.
     var openPage: BrowserSession? { workspace.expandedId.flatMap { workspace.browsers[$0] } }
 

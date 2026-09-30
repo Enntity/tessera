@@ -41,6 +41,8 @@ struct BoardCommands: Commands {
                 .keyboardShortcut("]")
             Button("Previous Tile") { model.move(.previous) }
                 .keyboardShortcut("[")
+            Button("Last Opened Tile") { model.openPrevious() }
+                .keyboardShortcut(.tab, modifiers: .control)
             Divider()
             Button(model.privacyMode ? "Turn Off Privacy Mode" : "Privacy Mode") {
                 withAnimation(.easeInOut(duration: 0.25)) { model.privacyMode.toggle() }
