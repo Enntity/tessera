@@ -32,6 +32,8 @@ public struct BoardQuery: Equatable, Sendable {
 
         public var label: String {
             switch self {
+            // Everything in the queue (questions, failures, unseen results), not questions alone.
+            case .needsYou: TileActivity.needsYouLabel
             case .terminals: "Terminals"
             case .dsh: "dsh"
             default: activity?.label ?? flavor?.displayName ?? rawValue

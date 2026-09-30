@@ -157,10 +157,13 @@ public struct UsageRing: View {
 public struct UsageRow: View {
     let reading: UsageReading
     var onTopUp: ((URL) -> Void)?
+    /// Runs the reading's fix; without it the card only says what is wrong.
+    var onFix: ((UsageReading.Fix) -> Void)?
 
-    public init(reading: UsageReading, onTopUp: ((URL) -> Void)? = nil) {
+    public init(reading: UsageReading, onTopUp: ((URL) -> Void)? = nil, onFix: ((UsageReading.Fix) -> Void)? = nil) {
         self.reading = reading
         self.onTopUp = onTopUp
+        self.onFix = onFix
     }
 
     public var body: some View {
@@ -197,10 +200,17 @@ public struct UsageRow: View {
                         Text(note).foregroundStyle(Style.muted).lineLimit(2)
                     }
                 }
+                if let fix = reading.fix, let onFix {
+                    Button { onFix(fix) } label: { Label(fix.title, systemImage: "terminal") }
+                        .buttonStyle(.capsulePrimary)
+                        .padding(.top, Style.Space.xs)
+                }
             }
             .font(Style.caption)
         }
         .padding(Style.Space.gutter)
         .cardSurface()
+        .contentShape(Rectangle())
+        .onTapGesture { if let fix = reading.fix { onFix?(fix) } }
     }
 }

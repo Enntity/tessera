@@ -21,14 +21,14 @@ Native macOS app, with a focused iOS companion built on the same core.
   to fork it into a CLI tile.
 - **DeepSeek Harness (dsh) sessions as tiles.** Each recent top-level dsh conversation in
   `~/.dsh/sessions` (or `$DSH_HOME`) is its own live card — title, latest messages and tool calls,
-  working while a turn runs, *Needs you* on a pending approval (with its reason). Opening one starts
+  working while a turn runs, *Asking* on a pending approval (with its reason). Opening one starts
   Tessera's own `dsh web` (via `dsh`, or `npx -y @deepseek-ai/dsh`, which fetches it from npm, on a
   free port with `--no-open`),
   signs the web tile in with its one-time token, and selects that session. The server stops when
   Tessera quits — or crashes.
 - **Attention.** Output-then-silence → *Done*. Permission prompts, `(y/n)`, "Do you want to…",
   OSC 9/777 notifications, Claude's own "needs action" turn summaries, and Codex approval events
-  → *Needs you*, plus a Dock badge and system notifications while Tessera is in the background.
+  → *Asking*, plus a Dock badge and system notifications while Tessera is in the background.
   ⌘J goes to the next thing that needs you, in one order everywhere (the Needs-you lane, the
   top-bar counters, ⌘K, the iPhone's queue): open questions first, then failures, then results you
   haven't seen, the oldest first.
@@ -59,7 +59,7 @@ Native macOS app, with a focused iOS companion built on the same core.
   size again: the board scrolls only when tiles would get smaller than the size you chose.
 - **Tile states, the same at every size.** Colour means state and nothing else. *Idle*: nothing.
   *Working*: a cyan pill, and a highlight sweeping the line under the header (or the progress the
-  program reports, a page's load included). *Needs you*: an amber pill and edge with a glow, and
+  program reports, a page's load included). *Asking*: an amber pill and edge with a glow, and
   the question itself called out on the tile. *Done*, not yet seen: a mint dot after the title and
   a faint edge, nothing moving. *Failed*: a coral pill and edge, and `exit 1` (or the error) in the
   footer. The selected tile has a ring outside its edge, whatever its state. Every tile's footer
@@ -81,10 +81,11 @@ Native macOS app, with a focused iOS companion built on the same core.
   seconds, ⌘Z (Edit ▸ Undo Close Tile) brings it back later, and ⌘K lists the last 20 closed tiles
   as "Reopen …", across restarts. A terminal comes back in its folder and, if it ran an agent, in
   the same conversation; a web tile at its address; a hidden Claude or Codex conversation
-  reappears. Each returns to its place and tab.
-- **Machines.** Top-bar chips for this Mac and any SSH hosts (e.g. DGX Sparks): CPU and GPU load
-  over the last minute or two as sparklines, a memory meter that warns as it fills, hottest
-  temperature, GPU watts; hover for details, click a remote to open an ssh tile. A tile running
+  reappears. Each returns to its place and tab. While anything is hidden or closed, "N put away"
+  at the end of the tab strip lists it all, one click to bring each back (or all of them).
+- **Machines.** Top-bar chips for this Mac and any SSH hosts (e.g. DGX Sparks): two labelled
+  bars — GPU (CPU where there is no GPU to read) and memory — mint with headroom, amber busy, coral flat out;
+  temperature and GPU watts under the name; hover for details, click a remote to open an ssh tile. A tile running
   `ssh` is named after its machine and says so in its footer, in place of the local folder.
 - **Shut down & resume.** Quit Tessera (or shut tiles down) and every agent comes back in the same
   conversation — including ones you typed into a shell yourself, and through your own launchers
@@ -116,8 +117,8 @@ Every gesture means the same thing on every kind of tile.
 
 | Gesture | Action |
 |---|---|
-| Click a tile · ⏎ on the selection | Open it: terminals, web and dsh tiles zoom open in place (a docked one gets the keyboard where it is, in the dock); a Claude or Codex conversation opens in its app. A double-click is a click |
-| Click outside the panel · ⌘⏎ · ⌘W | Back to the board; the tile stays selected. From a docked terminal or page too: it stays docked |
+| Click a tile · ⏎ on the selection | Open it: terminals, web and dsh tiles zoom open in place (a docked one gets the keyboard where it is, in the dock); a Claude or Codex conversation opens in its app. With a panel open, a click on another tile goes straight to that one. A double-click is a click |
+| Click outside the panel (not on a tile) · ⌘⏎ · ⌘W | Back to the board; the tile stays selected. From a docked terminal or page too: it stays docked |
 | Esc | Back to the board from a transcript or a terminal that has ended. A live terminal or page gets the key itself (agents use it to interrupt) |
 | ⌘⏎ (board) | Open the selected tile |
 | ⌘W (board) | Close the selected tile, with Undo; a Claude or Codex conversation is only hidden. In another window (Settings), ⌘W closes that window |
@@ -133,11 +134,11 @@ Every gesture means the same thing on every kind of tile.
 | Right-click · ⋯ in the open panel or on a docked tile | Open · Open in app / Show Transcript · Continue in Terminal · Dock / Undock · Rename… · Shut Down / Resume · Restart / Reload · Open in Browser · Mark as Seen · Move to Tab · Close / Hide — whichever apply |
 | Drag | Reorder tiles; drop one on a tab to file it there, or on the dock to dock it |
 | Type on the board · ⌘F | Filter the board in place, as you type. ⏎ opens the first tile found, ←↑→↓ move among those found, Esc shows everything again |
-| ⌘K | Find or do anything. Typing finds tiles first — by title, folder, question or error, tab or state (`failed`, `needs`), hidden conversations included — and ⏎ goes to the top one. Below them: Open a URL, New …, the board commands, Reopen … (closed tiles), Run …, Ask Claude / Codex app …, web search. With nothing typed: what can be started, what needs you, and the commands that have something to do |
+| ⌘K | Find or do anything. Typing finds tiles first — by title, folder, question or error, tab or state (`failed`, `asking`), hidden conversations included — and ⏎ goes to the top one. Below them: Open a URL, New …, the board commands, Reopen … (closed tiles), Run …, Ask Claude / Codex app …, web search. With nothing typed: what can be started, what needs you, and the commands that have something to do |
 | ⌘T / ⇧⌘T / ⌥⌘T | New shell / Claude Code / Codex (in the selected tile's folder) |
 | ⌘L | New web tile; with a web tile open, its address field |
 | ⌘J | The next thing that needs you: questions, then failures, then unseen results, oldest first. Pressed again it moves on from the tile you're on once you have seen it, also when that one opened in its app |
-| Needs you · Failed · Done · Working (top bar) | Open the next tile in that state, oldest first (a counter shows only while something is in its state) |
+| Asking · Failed · Done · Working (top bar) | Open the next tile in that state, oldest first (a counter shows only while something is in its state) |
 | ⌘1 / ⌘3…9 | All / your tabs |
 | ⌘2 | Only what needs you, in the tab you're on (the Needs you chip); again for everything |
 | Click a row in the lane | Open that tile, as a click on it does. Hovering a terminal's question: `1 2 3 y n ⏎` answer it in place |

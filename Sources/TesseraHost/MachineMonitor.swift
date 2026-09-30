@@ -14,7 +14,6 @@ public final class MachineMonitor {
     /// sparklines. Each apart from `vitals`, so that a sample redraws the loads and leaves the
     /// words, and the bar they are laid out in, alone.
     public private(set) var faces: [String: MachineVitals] = [:]
-    public private(set) var trends: [String: MachineTrend] = [:]
 
     public static let localId = "local"
     /// Every watched machine, this Mac first. Reads which machines there are, not their readings.
@@ -62,7 +61,7 @@ public final class MachineMonitor {
 
     public func remove(id: String) {
         remotes.removeAll { $0.id == id }
-        (vitals[id], faces[id], trends[id]) = (nil, nil, nil)
+        (vitals[id], faces[id]) = (nil, nil)
         lastCPU[id] = nil
         save()
     }
@@ -119,16 +118,13 @@ public final class MachineMonitor {
         publish(v)
     }
 
-    /// Stores a reading, the words it is shown in and the trend it extends, each only when it
-    /// would look different, so an unchanged poll re-renders nothing.
+    /// Stores a reading and the words it is shown in, each only when it would look different, so an
+    /// unchanged poll re-renders nothing.
     private func publish(_ reading: MachineVitals) {
         var v = reading
         v.quantize()
         if vitals[v.id] != v { vitals[v.id] = v }
         if faces[v.id] != v.face { faces[v.id] = v.face }
-        var trend = v.status == .ok ? trends[v.id] ?? MachineTrend() : MachineTrend()
-        if v.status == .ok { trend.record(cpu: v.cpu, gpu: v.gpu) }
-        if trends[v.id] != trend { trends[v.id] = trend }
     }
 
     private func pollRemote(_ config: MachineConfig) {

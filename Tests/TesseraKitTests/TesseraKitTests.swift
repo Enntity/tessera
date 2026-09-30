@@ -747,34 +747,34 @@ final class RemoteVitalsTests: XCTestCase {
         (b.cpu, b.gpu, b.load, b.memory) = (0.93, 0.02, 7.1, 0.703)
         XCTAssertNotEqual(a, b)
         XCTAssertEqual(a.face, b.face)
-        // What the words say is all still there: 67 of 96 GB, 58°, 41 W.
-        XCTAssertEqual((a.face.memory! * 96).rounded(), 67)
+        // What the words say is all still there: 58°, 41 W, 96 GB.
         XCTAssertEqual(a.face.temperature, 58)
         XCTAssertEqual(a.face.gpuPowerW, 41)
-        b.memory = 0.72
-        XCTAssertNotEqual(a.face, b.face)
+        XCTAssertEqual(a.face.memoryTotalGB, 96)
+        b.memory = 0.95
+        XCTAssertEqual(a.face, b.face)
         b = a
         b.status = .unreachable
         XCTAssertNotEqual(a.face, b.face)
         XCTAssertTrue(a.details.contains("CPU 12%") && a.details.contains("load 1.5"))
     }
 
-    func testATrendKeepsTheLatestSamplesAndHoldsStillUnderASteadyLoad() {
-        var trend = MachineTrend()
-        for i in 0..<(MachineTrend.length + 5) { trend.record(cpu: Double(i) / 100, gpu: nil) }
-        XCTAssertEqual(trend.cpu.count, MachineTrend.length)
-        XCTAssertEqual(trend.cpu.last!, 0.34, accuracy: 1.0 / 32)
-        // No GPU to read: nothing to draw for it.
-        XCTAssertEqual(trend.gpu, [])
-        // A load that wobbles by less than a sparkline can show leaves the trend as it was.
-        var steady = MachineTrend()
-        for _ in 0..<MachineTrend.length { steady.record(cpu: 0.50, gpu: 0.03) }
-        var next = steady
-        next.record(cpu: 0.51, gpu: 0.02)
-        XCTAssertEqual(next, steady)
-        next.record(cpu: 0.9, gpu: 7)
-        XCTAssertNotEqual(next, steady)
-        XCTAssertEqual(next.gpu.last, 1)
+    func testAReadingWithoutAFixStillDecodesAndOneWithAFixRoundTrips() throws {
+        var r = UsageReading(id: "c", name: "Claude plan", symbol: "sparkle", headline: "5h · 1k tokens")
+        let old = try JSONEncoder().encode(r)
+        XCTAssertNil(try JSONDecoder().decode(UsageReading.self, from: old).fix)
+        r.fix = .init(title: "Sign in with Claude Code", command: "claude")
+        XCTAssertEqual(try JSONDecoder().decode(UsageReading.self, from: JSONEncoder().encode(r)).fix?.command, "claude")
+    }
+
+    func testAChipShowsTheGPUWhenThereIsOne() {
+        var v = MachineVitals(id: "m", name: "Box", isLocal: true, status: .ok)
+        XCTAssertNil(v.primaryLoad)
+        v.cpu = 0.8
+        XCTAssertEqual(v.primaryLoad?.name, "CPU")
+        v.gpu = 0.1
+        XCTAssertEqual(v.primaryLoad?.name, "GPU")
+        XCTAssertEqual(v.primaryLoad?.value, 0.1)
     }
 }
 

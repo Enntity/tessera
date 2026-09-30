@@ -25,6 +25,9 @@ public final class UsageService {
     /// or skipped attempt keeps showing what's left instead of only local counts.
     @ObservationIgnored private var claudeOfficial: UsageReading?
     @ObservationIgnored private var claudeNote: String?
+    /// Claude Code's sign-in is missing or has run out: the card offers to run `claude`.
+    @ObservationIgnored private var claudeNeedsSignIn = false
+    static let claudeSignIn = UsageReading.Fix(title: "Sign in with Claude Code", command: "claude")
     @ObservationIgnored private let store: URL
     @ObservationIgnored private let session: URLSession = {
         let c = URLSessionConfiguration.ephemeral
@@ -165,9 +168,11 @@ public final class UsageService {
                         case 200..<300:
                             official = try? UsageAPI.parse(data, for: config)
                             self.claudeOfficialRetryAt = nil
+                            self.claudeNeedsSignIn = false
                         case 401, 403:
                             await ClaudeTokenCache.shared.invalidate()
-                            note = "Official limits need a fresh Claude Code sign-in — run `claude` once in a terminal."
+                            note = "Claude Code's sign-in has run out; showing usage counted here."
+                            self.claudeNeedsSignIn = true
                             self.claudeOfficialRetryAt = Date().addingTimeInterval(1800)
                         case 429:
                             note = "Official limits are rate-limited right now."
@@ -182,7 +187,8 @@ public final class UsageService {
                         self.claudeOfficialRetryAt = Date().addingTimeInterval(300)
                     }
                 } else {
-                    note = "Sign in to Claude Code (run `claude`) for official plan limits."
+                    note = "Sign in to Claude Code for the official plan limits; showing usage counted here."
+                    self.claudeNeedsSignIn = true
                     self.claudeOfficialRetryAt = Date().addingTimeInterval(1800)
                 }
                 self.claudeNote = note
@@ -195,11 +201,31 @@ public final class UsageService {
                     reading.message = [note, "limits from \(reading.updatedAt.shortAge()) ago"].compactMap { $0 }.joined(separator: " · ")
                 }
                 reading.lines.append("Local · 5h \(counted.fiveHours.tokens.compactTokens) · week \(counted.week.tokens.compactTokens) tokens")
+                reading.fix = self.claudeNeedsSignIn ? Self.claudeSignIn : nil
                 self.readings[config.id] = reading
             } else {
-                self.readings[config.id] = UsageAPI.claudeLocalReading(
+                var reading = UsageAPI.claudeLocalReading(
                     config: config, fiveHours: (counted.fiveHours.tokens, counted.fiveHours.replies),
                     week: (counted.week.tokens, counted.week.replies), note: note)
+                reading.fix = self.claudeNeedsSignIn ? Self.claudeSignIn : nil
+                self.readings[config.id] = reading
+            }
+        }
+    }
+
+    /// A reading's fix has been started (a sign-in running in a terminal): look again soon, a few
+    /// times, so the card corrects itself once it has worked.
+    public func fixStarted(_ id: String) {
+        guard let config = configs.first(where: { $0.id == id }) else { return }
+        for delay in [20.0, 60, 180] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+                MainActor.assumeIsolated {
+                    guard let self, self.claudeNeedsSignIn || config.kind != .claudePlan else { return }
+                    Task {
+                        await ClaudeTokenCache.shared.invalidate()
+                        self.refresh(config, force: true)
+                    }
+                }
             }
         }
     }

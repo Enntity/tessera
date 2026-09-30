@@ -201,8 +201,8 @@ public enum Style {
         public static let nameField: CGFloat = 240
         /// The widest a transcript's lines run.
         public static let measure: CGFloat = 980
-        /// A load's sparkline on a machine chip; a chip stacks two in a control's height.
-        public static let spark = CGSize(width: 36, height: 8)
+        /// A machine chip's load and memory bars: how long and how thick.
+        public static let meter = CGSize(width: 40, height: 4)
         /// A selected tile's ring, and the gap between it and the tile's edge.
         public static let ring: CGFloat = 2
     }

@@ -12,7 +12,7 @@ struct AttentionLane: View {
         VStack(spacing: 0) {
             // As tall as the tab strip beside it, so the first row lines up with the first row of tiles.
             HStack(alignment: .firstTextBaseline, spacing: Style.Space.s) {
-                Text(TileActivity.needsInput.label).micro()
+                Text(TileActivity.needsYouLabel).micro()
                 if !queue.isEmpty {
                     Text("\(queue.count)").font(Style.caption).foregroundStyle(Style.muted).contentTransition(.numericText())
                 }

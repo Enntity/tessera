@@ -112,13 +112,16 @@ public enum TileActivity: String, Codable, Sendable {
     /// into until it runs again.
     public var hasEnded: Bool { self == .exited || self == .failed }
 
+    /// The queue's name: what is asking, failed, or finished unseen.
+    public static let needsYouLabel = "Needs you"
+
     public var label: String {
         switch self {
         case .starting: "Starting"
         case .working: "Working"
         case .idle: "Idle"
         case .done: "Done"
-        case .needsInput: "Needs you"
+        case .needsInput: "Asking"
         case .exited: "Exited"
         case .failed: "Failed"
         }

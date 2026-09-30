@@ -15,7 +15,7 @@ struct BoardScreen: View {
                 VStack(alignment: .leading, spacing: Style.Space.xl) {
                     ConnectionBanner()
                     if !session.attentionTiles.isEmpty {
-                        SectionLabel(text: TileActivity.needsInput.label, color: Style.amber, count: session.attentionTiles.count)
+                        SectionLabel(text: TileActivity.needsYouLabel, color: Style.amber, count: session.attentionTiles.count)
                         ScrollView(.horizontal, showsIndicators: false) {
                             HStack(spacing: Style.Space.l) {
                                 ForEach(session.attentionTiles) { tile in

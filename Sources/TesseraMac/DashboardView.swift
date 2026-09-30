@@ -354,7 +354,7 @@ struct WatchedMachine: View {
         let compact: Bool
 
         var body: some View {
-            if let vitals = monitor.vitals[id] { MachineLoads(vitals: vitals, trend: monitor.trends[id] ?? MachineTrend(), compact: compact) }
+            if let vitals = monitor.vitals[id] { MachineLoads(vitals: vitals, compact: compact) }
         }
     }
 
@@ -434,6 +434,7 @@ struct TabStrip: View {
                 .popover(isPresented: $naming) {
                     nameField("New tab") { name in model.onBoard { _ = $0.createGroup(named: name) } }
                 }
+                PutAwayMenu()
             }
             .padding(.horizontal, Style.Space.l)
         }
@@ -454,6 +455,41 @@ struct TabStrip: View {
                 naming = false
                 renaming = nil
             }
+    }
+}
+
+/// Hidden conversations and closed tiles, one click from coming back. Absent when there are none.
+struct PutAwayMenu: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        let workspace = model.workspace
+        let count = workspace.putAwayCount
+        if count > 0 {
+            Menu {
+                let hidden = workspace.hiddenTiles, closed = workspace.closedTiles
+                if !hidden.isEmpty {
+                    Section("Hidden") {
+                        ForEach(hidden) { tile in Button("Show \(tile.title)") { model.reopen([tile.id]) } }
+                    }
+                }
+                if !closed.isEmpty {
+                    Section("Closed") {
+                        ForEach(closed) { tile in Button("Reopen \(tile.title)") { model.reopen([tile.id]) } }
+                    }
+                }
+                Divider()
+                Button("Bring All Back") { model.reopen(hidden.map(\.id) + closed.map(\.id)) }
+            } label: {
+                Label("\(count) put away", systemImage: "eye.slash").font(Style.caption).foregroundStyle(Style.muted)
+            }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .fixedSize()
+            .tint(Style.muted)
+            .help("Hidden conversations and closed tiles — bring them back")
+            .transition(.opacity)
+        }
     }
 }
 

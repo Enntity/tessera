@@ -16,6 +16,18 @@ public struct UsageReading: Codable, Identifiable, Hashable, Sendable {
     public var message: String?
     public var topUpURL: String?
     public var updatedAt: Date
+    /// What the user can do about what `message` says, as one command (a sign-in that has run out:
+    /// `claude`). The card offers it; clicking the card runs it.
+    public var fix: Fix?
+
+    public struct Fix: Codable, Hashable, Sendable {
+        public var title: String
+        public var command: String
+        public init(title: String, command: String) {
+            self.title = title
+            self.command = command
+        }
+    }
 
     public init(id: String, name: String, symbol: String, headline: String = "", remaining: Double? = nil,
                 lines: [String] = [], status: Status = .ok, message: String? = nil, topUpURL: String? = nil,

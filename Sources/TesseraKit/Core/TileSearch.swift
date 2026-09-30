@@ -39,7 +39,9 @@ public enum TileSearch {
         let words = words(query)
         guard !words.isEmpty else { return nil }
         if let title = match(query, in: c.tile.title) { return title }
-        let fields = [c.tile.subtitle, c.tile.detail ?? "", c.tab ?? "", c.tile.activity.label, c.text]
+        // A tile in the queue answers to its state and to "needs you".
+        let state = c.tile.activity.label + (c.tile.needsUser ? " " + TileActivity.needsYouLabel : "")
+        let fields = [c.tile.subtitle, c.tile.detail ?? "", c.tab ?? "", state, c.text]
         let scores = words.map { word in
             match(word, in: c.tile.title) ?? fields.firstIndex { match(word, in: $0) != nil }.map { $0 + 3 }
         }

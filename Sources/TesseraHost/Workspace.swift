@@ -72,7 +72,8 @@ public final class Workspace {
     private var agentAcknowledged: [String: Date] = [:]
     /// Names the user gave app sessions (terminals and pages carry their own).
     private var agentTitles: [String: String] = [:]
-    @ObservationIgnored private var hiddenAgents: [String: Date] = [:]
+    /// Observed: the tab strip offers them back.
+    private var hiddenAgents: [String: Date] = [:]
     /// The order last saved, app sessions included: they take their places again as they reappear.
     @ObservationIgnored private var savedOrder: [String] = []
     @ObservationIgnored private var firstAgentScan = true
@@ -273,6 +274,14 @@ public final class Workspace {
         save()
         return true
     }
+
+    /// How many hidden conversations and closed tiles can be brought back (cheap: reads no tile).
+    public var putAwayCount: Int {
+        hiddenAgents.keys.filter { agents.sessions[$0] != nil }.count + closedTiles.count
+    }
+
+    /// Tiles closed lately that can be reopened (a hidden conversation is listed as hidden, not here).
+    public var closedTiles: [ClosedTile] { recentlyClosed.tiles.filter { hiddenAgents[$0.id] == nil } }
 
     /// Conversations the user hid that can be shown again, the latest first.
     public var hiddenTiles: [TileInfo] {
@@ -713,7 +722,8 @@ public final class Workspace {
         rememberOrder()
         // Closed longer ago than the lookback: that session can't be on the board anyway.
         let now = Date()
-        hiddenAgents = hiddenAgents.filter { now.timeIntervalSince($0.value) < agents.lookback }
+        let remembered = hiddenAgents.filter { now.timeIntervalSince($0.value) < agents.lookback }
+        if remembered.count != hiddenAgents.count { hiddenAgents = remembered }
         // A name lasts as long as its session is remembered at all.
         for id in agentTitles.keys where !savedOrder.contains(id) { agentTitles[id] = nil }
         StateFile.save(Saved(tiles: tiles.map(Lossy.init), defaultDirectory: defaultDirectory, placeNativeWindows: placeNativeWindows,

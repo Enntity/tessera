@@ -58,9 +58,17 @@ struct BoardView: View {
                 }
 
                 if let id = workspace.expandedId, workspace.exists(id) {
+                    // A click on a tile opens it, the same with a panel open as without; anywhere
+                    // else goes back to the board.
                     Style.scrim
                         .contentShape(Rectangle())
-                        .onTapGesture { model.collapse() }
+                        .onTapGesture(coordinateSpace: .named("window")) { point in
+                            if let hit = ids.first(where: { $0 != id && model.tileFrame($0)?.contains(point) == true }) {
+                                model.open(hit)
+                            } else {
+                                model.collapse()
+                            }
+                        }
                         .transition(.opacity)
                         .zIndex(10)
                     // A panel per tile: going from one open tile to the next, each zooms to its own.

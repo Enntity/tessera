@@ -33,7 +33,10 @@ struct AccountsSidebar: View {
             ScrollView {
                 VStack(spacing: Style.Space.m) {
                     ForEach(usage.orderedReadings) { reading in
-                        UsageRow(reading: reading) { NSWorkspace.shared.open($0) }
+                        UsageRow(reading: reading, onTopUp: { NSWorkspace.shared.open($0) }) { fix in
+                            model.create { $0.launch(command: fix.command) }
+                            usage.fixStarted(reading.id)
+                        }
                             .help("Drag to reorder")
                             .onDrag {
                                 dragging = (reading.id, Date())
