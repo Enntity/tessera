@@ -99,7 +99,8 @@ struct BoardView: View {
         .onKeyPress(phases: .down) { press in
             let query = model.workspace.query
             guard model.workspace.expandedId == nil, press.modifiers.isDisjoint(with: [.command, .control, .option]) else { return .ignored }
-            if press.key == .delete, query.hasText {
+            // (⌫ arrives as the character DEL, which is not what SwiftUI calls `.delete`.)
+            if press.key == .delete || press.characters == "\u{7F}", query.hasText {
                 model.beginFilter(text: String(query.text.dropLast()))
             } else if Self.isText(press.characters), query.hasText || press.characters != " " {
                 model.beginFilter(text: query.text + press.characters)
