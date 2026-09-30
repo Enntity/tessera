@@ -38,6 +38,10 @@ public final class Workspace {
     private var found: Set<String>?
     /// What each tile showed when the typing began, so that no keystroke reads a screen again.
     @ObservationIgnored private var shownText: [String: String]?
+    /// How many times the filter's text has been set by anything but typing in its field (typing on
+    /// the board, Esc, a new tile): the field takes each up once, and is otherwise left to its typing.
+    public private(set) var textSets = 0
+    @ObservationIgnored private var typingInField = false
     public private(set) var groups = TileGroups()
     /// Place the Claude / Codex window where the opened tile would sit when an app session is opened.
     public var placeNativeWindows = true
@@ -343,10 +347,18 @@ public final class Workspace {
 
     // MARK: The filter
 
+    /// The filter field's own edit.
+    public func typeFilter(_ text: String) {
+        typingInField = true
+        query.text = text
+        typingInField = false
+    }
+
     /// Typing selects the first tile it finds (⏎ opens it); a chip only keeps the selection on show.
     private func queryChanged(from old: BoardQuery) {
         guard query != old else { return }
         if query.text != old.text {
+            if !typingInField { textSets &+= 1 }
             if !query.hasText { shownText = nil } else if shownText == nil { shownText = readShownText() }
             let tabs = groups
             found = query.find(in: allTiles.map { tile in

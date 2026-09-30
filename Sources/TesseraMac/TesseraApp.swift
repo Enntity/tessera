@@ -262,7 +262,7 @@ final class AppModel {
 
     /// What the filter field holds: the board narrows as it is typed.
     func filter(text: String) {
-        if text != workspace.query.text { onBoard { $0.query.text = text } }
+        if text != workspace.query.text { onBoard { $0.typeFilter(text) } }
     }
 
     /// A key typed on the board, and ⌘F: the typing goes on in the filter field.

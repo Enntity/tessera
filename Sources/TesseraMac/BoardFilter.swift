@@ -7,19 +7,23 @@ import TesseraKit
 /// those found, Esc clears it and gives the keyboard back to the board.
 struct FilterField: View {
     @Environment(AppModel.self) private var model
-    @FocusState private var focused: Bool
+    @State private var focused = false
 
     var body: some View {
         let workspace = model.workspace
         let shape = Style.shape(Style.Radius.s)
-        HStack(alignment: .firstTextBaseline, spacing: Style.Space.s) {
+        HStack(spacing: Style.Space.s) {
             Image(systemName: "magnifyingglass").font(Style.ui(.caption, .semibold)).foregroundStyle(focused ? Style.ink : Style.muted)
-            TextField("Type to filter", text: Binding { workspace.query.text } set: { model.filter(text: $0) })
-                .textFieldStyle(.plain)
-                .font(Style.ui(.label, .medium))
-                .foregroundStyle(Style.ink)
-                .focused($focused)
-                .onSubmit { if let id = workspace.selectedId { model.open(id) } }
+            FilterText(text: workspace.query.text, sets: workspace.textSets, focus: model.filterFocus, edited: model.filter(text:)) { key in
+                switch key {
+                case .open: if let id = workspace.selectedId { model.open(id) }
+                case .clear: model.clearFilter()
+                case .move(let step): model.move(step)
+                }
+            } focused: { on in
+                focused = on
+                model.isFiltering = on
+            }
             if !workspace.query.isEmpty {
                 Text("\(workspace.visibleIds.count)").font(Style.caption).foregroundStyle(Style.muted).contentTransition(.numericText())
                 Button { model.clearFilter() } label: { Image(systemName: "xmark.circle.fill").font(Style.label) }
@@ -34,19 +38,106 @@ struct FilterField: View {
         .overlay(shape.strokeBorder(focused ? Style.Neutral.focus : Style.Neutral.border))
         .contentShape(Rectangle())
         .onTapGesture { model.beginFilter() }
-        .onChange(of: model.filterFocus) {
-            focused = true
-            // A field given the keyboard selects what it holds; what is typed next must add to it.
-            DispatchQueue.main.async { (model.window?.firstResponder as? NSText)?.moveToEndOfLine(nil) }
+    }
+}
+
+/// The filter's text: AppKit's own field, so that the keyboard can be handed to it in the middle
+/// of typing with the caret after what is already there, before the next key arrives. (A SwiftUI
+/// field given the keyboard selects its text, and that key would replace it.)
+struct FilterText: NSViewRepresentable {
+    /// ⏎, Esc and the arrows: the board's, not the text's.
+    enum Key { case open, clear, move(GridMove) }
+
+    let text: String
+    /// How many times the text has been set elsewhere (see `Workspace.textSets`).
+    let sets: Int
+    /// Bumped to take the keyboard.
+    let focus: Int
+    let edited: (String) -> Void
+    let key: (Key) -> Void
+    let focused: (Bool) -> Void
+
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+
+    func makeNSView(context: Context) -> Field {
+        let field = Field()
+        let font = NSFont.systemFont(ofSize: Style.TextSize.label.rawValue, weight: .medium)
+        field.font = font.fontDescriptor.withDesign(.rounded).flatMap { NSFont(descriptor: $0, size: font.pointSize) } ?? font
+        field.textColor = NSColor(Style.ink)
+        field.placeholderAttributedString = NSAttributedString(string: "Type to filter", attributes: [
+            .foregroundColor: NSColor(Style.muted), .font: field.font ?? font
+        ])
+        field.isBordered = false
+        field.drawsBackground = false
+        field.focusRingType = .none
+        field.usesSingleLineMode = true
+        field.cell?.isScrollable = true
+        field.delegate = context.coordinator
+        field.stringValue = text
+        return field
+    }
+
+    func updateNSView(_ field: Field, context: Context) {
+        let coordinator = context.coordinator
+        coordinator.parent = self
+        field.focused = focused
+        // The field is the text while it is typed in. Only a text set elsewhere (typed on the
+        // board, cleared) is written into it, and once: an update can arrive after a later key.
+        if coordinator.sets != sets {
+            coordinator.sets = sets
+            field.stringValue = text
         }
-        .onChange(of: focused) { _, on in model.isFiltering = on }
-        .onKeyPress(.escape) {
-            model.clearFilter()
-            return .handled
+        guard coordinator.focus != focus else { return }
+        coordinator.focus = focus
+        field.window?.makeFirstResponder(field)
+        field.currentEditor()?.selectedRange = NSRange(location: field.stringValue.utf16.count, length: 0)
+    }
+
+    /// As wide as it is given.
+    func sizeThatFits(_ proposal: ProposedViewSize, nsView field: Field, context: Context) -> CGSize? {
+        CGSize(width: proposal.width ?? Style.Metrics.filterMin, height: field.intrinsicContentSize.height)
+    }
+
+    /// Says when it takes and gives up the keyboard, once the view update it may be part of is over.
+    final class Field: NSTextField {
+        var focused: ((Bool) -> Void)?
+
+        override func becomeFirstResponder() -> Bool {
+            let became = super.becomeFirstResponder()
+            if became { DispatchQueue.main.async { [self] in focused?(true) } }
+            return became
         }
-        .onKeyPress(keys: [.upArrow, .downArrow, .leftArrow, .rightArrow]) { press in
-            model.move([.upArrow: .up, .downArrow: .down, .leftArrow: .left][press.key] ?? .right)
-            return .handled
+
+        override func textDidEndEditing(_ notification: Notification) {
+            super.textDidEndEditing(notification)
+            DispatchQueue.main.async { [self] in focused?(false) }
+        }
+    }
+
+    final class Coordinator: NSObject, NSTextFieldDelegate {
+        var parent: FilterText
+        var sets: Int
+        var focus: Int
+
+        init(_ parent: FilterText) {
+            self.parent = parent
+            sets = parent.sets
+            focus = parent.focus
+        }
+
+        func controlTextDidChange(_ notification: Notification) {
+            if let field = notification.object as? NSTextField { parent.edited(field.stringValue) }
+        }
+
+        func control(_ control: NSControl, textView: NSTextView, doCommandBy selector: Selector) -> Bool {
+            let keys: [Selector: Key] = [
+                #selector(NSResponder.insertNewline(_:)): .open, #selector(NSResponder.cancelOperation(_:)): .clear,
+                #selector(NSResponder.moveUp(_:)): .move(.up), #selector(NSResponder.moveDown(_:)): .move(.down),
+                #selector(NSResponder.moveLeft(_:)): .move(.left), #selector(NSResponder.moveRight(_:)): .move(.right)
+            ]
+            guard let key = keys[selector] else { return false }
+            parent.key(key)
+            return true
         }
     }
 }
