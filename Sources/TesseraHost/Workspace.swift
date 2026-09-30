@@ -7,9 +7,9 @@ import TesseraKit
 @Observable
 @MainActor
 public final class Workspace {
-    /// What the board shows: everything, what needs the user, or one of the user's tabs.
+    /// The tab the board shows: everything, or one of the user's own.
     public enum Filter: Hashable, Sendable {
-        case all, attention, group(String)
+        case all, group(String)
     }
 
     public private(set) var order: [String] = []
@@ -30,6 +30,14 @@ public final class Workspace {
     public private(set) var selectedId: String?
     public private(set) var expandedId: String?
     public var filter: Filter = .all { didSet { reconcileSelection() } }
+    /// What the filter field and its chips narrow the board to, in the tab being viewed.
+    public var query = BoardQuery() { didSet { queryChanged(from: oldValue) } }
+    /// Which tiles each filter chip holds; kept current as tiles change, like `state`.
+    public private(set) var holdings = BoardQuery.Holdings()
+    /// The tiles the typed text finds, as of its last keystroke; nil with nothing typed.
+    private var found: Set<String>?
+    /// What each tile showed when the typing began, so that no keystroke reads a screen again.
+    @ObservationIgnored private var shownText: [String: String]?
     public private(set) var groups = TileGroups()
     /// Place the Claude / Codex window where the opened tile would sit when an app session is opened.
     public var placeNativeWindows = true
@@ -76,11 +84,16 @@ public final class Workspace {
 
     public func start() {
         restore()
-        observe({ [weak self] in BoardState(self?.allTiles ?? []) }) { [weak self] state in
-            guard let self, self.state != state else { return }
-            self.state = state
-            // Needs you shows only what waits: a tile that stops waiting takes the selection off with it.
-            if filter == .attention { reconcileSelection() }
+        observe({ [weak self] in
+            let tiles = self?.allTiles ?? []
+            return (BoardState(tiles), BoardQuery.holdings(of: tiles))
+        }) { [weak self] state, holdings in
+            guard let self, self.state != state || self.holdings != holdings else { return }
+            if self.state != state { self.state = state }
+            if self.holdings != holdings { self.holdings = holdings }
+            // A board its chips narrow shows only what still belongs: a tile that leaves (one that
+            // stops waiting, under Needs you) takes the selection off with it.
+            reconcileSelection()
         }
         agents.onChange = { [weak self] in self?.agentsChanged() }
         agents.start()
@@ -113,15 +126,27 @@ public final class Workspace {
 
     public var allTiles: [TileInfo] { order.compactMap(info) }
 
-    /// The tiles the board shows, in order. Reads membership and `state`, not every tile's data.
+    /// The tiles the board shows, in order: the tab's, narrowed by the filter. Reads membership and
+    /// `holdings`, not every tile's data.
     public var visibleIds: [String] {
+        // (Unfiltered, the board doesn't depend on what the chips hold.)
+        query.isEmpty ? tabIds : query.narrow(tabIds, found: found, holdings: holdings, keeping: expandedId)
+    }
+
+    /// The number on a filter chip (see `BoardQuery.count`).
+    public func count(_ chip: BoardQuery.Chip) -> Int {
+        query.count(chip, in: tabIds, found: found, holdings: holdings)
+    }
+
+    /// How many tiles the chips have to narrow: the tab's, or those of them the typed text found.
+    public var findable: Int {
+        found.map { found in tabIds.filter(found.contains).count } ?? tabIds.count
+    }
+
+    /// The tiles of the tab being viewed, before the filter narrows them.
+    public var tabIds: [String] {
         switch filter {
         case .all: return order
-        case .attention:
-            // Needs you is the queue itself, in the order ⌘J visits it; a tile answered while open
-            // stays until it closes.
-            let answered = expandedId.flatMap { state.queue.contains($0) ? nil : $0 }
-            return (state.queue + [answered].compactMap { $0 }).filter(exists)
         case .group(let g):
             let members = groups.members(of: g)
             return order.filter { members.contains($0) || $0 == expandedId }
@@ -175,10 +200,9 @@ public final class Workspace {
         save()
     }
 
-    /// New work belongs in the tab being viewed. From Needs you, where it wouldn't show, the view
-    /// goes to All.
+    /// New work belongs in the tab being viewed, and shows: the filter is dropped.
     private func tabForNewTiles() -> String? {
-        if filter == .attention { filter = .all }
+        if !query.isEmpty { query = BoardQuery() }
         if case .group(let g) = filter { return g }
         return nil
     }
@@ -308,11 +332,40 @@ public final class Workspace {
 
     // MARK: Selection and the open tile
 
-    /// Selects a tile, going to All when the tab or filter being viewed hides it.
+    /// Selects a tile. When the board isn't showing it, the filter is dropped, and if it is in
+    /// another tab, the view goes to All.
     public func select(_ id: String) {
         guard exists(id) else { return }
+        if !visibleIds.contains(id) { query = BoardQuery() }
         if !visibleIds.contains(id) { filter = .all }
         selectedId = id
+    }
+
+    // MARK: The filter
+
+    /// Typing selects the first tile it finds (⏎ opens it); a chip only keeps the selection on show.
+    private func queryChanged(from old: BoardQuery) {
+        guard query != old else { return }
+        if query.text != old.text {
+            if !query.hasText { shownText = nil } else if shownText == nil { shownText = readShownText() }
+            let tabs = groups
+            found = query.find(in: allTiles.map { tile in
+                TileSearch.Candidate(tile: tile, tab: tabs.group(of: tile.id)?.name, text: shownText?[tile.id] ?? "")
+            })
+            if found != nil, expandedId == nil, let first = visibleIds.first { selectedId = first }
+        }
+        reconcileSelection()
+    }
+
+    /// What each tile shows: a terminal's screen, a conversation's latest messages, a page's address.
+    private func readShownText() -> [String: String] {
+        var text: [String: String] = [:]
+        for (id, session) in terminals { text[id] = session.terminal.screenTail(session.terminal.rows).joined(separator: "\n") }
+        for (id, page) in browsers { text[id] = page.info.url }
+        for id in order where id.contains(":") {
+            text[id] = agents.session(id)?.snapshot.items.suffix(20).map(\.text).joined(separator: "\n")
+        }
+        return text
     }
 
     /// Keeps the selection on a tile the board shows: when it isn't (a tab change, a tile closed or

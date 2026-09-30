@@ -133,36 +133,41 @@ struct WindowAccessor: NSViewRepresentable {
     func updateNSView(_ nsView: NSView, context: Context) {}
 }
 
-/// The top bar: the mark and what is going on at the left, the machines and what can be started at
-/// the right.
+/// The top bar: the mark and what is going on at the left, the filter field in the middle, the
+/// machines and what can be started at the right (see `HUDLayout`).
 struct HUDBar: View {
     @Environment(AppModel.self) private var model
 
     var body: some View {
-        HStack(spacing: Style.Space.l) {
-            Wordmark()
-                .padding(.leading, 78) // clear the traffic lights
-            StateCounters()
-            Spacer(minLength: Style.Space.l)
-            MachineStrip()
-            Button {
-                model.paletteMode = .all
-                model.showPalette = true
-            } label: {
-                HStack(alignment: .firstTextBaseline, spacing: Style.Space.s) {
-                    Image(systemName: "plus")
-                    Text("New")
-                    Text("⌘K").font(Style.caption).foregroundStyle(Style.muted)
+        HUDLayout {
+            HStack(spacing: Style.Space.l) {
+                Wordmark()
+                    .padding(.leading, 78) // clear the traffic lights
+                StateCounters()
+            }
+            FilterField()
+            HStack(spacing: Style.Space.l) {
+                MachineStrip()
+                Button {
+                    model.paletteMode = .all
+                    model.showPalette = true
+                } label: {
+                    HStack(alignment: .firstTextBaseline, spacing: Style.Space.s) {
+                        Image(systemName: "plus")
+                        Text("New")
+                        Text("⌘K").font(Style.caption).foregroundStyle(Style.muted)
+                    }
+                }
+                .buttonStyle(.capsule)
+                .fixedSize()
+                HStack(spacing: 0) {
+                    toggle(model.privacyMode ? "eye.slash.fill" : "eye", on: model.privacyMode,
+                           help: "Privacy mode (⇧⌘P): terminals and conversations stay lively but unreadable") { model.togglePrivacy() }
+                    toggle("sidebar.right", on: model.showSidebar, help: "Accounts (⌘\\)") { model.toggleSidebar() }
                 }
             }
-            .buttonStyle(.capsule)
-            HStack(spacing: 0) {
-                toggle(model.privacyMode ? "eye.slash.fill" : "eye", on: model.privacyMode,
-                       help: "Privacy mode (⇧⌘P): terminals and conversations stay lively but unreadable") { model.togglePrivacy() }
-                toggle("sidebar.right", on: model.showSidebar, help: "Accounts (⌘\\)") { model.toggleSidebar() }
-            }
+            .padding(.trailing, Style.Space.l)
         }
-        .padding(.trailing, Style.Space.l)
         .frame(height: Style.Metrics.hud)
         .chromeSurface(rule: .bottom)
     }
@@ -190,22 +195,27 @@ struct Wordmark: View {
                 .tracking(3)
                 .foregroundStyle(Style.ink)
         }
+        .fixedSize()
     }
 }
 
 /// What is going on, as counters: each opens the next tile in its state, oldest first. A state
-/// nothing is in has no counter.
+/// nothing is in has no counter. Short of room, they are numbers alone.
 struct StateCounters: View {
     @Environment(AppModel.self) private var model
 
     var body: some View {
         let state = model.workspace.state
-        HStack(spacing: Style.Space.s) {
-            ForEach([(TileActivity.needsInput, state.needsInput), (.failed, state.failed), (.done, state.done), (.working, state.working)],
-                    id: \.0) { activity, ids in
-                if !ids.isEmpty {
-                    CountChip(activity: activity, count: ids.count) { model.jump(to: ids) }
-                        .transition(.scale(scale: 0.8).combined(with: .opacity))
+        ViewThatFits(in: .horizontal) {
+            ForEach([true, false], id: \.self) { labelled in
+                HStack(spacing: Style.Space.s) {
+                    ForEach([(TileActivity.needsInput, state.needsInput), (.failed, state.failed), (.done, state.done), (.working, state.working)],
+                            id: \.0) { activity, ids in
+                        if !ids.isEmpty {
+                            CountChip(activity: activity, count: ids.count, labelled: labelled) { model.jump(to: ids) }
+                                .transition(.scale(scale: 0.8).combined(with: .opacity))
+                        }
+                    }
                 }
             }
         }
@@ -216,6 +226,7 @@ struct StateCounters: View {
 struct CountChip: View {
     let activity: TileActivity
     let count: Int
+    var labelled = true
     let action: () -> Void
 
     var body: some View {
@@ -223,8 +234,9 @@ struct CountChip: View {
         Button(action: action) {
             HStack(alignment: .firstTextBaseline, spacing: Style.Space.xs) {
                 Text("\(count)").font(Style.mono(.label, .bold)).contentTransition(.numericText())
-                Text(activity.label).font(Style.label)
+                if labelled { Text(activity.label).font(Style.label) }
             }
+            .fixedSize()
             .foregroundStyle(color)
             .padding(.horizontal, Style.Space.gutter)
             .frame(height: Style.Metrics.control)
@@ -239,6 +251,7 @@ struct CountChip: View {
             .contentShape(Capsule())
         }
         .buttonStyle(.plain)
+        .help("Open the next tile that is \(activity.label.lowercased())")
     }
 }
 
@@ -282,6 +295,7 @@ struct MachineStrip: View {
                     .font(Style.mono(.body, .semibold))
                     .foregroundStyle(Style.ink)
                     .padding(.leading, Style.Space.xs)
+                    .fixedSize()
             }
         }
     }
@@ -312,8 +326,8 @@ struct WatchedMachine: View {
     }
 }
 
-/// All · Needs you · the user's own tabs · +, in a strip over the board. Tiles can be dropped onto
-/// a tab to file them.
+/// All · the user's own tabs · +, in a strip over the board, with the filter's chips at its right.
+/// Tiles can be dropped onto a tab to file them.
 struct TabStrip: View {
     @Environment(AppModel.self) private var model
     @State private var naming = false
@@ -323,12 +337,21 @@ struct TabStrip: View {
     var body: some View {
         let workspace = model.workspace
         let state = workspace.state
+        HStack(spacing: Style.Space.l) {
+            tabs(workspace, state)
+            // The chips take the room they need first; the tabs scroll in the rest.
+            FilterChips().layoutPriority(1)
+        }
+        .frame(height: Style.Metrics.strip)
+        .chromeSurface(rule: .bottom)
+        .animation(Style.Motion.standard, value: workspace.groups)
+    }
+
+    private func tabs(_ workspace: Workspace, _ state: BoardState) -> some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: Style.Space.xxs) {
                 TabChip(title: "All", count: workspace.order.count,
                         selected: workspace.filter == .all, dropTile: { file($0, into: nil) }) { model.onBoard { $0.filter = .all } }
-                TabChip(title: TileActivity.needsInput.label, count: state.queue.count, waiting: state.waiting(in: state.needsUser),
-                        selected: workspace.filter == .attention) { model.onBoard { $0.filter = .attention } }
                 if !workspace.groups.list.isEmpty {
                     Hairline(.vertical).frame(height: Style.Space.xl).padding(.horizontal, Style.Space.xs)
                 }
@@ -371,9 +394,7 @@ struct TabStrip: View {
             }
             .padding(.horizontal, Style.Space.l)
         }
-        .frame(height: Style.Metrics.strip)
-        .chromeSurface(rule: .bottom)
-        .animation(Style.Motion.standard, value: workspace.groups)
+        .frame(minWidth: Style.Metrics.lane)
     }
 
     private func file(_ tileId: String, into groupId: String?) {
@@ -393,12 +414,19 @@ struct TabStrip: View {
     }
 }
 
+/// A capsule in the strip: a tab, or (outlined, to tell them apart) one of the filter's chips.
 struct TabChip: View {
     let title: String
     let count: Int
-    /// The most pressing state waiting on the user among the tab's tiles: its dot takes that colour.
+    /// The most pressing state waiting on the user among the tab's tiles, or the state a chip
+    /// stands for: its dot takes that colour.
     var waiting: TileActivity?
+    /// The tool whose glyph a chip wears.
+    var flavor: AgentFlavor?
     let selected: Bool
+    var outlined = false
+    /// Short of room, a chip is its mark and its number.
+    var labelled = true
     /// Accepts a tile dragged onto the tab.
     var dropTile: ((String) -> Void)?
     let action: () -> Void
@@ -408,11 +436,12 @@ struct TabChip: View {
     var body: some View {
         Button(action: action) {
             HStack(spacing: Style.Space.s) {
-                if let waiting {
-                    Circle().fill(Style.state(waiting)).frame(width: 5, height: 5).elevation(.glow(Style.state(waiting)))
+                if let waiting { Dot(Style.state(waiting), lit: true) }
+                if let flavor {
+                    Image(systemName: flavor.symbol).font(Style.ui(.caption, .semibold)).foregroundStyle(Style.accent(flavor))
                 }
                 HStack(alignment: .firstTextBaseline, spacing: Style.Space.s) {
-                    Text(title).font(Style.ui(.label, selected ? .semibold : .medium)).lineLimit(1)
+                    if labelled { Text(title).font(Style.ui(.label, selected ? .semibold : .medium)).lineLimit(1) }
                     if count > 0 {
                         Text("\(count)").font(Style.caption)
                             .foregroundStyle(selected ? Style.dim : Style.muted)
@@ -423,7 +452,9 @@ struct TabChip: View {
             .foregroundStyle(selected ? Style.ink : Style.dim)
             .padding(.horizontal, Style.Space.gutter)
             .frame(height: Style.Metrics.control)
+            .fixedSize()
             .background(selected ? Style.Neutral.selected : hovering ? Style.Neutral.hover : .clear, in: Capsule())
+            .overlay { if outlined { Capsule().strokeBorder(selected ? Style.Neutral.focus : Style.Neutral.border) } }
             .overlay(Capsule().strokeBorder(targeted ? Style.Neutral.focus : .clear, lineWidth: 1.5))
             .contentShape(Capsule())
         }

@@ -1,8 +1,5 @@
 import SwiftUI
 
-/// One phase for every tile's age clock, so their updates land together.
-private let ageClockStart = Date()
-
 /// The chrome around every tile: what it is (glyph, title), where it lives and how long ago it
 /// last did anything (the footer), and its state, which reads the same at every size:
 /// - idle: nothing;
@@ -14,6 +11,7 @@ private let ageClockStart = Date()
 /// - selected: a ring outside the edge, whatever the state.
 public struct TileCard<Content: View>: View {
     @Environment(\.tesseraPrivacy) private var privacy
+    @Environment(\.tesseraHighlight) private var highlight
     let info: TileInfo
     let isSelected: Bool
     let isHovered: Bool
@@ -82,12 +80,12 @@ public struct TileCard<Content: View>: View {
                 .font(Style.ui(.caption, .semibold))
                 .foregroundStyle(Style.accent(info.flavor))
                 .frame(width: Style.Space.xl)
-            Text(info.title)
+            Text(lit(info.title))
                 .font(Style.label)
                 .foregroundStyle(Style.ink)
                 .lineLimit(1)
             if info.activity == .done, info.attention {
-                Circle().fill(Style.mint).frame(width: 5, height: 5).padding(.leading, Style.Space.xxs)
+                Dot(Style.mint).padding(.leading, Style.Space.xxs)
             }
             Spacer(minLength: Style.Space.xs)
             StatePill(activity: info.activity)
@@ -96,6 +94,15 @@ public struct TileCard<Content: View>: View {
         .padding(.trailing, Style.Space.m)
         .frame(height: Self.headerHeight(compact: compact))
         .overlay(alignment: .bottom) { rule }
+    }
+
+    /// The title or the folder, lit where it has what the board's filter is looking for.
+    private func lit(_ text: String) -> AttributedString {
+        var lit = AttributedString(text)
+        for found in TileSearch.ranges(of: highlight, in: text) {
+            if let range = Range(found, in: lit) { lit[range].backgroundColor = Style.Neutral.found }
+        }
+        return lit
     }
 
     /// The rule under the header. While the tile works it carries the sweep, or, when the program
@@ -136,14 +143,12 @@ public struct TileCard<Content: View>: View {
     private var footer: some View {
         HStack(alignment: .firstTextBaseline, spacing: Style.Space.s) {
             // A long path keeps its end: the folder itself.
-            Text(info.subtitle).lineLimit(1).truncationMode(.head)
+            Text(lit(info.subtitle)).lineLimit(1).truncationMode(.head)
             Spacer(minLength: Style.Space.xs)
             if info.activity == .failed, let detail = info.detail {
                 Text(detail).foregroundStyle(Style.coral).lineLimit(1)
             }
-            TimelineView(.periodic(from: ageClockStart, by: 15)) { ctx in
-                Text(info.lastActivityAt.shortAge(now: ctx.date))
-            }
+            Age(of: info.lastActivityAt)
         }
         .font(Style.caption)
         .foregroundStyle(Style.muted)

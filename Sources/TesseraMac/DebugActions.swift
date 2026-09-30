@@ -78,7 +78,8 @@ extension AppModel {
                 }
             case "key":
                 let keys: [String: (UInt16, String)] = ["up": (126, "\u{F700}"), "down": (125, "\u{F701}"), "left": (123, "\u{F702}"),
-                                                        "right": (124, "\u{F703}"), "return": (36, "\r"), "esc": (53, "\u{1B}")]
+                                                        "right": (124, "\u{F703}"), "return": (36, "\r"), "esc": (53, "\u{1B}"),
+                                                        "delete": (51, "\u{7F}")]
                 for name in arg.split(separator: ",") {
                     if let (code, chars) = keys[String(name)] { debugKey(chars, code: code, flags: code > 122 ? [.function, .numericPad] : []) }
                 }
@@ -95,7 +96,8 @@ extension AppModel {
             case "undo": undo(key: window) // Edit ▸ Undo as if the board's window were key
             case "run": BoardCommand(rawValue: arg).map(run)
             case "filter":
-                onBoard { $0.filter = arg == "attention" ? .attention : $0.groups.list.first { $0.name == arg }.map { .group($0.id) } ?? .all }
+                onBoard { $0.filter = $0.groups.list.first { $0.name == arg }.map { .group($0.id) } ?? .all }
+            case "chip": BoardQuery.Chip(rawValue: arg).map(toggle)
             case "dump": debugDump(to: arg)
             case "shot":
                 let target = arg.split(separator: "?", maxSplits: 1).map(String.init)

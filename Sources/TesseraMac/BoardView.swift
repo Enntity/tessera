@@ -23,7 +23,7 @@ struct BoardView: View {
             let layout = Self.grid(count: ids.count, in: board.size)
             ZStack(alignment: .topLeading) {
                 if ids.isEmpty {
-                    EmptyBoard(filter: workspace.filter).frame(width: area.width, height: area.height)
+                    EmptyBoard(filter: workspace.filter, query: workspace.query).frame(width: area.width, height: area.height)
                 }
                 ScrollViewReader { proxy in
                     ScrollView(layout.scrolls ? .vertical : [], showsIndicators: layout.scrolls) {
@@ -38,6 +38,7 @@ struct BoardView: View {
                         }
                         .frame(width: board.width, height: max(board.height, layout.contentHeight), alignment: .topLeading)
                         .padding(inset)
+                        .environment(\.tesseraHighlight, workspace.query.text)
                         .id(Self.gridId)
                         .onGeometryChange(for: CGFloat.self) { -$0.frame(in: .scrollView).minY } action: { model.boardScroll = $0 }
                         .animation(Style.Motion.standard, value: ids)
@@ -88,6 +89,29 @@ struct BoardView: View {
             model.open(id)
             return .handled
         }
+        .onKeyPress(.escape) {
+            guard model.workspace.expandedId == nil, !model.workspace.query.isEmpty else { return .ignored }
+            model.clearFilter()
+            return .handled
+        }
+        // Anything else typed on the board filters it: the typing goes on in the top bar's field.
+        .onKeyPress(phases: .down) { press in
+            let query = model.workspace.query
+            guard model.workspace.expandedId == nil, press.modifiers.isDisjoint(with: [.command, .control, .option]) else { return .ignored }
+            if press.key == .delete, query.hasText {
+                model.beginFilter(text: String(query.text.dropLast()))
+            } else if Self.isText(press.characters), query.hasText || press.characters != " " {
+                model.beginFilter(text: query.text + press.characters)
+            } else {
+                return .ignored
+            }
+            return .handled
+        }
+    }
+
+    /// Whether a key types something (the arrows and function keys arrive as private-use characters).
+    private static func isText(_ characters: String) -> Bool {
+        !characters.isEmpty && characters.unicodeScalars.allSatisfy { $0.value >= 0x20 && $0.value != 0x7F && !(0xF700...0xF8FF).contains($0.value) }
     }
 
     /// Arrow keys move the selection only while the board itself is showing.
@@ -108,23 +132,27 @@ struct BoardView: View {
 struct EmptyBoard: View {
     @Environment(AppModel.self) private var model
     let filter: Workspace.Filter
+    /// What narrows the board: with a filter on, a tab may have tiles and show none.
+    let query: BoardQuery
+
+    private var narrowed: Bool { !query.isEmpty }
 
     private var title: String {
-        switch filter {
-        case .all: "An empty board."
-        case .attention: "Nothing needs you."
-        case .group: "An empty tab."
-        }
+        if query == BoardQuery(chips: [.needsYou]) { return "Nothing needs you." }
+        if narrowed { return "Nothing matches." }
+        return filter == .all ? "An empty board." : "An empty tab."
     }
 
     var body: some View {
         VStack(spacing: Style.Space.xl) {
             TesseraGlyph().frame(width: 44, height: 44)
             Text(title).font(Style.display).foregroundStyle(Style.ink)
-            if case .group = filter {
+            if narrowed {
+                Text("Esc shows every tile again.").font(Style.body).foregroundStyle(Style.dim)
+            } else if case .group = filter {
                 Text("Drag tiles onto this tab, or start one here with ⌘K.").font(Style.body).foregroundStyle(Style.dim)
             }
-            if filter == .all {
+            if filter == .all, !narrowed {
                 HStack(spacing: Style.Space.gutter) {
                     ForEach(model.workspace.installedApps, id: \.self) { app in
                         start(app.name, app.flavor) { model.newAppConversation(app) }

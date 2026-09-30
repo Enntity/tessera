@@ -147,8 +147,7 @@ extension AppModel {
         }
         // A command is offered when its name is typed, or, with nothing typed, when it has something to do.
         let tab: String? = switch workspace.filter {
-        case .all: nil
-        case .attention: TileActivity.needsInput.label
+        case .all: workspace.query.isEmpty ? nil : "view"
         case .group(let id): groups.list.first { $0.id == id }?.name
         }
         let commands = BoardCommand.allCases.compactMap { command -> PaletteItem? in

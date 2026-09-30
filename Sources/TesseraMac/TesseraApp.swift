@@ -62,6 +62,10 @@ final class AppModel {
     private(set) var boardFocus = 0
     /// Bumped to put the cursor in the open web tile's address field (⌘L).
     private(set) var addressFocus = 0
+    /// Bumped to put the cursor in the filter field (typing on the board, ⌘F).
+    private(set) var filterFocus = 0
+    /// The filter field has the keyboard, and keeps it while the board changes under it.
+    @ObservationIgnored var isFiltering = false
     /// The last close, while its toast offers to undo it.
     private(set) var closedToast: ClosedToast?
     /// The closes Edit ▸ Undo can still undo, the latest last.
@@ -239,12 +243,38 @@ final class AppModel {
         act(Style.Motion.standard) { showSidebar.toggle() }
     }
 
+    // MARK: The filter
+
+    /// What the filter field holds: the board narrows as it is typed.
+    func filter(text: String) {
+        if text != workspace.query.text { onBoard { $0.query.text = text } }
+    }
+
+    /// A key typed on the board, and ⌘F: the typing goes on in the filter field.
+    func beginFilter(text: String? = nil) {
+        isFiltering = true
+        onBoard { $0.query.text = text ?? $0.query.text }
+        filterFocus &+= 1
+    }
+
+    func toggle(_ chip: BoardQuery.Chip) {
+        onBoard { $0.query.chips.formSymmetricDifference([chip]) }
+    }
+
+    /// Esc: the whole tab again, and the keyboard back on the board.
+    func clearFilter() {
+        isFiltering = false
+        onBoard { $0.query = BoardQuery() }
+    }
+
     /// Puts the keyboard where the user is, after anything that took it away (the palette, a
-    /// popover, a panel closing): in the open tile's terminal or page, else on the board.
+    /// popover, a panel closing): in the open tile's terminal or page, else in the filter field
+    /// while it is being typed in, else on the board.
     func restoreFocus() {
         DispatchQueue.main.async { [self] in
             guard !showPalette, let window else { return }
             guard let id = workspace.expandedId else {
+                if isFiltering { return }
                 window.makeFirstResponder(window.contentView)
                 boardFocus &+= 1
                 return

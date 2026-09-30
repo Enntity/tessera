@@ -50,6 +50,8 @@ struct BoardCommands: Commands {
                 .keyboardShortcut("[")
             Button("Last Opened Tile") { model.openPrevious() }
                 .keyboardShortcut(.tab, modifiers: .control)
+            Button("Filter") { model.beginFilter() }
+                .keyboardShortcut("f")
             Divider()
             Button(model.privacyMode ? "Turn Off Privacy Mode" : "Privacy Mode") { model.togglePrivacy() }
                 .keyboardShortcut("p", modifiers: [.command, .shift])
@@ -67,7 +69,8 @@ struct BoardCommands: Commands {
                 .keyboardShortcut("r", modifiers: [.command, .option, .shift])
             Divider()
             Button("Show All") { model.onBoard { $0.filter = .all } }.keyboardShortcut("1")
-            Button("Show Needs You") { model.onBoard { $0.filter = .attention } }.keyboardShortcut("2")
+            Button(workspace.query.chips.contains(.needsYou) ? "Show Everything Again" : "Show Only What Needs You") { model.toggle(.needsYou) }
+                .keyboardShortcut("2")
             ForEach(Array(workspace.groups.list.prefix(7).enumerated()), id: \.element.id) { i, group in
                 Button("Show \(group.name)") { model.onBoard { $0.filter = .group(group.id) } }
                     .keyboardShortcut(KeyEquivalent(Character("\(i + 3)")))
