@@ -179,6 +179,18 @@ final class TerminalSessionTests: XCTestCase {
         XCTAssertEqual(session.info.activity, .working)
     }
 
+    /// An answered question stops asking at once, even if what follows is too brief to count as work.
+    func testAnsweringAQuestionSettlesTheTile() throws {
+        let home = try isolatedHome()
+        let session = TerminalSession(command: "printf 'Do you want to proceed? (y/n) '; read -r answer", cwd: NSTemporaryDirectory(),
+                                      shell: "/bin/zsh", environmentOverrides: home.env)
+        defer { session.terminate() }
+        XCTAssertTrue(waitUntil(20) { session.info.activity == .needsInput })
+        session.send(Array("y".utf8))
+        XCTAssertEqual(session.info.activity, .idle)
+        XCTAssertFalse(session.info.attention)
+    }
+
     /// An unbound `resume --last` that may not continue the latest starts clean, not with `--last`.
     func testUnboundContinueStartsFresh() {
         let session = TerminalSession(command: "codex-work resume --last", cwd: NSTemporaryDirectory(), resuming: true,

@@ -284,6 +284,8 @@ public final class TerminalSession: NSObject {
     public func send(_ bytes: [UInt8]) {
         guard isRunning, let process else { return }
         tracker.noteInput(at: Date())
+        // Answering a question settles it at once, whatever the program prints next.
+        refreshInfo()
         process.send(data: bytes[...])
     }
 
@@ -305,7 +307,7 @@ public final class TerminalSession: NSObject {
         refreshInfo()
     }
 
-    /// Redraws a changed screen (up to 10 fps) and re-reads its state four times a second.
+    /// Redraws a changed screen (up to 10 fps) and re-reads its state a few times a second.
     private func tick(now: Date) {
         if dirty {
             dirty = false
