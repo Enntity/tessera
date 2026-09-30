@@ -366,7 +366,9 @@ public final class TerminalSession: NSObject {
             launchedAt = Date()
             onResumableChange?()
         case .programMissing:
-            // Not there to run (e.g. not on PATH after a toolchain switch): keep the conversation for Resume.
+            // An agent not there to run (e.g. not on PATH after a toolchain switch): keep its
+            // conversation for Resume. Anything else just leaves the shell, as a typo would.
+            guard command.flatMap(SessionResume.tool(for:)) != nil else { return }
             shutDown(because: "Not found")
         case .prompt:
             guard command != nil, !isSuspended else { return }

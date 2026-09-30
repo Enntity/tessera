@@ -136,6 +136,18 @@ final class TerminalSessionTests: XCTestCase {
         XCTAssertFalse(session.terminal.screenTail(40).contains { $0.contains("Could not resume") })
     }
 
+    /// Anything else that isn't found (a typo, a missing script) has no conversation to keep: the
+    /// tile stays a live shell, as in any terminal.
+    func testMissingPlainCommandLeavesAShell() throws {
+        let home = try isolatedHome()
+        let session = TerminalSession(command: "/nonexistent-tessera/tessera-missing-tool", cwd: NSTemporaryDirectory(),
+                                      shell: "/bin/zsh", environmentOverrides: home.env)
+        defer { session.terminate() }
+        XCTAssertTrue(waitUntil(20) { session.command == nil })
+        XCTAssertFalse(session.isSuspended)
+        XCTAssertTrue(session.isRunning)
+    }
+
     /// tcsh rejects `-l -i` and can't run the launch script: plain tiles get `-l`, agent tiles run
     /// their script under zsh and then come back to tcsh.
     func testTcshTilesStart() throws {
