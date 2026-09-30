@@ -560,12 +560,12 @@ final class SessionResumeTests: XCTestCase {
         XCTAssertNil(ShellEvent.parse("hello", nonce: n))
     }
 
-    /// Output printed into a tile (a cat'ed file, an ssh session) can't plant a command to resume.
     func testMissingProgramReport() {
         XCTAssertEqual(ShellEvent.parse("missing;abc", nonce: "abc"), .programMissing)
         XCTAssertNil(ShellEvent.parse("missing;forged", nonce: "abc"))
     }
 
+    /// Output printed into a tile (a cat'ed file, an ssh session) can't plant a command to resume.
     func testForgedReportsAreIgnored() {
         let b64 = Data("claude-evil".utf8).base64EncodedString()
         XCTAssertNil(ShellEvent.parse("cmd;guess;\(b64)", nonce: "real-secret"))
