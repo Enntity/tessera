@@ -189,8 +189,11 @@ final class RemoteClient {
     /// Bytes handed to the connection but not yet sent. A stalled peer (a locked phone keeps TCP
     /// alive) must not make the Mac queue anything without bound.
     private var inFlight = 0
-    /// Messages were dropped under backpressure; once drained, the peer gets the full state again.
+    /// Messages were dropped under backpressure; once drained, the peer gets tiles, conversations
+    /// and usage again.
     private var behind = false
+    /// Terminals whose stream was dropped under backpressure; they get a fresh snapshot once drained.
+    private var needsResync: Set<String> = []
 
     static let maxInputBytes = 64 * 1024
     static let highWater = 4 * 1024 * 1024
@@ -236,10 +239,12 @@ final class RemoteClient {
         onClose?(id)
     }
 
-    func send(_ message: HostMessage, then: (() -> Void)? = nil) {
-        guard authenticated, !closed else { return }
-        guard !behind, inFlight <= Self.highWater else { behind = true; return }
-        guard let data = try? WireProtocol.encode(message) else { return }
+    /// Queues `message`; false if it was dropped because the peer has fallen too far behind.
+    @discardableResult
+    func send(_ message: HostMessage, then: (() -> Void)? = nil) -> Bool {
+        guard authenticated, !closed else { return false }
+        guard !behind, inFlight <= Self.highWater else { behind = true; return false }
+        guard let data = try? WireProtocol.encode(message) else { return false }
         inFlight += data.count
         SecureChannel.sendFrame(data, on: connection) { [weak self] _ in
             DispatchQueue.main.async {
@@ -249,6 +254,7 @@ final class RemoteClient {
                 }
             }
         }
+        return true
     }
 
     func sendTiles() {
@@ -259,22 +265,26 @@ final class RemoteClient {
 
     func flush() {
         guard let workspace else { return }
-        if inFlight > Self.highWater { behind = true }
         if behind {
-            // Too far behind: send nothing, and once drained, catch up with fresh state and snapshots.
+            // Too far behind: stop streaming, and once drained, catch up with the current state and
+            // snapshots. Snapshots dropped again stay pending, so each catch-up gets further.
+            needsResync.formUnion(pendingOutput.keys)
             pendingOutput.removeAll(keepingCapacity: true)
             guard inFlight < Self.lowWater else { return }
             behind = false
             sentConversations.removeAll()
             send(.usage(workspace.usage.orderedReadings))
             sendTiles()
-            for id in watched { sendSnapshot(id) }
-            return
+            let stale = needsResync
+            needsResync.removeAll()
+            for id in stale where watched.contains(id) { sendSnapshot(id) }
         }
         guard !pendingOutput.isEmpty else { return pushConversations() }
         for (id, bytes) in pendingOutput {
             guard let t = workspace.terminals[id] else { continue }
-            send(.terminalData(TerminalFrame(id: id, cols: t.terminal.cols, rows: t.terminal.rows, bytes: Data(bytes))))
+            if !send(.terminalData(TerminalFrame(id: id, cols: t.terminal.cols, rows: t.terminal.rows, bytes: Data(bytes)))) {
+                needsResync.insert(id)
+            }
         }
         pendingOutput.removeAll(keepingCapacity: true)
         pushConversations()
@@ -362,8 +372,8 @@ final class RemoteClient {
 
     private func sendSnapshot(_ id: String) {
         guard let t = workspace?.terminals[id] else { return }
-        send(.terminalSnapshot(TerminalFrame(id: id, cols: t.terminal.cols, rows: t.terminal.rows,
-                                             bytes: Data(TerminalSnapshotEncoder.encode(t.terminal)))))
+        let frame = TerminalFrame(id: id, cols: t.terminal.cols, rows: t.terminal.rows, bytes: Data(TerminalSnapshotEncoder.encode(t.terminal)))
+        if !send(.terminalSnapshot(frame)) { needsResync.insert(id) }
     }
 
     private func unwatchAll() {
