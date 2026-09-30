@@ -65,6 +65,7 @@ Native macOS app, with a focused iOS companion built on the same core.
   footer. The selected tile has a ring outside its edge, whatever its state. Every tile's footer
   says where it lives (folder or site) and when it last did anything; hover for the full title.
 - **Web tiles.** Live, scaled WKWebViews; unread counts in titles (`(3) Inbox`) raise attention.
+  A page that doesn't load says why: in its tile's footer, and along the bottom of its open panel.
 - **Accounts sidebar.** Remaining balance / plan headroom with one-click top-up: OpenRouter,
   DeepSeek, Moonshot, OpenAI and Anthropic (admin-key spend vs. budget), xAI, ChatGPT/Codex plan
   limits (from local Codex logs), Claude plan limits (opt-in: reads Claude Code's sign-in, never
