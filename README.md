@@ -26,23 +26,31 @@ Native macOS app, with a focused iOS companion built on the same core.
   free port with `--no-open`),
   signs the web tile in with its one-time token, and selects that session. The server stops when
   Tessera quits — or crashes.
-- **Attention.** Output-then-silence → *Done* (green breathing ring). Permission prompts, `(y/n)`,
-  "Do you want to…", OSC 9/777 notifications, Claude's own "needs action" turn summaries, and
-  Codex approval events → *Needs you* (amber comet ring), plus a Dock badge and system
-  notifications while Tessera is in the background. ⌘J goes to the next thing that needs you, in
-  one order everywhere (the top-bar counters, ⌘K, the Needs you tab, the iPhone's queue): open
-  questions first, then failures, then results you haven't seen, the oldest first.
+- **Attention.** Output-then-silence → *Done*. Permission prompts, `(y/n)`, "Do you want to…",
+  OSC 9/777 notifications, Claude's own "needs action" turn summaries, and Codex approval events
+  → *Needs you*, plus a Dock badge and system notifications while Tessera is in the background.
+  ⌘J goes to the next thing that needs you, in one order everywhere (the top-bar counters, ⌘K,
+  the Needs you tab, the iPhone's queue): open questions first, then failures, then results you
+  haven't seen, the oldest first.
+- **Tile states, the same at every size.** Colour means state and nothing else. *Idle*: nothing.
+  *Working*: a cyan pill, and a highlight sweeping the line under the header (or the progress the
+  program reports, a page's load included). *Needs you*: an amber pill and edge with a glow, and
+  the question itself called out on the tile. *Done*, not yet seen: a mint dot after the title and
+  a faint edge, nothing moving. *Failed*: a coral pill and edge, and `exit 1` (or the error) in the
+  footer. The selected tile has a ring outside its edge, whatever its state. Every tile's footer
+  says where it lives (folder or site) and when it last did anything; hover for the full title.
 - **Web tiles.** Live, scaled WKWebViews; unread counts in titles (`(3) Inbox`) raise attention.
 - **Accounts sidebar.** Remaining balance / plan headroom with one-click top-up: OpenRouter,
   DeepSeek, Moonshot, OpenAI and Anthropic (admin-key spend vs. budget), xAI, ChatGPT/Codex plan
   limits (from local Codex logs), Claude plan limits (opt-in: reads Claude Code's sign-in, never
   modifies it, and falls back to counting your local transcripts), and a custom provider for any
   JSON balance endpoint. Keys live in the login Keychain.
-- **Tabs.** All · Needs you · your own tabs. Drag tiles onto a tab (or Move to Tab); new tiles land
-  in the tab you're viewing, as does a Claude or Codex app conversation started there once its tile
-  appears (from Needs you, new tiles go to All and the view follows); each tab shows a count and a
-  dot in the colour of the most pressing thing waiting in it. ⌘1…9 switch. The selection is always
-  a tile the tab shows. Board commands (Mark All Seen, Close Exited, …) act on the tab being viewed.
+- **Tabs.** All · Needs you · your own tabs, in a strip over the board. Drag tiles onto a tab (or
+  Move to Tab); new tiles land in the tab you're viewing, as does a Claude or Codex app
+  conversation started there once its tile appears (from Needs you, new tiles go to All and the
+  view follows); each tab shows a count and a dot in the colour of the most pressing thing waiting
+  in it. ⌘1…9 switch. The selection is always a tile the tab shows. Board commands (Mark All Seen,
+  Close Exited, …) act on the tab being viewed.
 - **Close with Undo.** Closing a tile never silently destroys work. A toast offers Undo for a few
   seconds, ⌘Z (Edit ▸ Undo Close Tile) brings it back later, and ⌘K lists the last 20 closed tiles
   as "Reopen …", across restarts. A terminal comes back in its folder and, if it ran an agent, in
@@ -96,7 +104,7 @@ Every gesture means the same thing on every kind of tile.
 | ⌘T / ⇧⌘T / ⌥⌘T | New shell / Claude Code / Codex (in the selected tile's folder) |
 | ⌘L | New web tile; with a web tile open, its address field |
 | ⌘J | The next thing that needs you: questions, then failures, then unseen results, oldest first. Pressed again it moves on from the tile you're on once you have seen it, also when that one opened in its app |
-| need you · failed · done · working (top bar) | Open the next tile in that state, oldest first (failed shows only while something has) |
+| Needs you · Failed · Done · Working (top bar) | Open the next tile in that state, oldest first (a counter shows only while something is in its state) |
 | ⌘1 / ⌘2 / ⌘3…9 | All / Needs you / your tabs |
 | ⌘\ | Toggle the accounts sidebar |
 | ⇧⌘P | Privacy mode |
@@ -140,8 +148,8 @@ cd Apps/TesseraIOS && xcodegen generate && open TesseraIOS.xcodeproj
 
 Development helpers: `scripts/debug-run.sh <png> "<actions>"` builds a debug copy with its own data
 folder, runs scripted actions in it (`launch=cmd;url=…;select=title;open;key=down,return;cmd=k;`
-`type=text;click=title;ctrl=tab;undo;run=closeExited;dump=state.json;wait=2` — the full list is in
-`Sources/TesseraMac/DebugActions.swift`) and writes window captures to the PNG. Its clicks and keys
+`type=text;click=title;ctrl=tab;undo;run=closeExited;dump=state.json;shot=now.png;wait=2` — the full
+list is in `Sources/TesseraMac/DebugActions.swift`) and writes window captures to the PNG. Its clicks and keys
 land while the copy is in the background. A scripted run never opens the Claude or Codex app (it
 records what it would have opened), and the copy posts no notifications. With
 `TESSERA_DEBUG_HOME=<dir>` its board has none of your own app sessions on it.
@@ -157,7 +165,8 @@ Sources/
     Transcripts/  Claude, Codex and dsh transcript parsers (incremental)
     Usage/        provider request builders and response parsers
     Remote/       wire protocol, TLS-PSK channel + framer, client session
-    UI/           tile card, glows, thumbnails, conversation view, usage rows
+    UI/           design tokens (Style), tile card and its states, thumbnails, conversation view,
+                  usage rows
   TesseraHost/    macOS: PTY sessions, desktop-app watcher, window placement,
                   web tiles, usage service, workspace, remote server
   TesseraMac/     the macOS app (SwiftUI)
