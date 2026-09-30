@@ -80,8 +80,36 @@ struct PanelContent: View {
             VStack(spacing: 0) {
                 PanelHeader(info: info)
                 LiveContent(info: info)
+                KeyHints(hints: KeyHint.panel(info, suspended: workspace.isSuspended(id),
+                                              app: workspace.opensInApp(id) ? info.flavor.displayName : nil, live: info.flavor == .dsh))
             }
         }
+    }
+}
+
+/// What the keyboard does here, along the bottom of the open panel: as many of the hints as fit.
+struct KeyHints: View {
+    let hints: [KeyHint]
+
+    var body: some View {
+        ViewThatFits(in: .horizontal) {
+            ForEach((1...max(hints.count, 1)).reversed(), id: \.self) { count in
+                HStack(spacing: Style.Space.xl) {
+                    ForEach(hints.prefix(count)) { hint in
+                        HStack(spacing: Style.Space.xs) {
+                            Text(hint.keys).foregroundStyle(Style.dim)
+                            Text(hint.label).foregroundStyle(Style.muted)
+                        }
+                    }
+                }
+                .fixedSize()
+            }
+        }
+        .font(Style.caption)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, Style.Space.l)
+        .frame(height: Style.Metrics.hints)
+        .overlay(alignment: .top) { Hairline() }
     }
 }
 

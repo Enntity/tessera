@@ -178,6 +178,8 @@ public enum Style {
         public static let dockHeader: CGFloat = 32
         /// The grip the dock is resized by: how wide its hold is, and the mark on it.
         public static let grip = CGSize(width: 10, height: 32)
+        /// The strip of keyboard hints under an open panel.
+        public static let hints: CGFloat = 24
         /// The least room the tabs keep in their strip when the filter's chips want it.
         public static let tabs: CGFloat = 220
         /// The filter field in the top bar: as wide as it gets, and as narrow.
