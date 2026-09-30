@@ -22,12 +22,13 @@ extension AppModel {
     ///   the first two tiles), `shutdown`, `rename=<title>` (the selected tile), `machine=<ssh host>`,
     ///   `remote`, `pairurl=<file>`, `privacy`, `size=<w>x<h>`, `wait=<s>`;
     /// - what a user does: `select=<title>`, `open[=terminal|web|<title>|<id>]` (never an app conversation),
-    ///   `click=<title>`, `dblclick=<title>`, `key=up,down,left,right,return,esc`, `type=<text>`,
-    ///   `cmd=[shift+][option+]<key>` and `ctrl=<key>` (a ⌘ or ⌃ shortcut, through the menu bar; `<key>` may
-    ///   be `return` or `tab`), `undo` (Edit ▸ Undo, as whoever has the keyboard gets it), `run=<BoardCommand>`,
-    ///   `closefront=<window title>`, `filter=all|attention|<tab>`;
-    /// - `dump=<file>[?<query>]`: what is selected, open, on show, waiting and closed, who has the
-    ///   keyboard, and the palette's rows for `<query>`, as JSON.
+    ///   `click=<title>` or `click=<x>,<y>` (a tile, or a point in the window) and `dblclick=…`,
+    ///   `key=up,down,left,right,return,esc`, `type=<text>`, `cmd=[shift+][option+]<key>` and `ctrl=<key>`
+    ///   (a ⌘ or ⌃ shortcut, through the menu bar; `<key>` may be `return` or `tab`), `undo` (Edit ▸ Undo,
+    ///   with the board's window in front), `run=<BoardCommand>`, `closefront=<window title>`,
+    ///   `filter=all|attention|<tab>`;
+    /// - `dump=<file>[?<query>]`: what is selected, open, on show, waiting and closed, each tile's state,
+    ///   who has the keyboard, and the palette's rows for `<query>`, as JSON.
     private func runDebugActions(_ actions: [String], after delay: Double = 2) {
         guard let first = actions.first else { return }
         DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [self] in
@@ -56,11 +57,11 @@ extension AppModel {
                 // Opening an app conversation would drive the real Claude or Codex app.
                 if let id = arg.isEmpty ? workspace.selectedId : debugTile(arg) ?? arg, !workspace.opensInApp(id) { open(id) }
             case "click", "dblclick":
-                guard let id = debugTile(arg), let frame = tileFrame(id) else { break }
-                debugClick(at: CGPoint(x: frame.midX, y: frame.midY), count: 1)
+                guard let point = debugPoint(arg) else { break }
+                debugClick(at: point, count: 1)
                 if parts[0] == "dblclick" {
                     // The second click of a real double-click arrives once the panel has begun to open.
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { self.debugClick(at: CGPoint(x: frame.midX, y: frame.midY), count: 2) }
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { self.debugClick(at: point, count: 2) }
                 }
             case "key":
                 let keys: [String: (UInt16, String)] = ["up": (126, "\u{F700}"), "down": (125, "\u{F701}"), "left": (123, "\u{F702}"),
@@ -97,6 +98,13 @@ extension AppModel {
         }
     }
 
+    /// The centre of the tile `name` finds, or the point `x,y` itself (window coordinates, top-left origin).
+    private func debugPoint(_ name: String) -> CGPoint? {
+        let xy = name.split(separator: ",").compactMap { Double($0) }
+        if xy.count == 2 { return CGPoint(x: xy[0], y: xy[1]) }
+        return debugTile(name).flatMap(tileFrame).map { CGPoint(x: $0.midX, y: $0.midY) }
+    }
+
     private func debugKeyEvent(_ type: NSEvent.EventType, _ chars: String, code: UInt16, flags: NSEvent.ModifierFlags) -> NSEvent? {
         NSEvent.keyEvent(with: type, location: .zero, modifierFlags: flags, timestamp: ProcessInfo.processInfo.systemUptime,
                          windowNumber: window?.windowNumber ?? 0, context: nil, characters: chars,
@@ -110,9 +118,12 @@ extension AppModel {
         }
     }
 
-    /// `point` is in window coordinates, top-left origin (as `tileFrame`).
+    /// `point` is in window coordinates, top-left origin (as `tileFrame`). The test copy is never the
+    /// active app, where a first click would only bring its window forward: here every click lands.
     private func debugClick(at point: CGPoint, count: Int) {
         guard let window, let content = window.contentView else { return }
+        let accept: @convention(block) (AnyObject, NSEvent?) -> Bool = { _, _ in true }
+        class_replaceMethod(type(of: content), #selector(NSView.acceptsFirstMouse(for:)), imp_implementationWithBlock(accept), "c@:@")
         for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
             if let event = NSEvent.mouseEvent(with: type, location: CGPoint(x: point.x, y: content.bounds.height - point.y), modifierFlags: [],
                                               timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
@@ -142,10 +153,11 @@ extension AppModel {
             "windows": NSApp.windows.filter(\.isVisible).map(\.title),
             "scroll": boardScroll,
             "suspended": workspace.order.filter(workspace.isSuspended).map(title),
+            "activity": workspace.allTiles.map { "\($0.title): \($0.activity.rawValue)\($0.attention ? " unseen" : "")" },
             "queue": board.queue.map(title),
             "counts": ["needsInput": board.needsInput.count, "failed": board.failed.count, "done": board.done.count, "working": board.working.count],
             "closed": workspace.recentlyClosed.tiles.map(\.title), "hidden": workspace.hiddenTiles.map(\.title),
-            "toast": closedToast?.text ?? "", "undo": undo?.canUndo == true ? undo?.undoMenuItemTitle ?? "" : "",
+            "toast": closedToast?.text ?? "", "undo": undo?.canUndo == true ? undo?.undoMenuItemTitle ?? "" : "", "undoMenu": undoTitle,
             "rows": paletteItems(parts.count > 1 ? parts[1] : "").map { "\($0.title) — \($0.subtitle)" },
             "wouldOpenInApp": WindowPlacer.dryRun ?? []
         ]

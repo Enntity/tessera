@@ -141,10 +141,11 @@ cd Apps/TesseraIOS && xcodegen generate && open TesseraIOS.xcodeproj
 Development helpers: `scripts/debug-run.sh <png> "<actions>"` builds a debug copy with its own data
 folder, runs scripted actions in it (`launch=cmd;url=…;select=title;open;key=down,return;cmd=k;`
 `type=text;click=title;ctrl=tab;undo;run=closeExited;dump=state.json;wait=2` — the full list is in
-`Sources/TesseraMac/DebugActions.swift`) and writes window captures to the PNG. A scripted run never
-opens the Claude or Codex app; it records what it would have opened. With `TESSERA_DEBUG_HOME=<dir>`
-the copy's board has none of your own app sessions on it. `swift scripts/make-icons.swift`
-regenerates the icons.
+`Sources/TesseraMac/DebugActions.swift`) and writes window captures to the PNG. Its clicks and keys
+land while the copy is in the background. A scripted run never opens the Claude or Codex app (it
+records what it would have opened), and the copy posts no notifications. With
+`TESSERA_DEBUG_HOME=<dir>` its board has none of your own app sessions on it.
+`swift scripts/make-icons.swift` regenerates the icons.
 
 ## Architecture
 
