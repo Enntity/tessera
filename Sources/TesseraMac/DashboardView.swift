@@ -35,6 +35,18 @@ struct DashboardView: View {
     }
 }
 
+/// Takes whatever size it is offered without measuring its content. At the window's root this keeps
+/// AppKit's min-size checks, and any change deep in the board, from re-measuring the whole tree.
+struct FillProposal: Layout {
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        proposal.replacingUnspecifiedDimensions()
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        for subview in subviews { subview.place(at: bounds.origin, proposal: ProposedViewSize(bounds.size)) }
+    }
+}
+
 /// The void behind the board: a faint lattice with a glow, so tiles float.
 struct Backdrop: View {
     var body: some View {

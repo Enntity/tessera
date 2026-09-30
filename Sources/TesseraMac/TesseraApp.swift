@@ -10,7 +10,7 @@ struct TesseraApp: App {
 
     var body: some Scene {
         WindowGroup("Tessera", id: "board") {
-            DashboardView()
+            FillProposal { DashboardView() }
                 .environment(model)
                 .frame(minWidth: 900, minHeight: 560)
                 .preferredColorScheme(.dark)
