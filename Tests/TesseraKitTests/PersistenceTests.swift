@@ -51,6 +51,16 @@ final class StateFileTests: XCTestCase {
         let url = try tempDir().appendingPathComponent("sub/machines.json")
         StateFile.save([MachineConfig(id: "m", name: "Box", sshHost: "box")], to: url)
         XCTAssertEqual(StateFile.loadList(MachineConfig.self, from: url)?.map(\.sshHost), ["box"])
+
+        let board = url.deletingLastPathComponent().appendingPathComponent("workspace.json")
+        let tile = Workspace.Saved.Tile(id: "t", kind: .terminal, command: "claude", cwd: "/w", sessionId: "S")
+        StateFile.save(Workspace.Saved(tiles: [Lossy(tile)], order: ["t", "claude:x"], hidden: ["claude:y": Date(timeIntervalSince1970: 5)],
+                                       agentLookbackHours: 12), to: board)
+        let saved = try XCTUnwrap(StateFile.load(Workspace.Saved.self, from: board))
+        XCTAssertEqual(saved.tiles.compactMap(\.value).map(\.sessionId), ["S"])
+        XCTAssertEqual(saved.order, ["t", "claude:x"])
+        XCTAssertEqual(saved.hidden, ["claude:y": Date(timeIntervalSince1970: 5)])
+        XCTAssertEqual(saved.agentLookbackHours, 12)
     }
 }
 
