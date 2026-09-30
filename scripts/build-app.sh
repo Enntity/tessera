@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Builds Tessera.app from the SwiftPM executable and signs it with the first available identity.
+# Builds Tessera.app from the SwiftPM executable and signs it: with $TESSERA_CODESIGN_IDENTITY when set
+# ("-" for ad-hoc), otherwise with the first code-signing identity in your keychain.
 set -euo pipefail
 
 root=$(cd "$(dirname "$0")/.." && pwd)
@@ -20,6 +21,9 @@ fi
 for bundle in "$bin_dir"/*.bundle; do
   [[ -d "$bundle" ]] && /usr/bin/ditto "$bundle" "$contents/Resources/$(basename "$bundle")"
 done
+for notice in LICENSE THIRD_PARTY_NOTICES.md LICENSES; do
+  /usr/bin/ditto "$root/$notice" "$contents/Resources/$notice"
+done
 
 identity=${TESSERA_CODESIGN_IDENTITY:-}
 if [[ -z "$identity" ]]; then
@@ -30,5 +34,6 @@ if [[ -z "$identity" ]]; then
   identity="-"
   echo "warning: no code-signing identity; Accessibility permission will need re-granting after each build" >&2
 fi
-/usr/bin/codesign --force --deep --sign "$identity" "$app"
+echo "signing with: $(/usr/bin/security find-identity -v -p codesigning 2>/dev/null | /usr/bin/grep -F "$identity" | /usr/bin/sed -nE 's/.*"(.*)"$/\1/p' | /usr/bin/head -n 1 || true) ($identity)" >&2
+/usr/bin/codesign --force --sign "$identity" "$app"
 echo "$app"

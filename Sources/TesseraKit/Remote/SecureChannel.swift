@@ -37,12 +37,11 @@ public enum SecureChannel {
         code.uppercased().filter { $0.isLetter || $0.isNumber }
     }
 
-    /// 20 characters from an unambiguous alphabet ≈ 100 bits.
+    /// 20 characters from an unambiguous alphabet ≈ 99 bits, drawn uniformly from the system CSPRNG.
     public static func makePairingCode() -> String {
         let alphabet = Array("ABCDEFGHJKMNPQRSTUVWXYZ23456789")
-        var bytes = [UInt8](repeating: 0, count: 20)
-        _ = SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes)
-        let chars = bytes.map { alphabet[Int($0) % alphabet.count] }
+        var rng = SystemRandomNumberGenerator()
+        let chars = (0..<20).map { _ in alphabet.randomElement(using: &rng)! }
         return stride(from: 0, to: chars.count, by: 5).map { String(chars[$0..<min($0 + 5, chars.count)]) }.joined(separator: "-")
     }
 

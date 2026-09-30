@@ -285,35 +285,6 @@ final class ClaudeOAuthTests: XCTestCase {
         XCTAssertNil(ClaudeOAuth.token(in: credentials(expiresIn: 120), now: now))
         XCTAssertNil(ClaudeOAuth.token(in: credentials(expiresIn: -60), now: now))
     }
-
-    func testRefreshRequestMatchesClaudeCode() throws {
-        let r = try XCTUnwrap(ClaudeOAuth.refreshRequest(credentials(expiresIn: -60)))
-        XCTAssertEqual(r.url?.absoluteString, "https://platform.claude.com/v1/oauth/token")
-        XCTAssertEqual(r.httpMethod, "POST")
-        XCTAssertEqual(r.value(forHTTPHeaderField: "User-Agent"), "Tessera")
-        let body = try XCTUnwrap(JSONSerialization.jsonObject(with: r.httpBody ?? Data()) as? [String: String])
-        XCTAssertEqual(body, ["grant_type": "refresh_token", "refresh_token": "old-rt",
-                              "client_id": "9d1c250a-e61b-44d9-88ed-5944d1962f5e", "scope": "user:inference user:profile"])
-    }
-
-    func testRenewedKeepsEverythingElse() throws {
-        let response = Data(#"{"access_token":"new-at","refresh_token":"new-rt","expires_in":28800}"#.utf8)
-        let renewed = try XCTUnwrap(ClaudeOAuth.renewed(credentials(expiresIn: -60), response: response, now: now))
-        XCTAssertEqual(ClaudeOAuth.token(in: renewed, now: now)?.value, "new-at")
-        let obj = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(renewed.utf8)) as? [String: Any])
-        let oauth = try XCTUnwrap(obj["claudeAiOauth"] as? [String: Any])
-        XCTAssertEqual(oauth["refreshToken"] as? String, "new-rt")
-        XCTAssertEqual(oauth["expiresAt"] as? Double, (now.timeIntervalSince1970 + 28800) * 1000)
-        XCTAssertEqual(oauth["subscriptionType"] as? String, "max")
-        XCTAssertNotNil(obj["mcpOAuth"])
-    }
-
-    func testRenewedKeepsRefreshTokenWhenNotRotated() throws {
-        let response = Data(#"{"access_token":"new-at","expires_in":28800}"#.utf8)
-        let renewed = try XCTUnwrap(ClaudeOAuth.renewed(credentials(expiresIn: -60), response: response, now: now))
-        XCTAssertTrue(renewed.contains(#""refreshToken":"old-rt""#))
-        XCTAssertNil(ClaudeOAuth.renewed(credentials(expiresIn: -60), response: Data("{}".utf8), now: now))
-    }
 }
 
 final class TerminalSnapshotTests: XCTestCase {

@@ -191,6 +191,7 @@ struct CountChip: View {
 
 /// Every watched machine as a chip, then the clock. Falls back to compact chips when space is short.
 struct MachineStrip: View {
+    @Environment(\.openSettings) private var openSettings
     @Environment(AppModel.self) private var model
 
     var body: some View {
@@ -209,7 +210,7 @@ struct MachineStrip: View {
                 if !hosts.isEmpty { Divider() }
                 Button("Other Host…") {
                     model.showAddMachine = true
-                    NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
+                    openSettings()
                 }
             } label: {
                 Image(systemName: "plus").font(.system(size: 9, weight: .bold)).foregroundStyle(Style.dim)

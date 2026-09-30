@@ -20,7 +20,8 @@ Native macOS app, with a focused iOS companion built on the same core.
 - **DeepSeek Harness (dsh) sessions as tiles.** Each recent top-level dsh conversation in
   `~/.dsh/sessions` (or `$DSH_HOME`) is its own live card — title, latest messages and tool calls,
   working while a turn runs, *Needs you* on a pending approval (with its reason). Opening one starts
-  Tessera's own `dsh web` (via `dsh`, or `npx @deepseek-ai/dsh`, on a free port with `--no-open`),
+  Tessera's own `dsh web` (via `dsh`, or `npx -y @deepseek-ai/dsh`, which fetches it from npm, on a
+  free port with `--no-open`),
   signs the web tile in with its one-time token, and selects that session. The server stops when
   Tessera quits — or crashes.
 - **Attention.** Output-then-silence → *Done* (green breathing ring). Permission prompts, `(y/n)`,
@@ -30,8 +31,9 @@ Native macOS app, with a focused iOS companion built on the same core.
 - **Web tiles.** Live, scaled WKWebViews; unread counts in titles (`(3) Inbox`) raise attention.
 - **Accounts sidebar.** Remaining balance / plan headroom with one-click top-up: OpenRouter,
   DeepSeek, Moonshot, OpenAI and Anthropic (admin-key spend vs. budget), xAI, ChatGPT/Codex plan
-  limits (from local Codex logs), Claude plan limits (opt-in, uses Claude Code's sign-in), and a
-  custom provider for any JSON balance endpoint. Keys live in the login Keychain.
+  limits (from local Codex logs), Claude plan limits (opt-in: reads Claude Code's sign-in, never
+  modifies it, and falls back to counting your local transcripts), and a custom provider for any
+  JSON balance endpoint. Keys live in the login Keychain.
 - **Tabs.** All · Needs you · your own tabs. Drag tiles onto a tab (or Move to Tab); new tiles land
   in the tab you're viewing; each tab shows a count and an attention dot. ⌘1…9 switch.
 - **Machines.** Top-bar chips for this Mac and any SSH hosts (e.g. DGX Sparks): CPU / GPU / memory
@@ -67,7 +69,7 @@ Native macOS app, with a focused iOS companion built on the same core.
 | ⌘⏎, Esc (board) | Open / close tile |
 | ⌘[ ⌘] | Previous / next tile |
 | ⌘J | Next tile that needs you |
-| ⌥⌘1…5 | Filter: all, needs you, terminals, apps, web |
+| ⌘1 / ⌘2 / ⌘3…9 | All / Needs you / your tabs |
 | ⌘\ | Toggle the accounts sidebar |
 | ⇧⌘P | Privacy mode |
 | ⌥⇧⌘W / ⌥⇧⌘R | Shut down / resume all terminals |
@@ -77,13 +79,25 @@ Esc inside an open terminal goes to the program (agents use it to interrupt), so
 
 ## Build and run
 
-Requires Xcode 26 (Swift 6 toolchain).
+Requires macOS 14+ and Xcode 26 (Swift 6 toolchain); the iOS companion needs iOS 17+.
 
 ```bash
 swift test                          # core tests (parsers, attention, layout, usage APIs, TLS channel)
-scripts/build-app.sh                # → .build/app/Tessera.app (release, signed with your first identity)
+scripts/build-app.sh                # → .build/app/Tessera.app (release)
 open .build/app/Tessera.app
 ```
+
+`build-app.sh` signs with `$TESSERA_CODESIGN_IDENTITY` (`-` for ad-hoc), or else the first
+code-signing identity in your keychain, and prints which. A stable identity keeps macOS permissions
+across rebuilds.
+
+On first use macOS asks for: **Accessibility** (to place the Claude/Codex window where a tile
+opens), **Notifications** (attention alerts while Tessera is in the background), **Local Network**
+(only if you turn on the iPhone link), and a **Keychain** prompt if you add the Claude plan
+provider. Everything else is optional and detected: the agent CLIs, the Claude and Codex apps,
+dsh, zsh or fish for command tracking, and ssh (plus `nvidia-smi` on GPU hosts) for machine chips.
+The SoC temperature on this Mac comes from IOKit's HID sensor SPI, looked up at runtime; if a macOS
+update removes it, the chip just omits the temperature.
 
 iOS (needs XcodeGen and the Metal toolchain SwiftTerm's shaders use):
 
@@ -104,7 +118,7 @@ Sources/
   TesseraKit/     cross-platform (macOS + iOS)
     Core/         models, attention tracker, grid layout, Keychain
     Terminal/     text/block renderer, snapshot encoder, display-only mirror
-    Transcripts/  Claude + Codex JSONL parsers (incremental)
+    Transcripts/  Claude, Codex and dsh transcript parsers (incremental)
     Usage/        provider request builders and response parsers
     Remote/       wire protocol, TLS-PSK channel + framer, client session
     UI/           tile card, glows, thumbnails, conversation view, usage rows
@@ -138,3 +152,9 @@ peer that falls behind (it resyncs with a snapshot). Pairing links on the phone 
 - If you scroll back in a Mac terminal, the phone's snapshot and prompt detection follow the scrolled view.
 - No push notifications to the phone yet (needs an APNs relay); the phone updates while open.
 - Tile order persists; tile sizes are uniform (no pinning/resizing yet).
+
+## License
+
+MIT; see [LICENSE](LICENSE). Third-party components keep their own licenses; see
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). Tessera is an independent project, not affiliated
+with the makers of the tools it works with. Security reports: see [SECURITY.md](SECURITY.md).

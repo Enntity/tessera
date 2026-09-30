@@ -69,13 +69,13 @@ final class AppModel {
         started = true
         workspace.start()
         if Preferences.store.bool(forKey: "tessera.remoteEnabled") { server.start() }
-        // UNUserNotificationCenter requires an app bundle; a bare `swift run` binary goes without.
-        if Bundle.main.bundleIdentifier != nil {
-            // Record every terminal's folder and conversation, then stop them, so next launch resumes.
+        // Record every terminal's folder and conversation, then stop them, so next launch resumes.
         NotificationCenter.default.addObserver(forName: NSApplication.willTerminateNotification, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.workspace.prepareForQuit() }
         }
-        notifier = AttentionNotifier { [weak self] id in self?.open(id) }
+        // UNUserNotificationCenter requires an app bundle; a bare `swift run` binary goes without.
+        if Bundle.main.bundleIdentifier != nil {
+            notifier = AttentionNotifier { [weak self] id in self?.open(id) }
         }
         Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated {
