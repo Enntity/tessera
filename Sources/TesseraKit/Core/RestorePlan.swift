@@ -59,15 +59,3 @@ public enum RestorePlan {
         tool == .claude || tool == .codex
     }
 }
-
-public extension SessionResume {
-    /// Commands that deliberately pick up the latest conversation (`claude -c`, `codex resume --last`).
-    static func continuesLatest(_ command: String) -> Bool {
-        guard let inv = Invocation(command), let tool = tool(named: inv.name) else { return false }
-        let words = inv.words.dropFirst()
-        switch tool {
-        case .claude, .grok, .opencode, .omp: return words.contains("-c") || words.contains("--continue")
-        case .codex: return words.first == "resume" && words.contains("--last")
-        }
-    }
-}

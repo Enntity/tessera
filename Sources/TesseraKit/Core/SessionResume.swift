@@ -100,26 +100,15 @@ public enum SessionResume {
     public static func resumeCommand(original: String, sessionId: String?) -> String? {
         guard let inv = Invocation(original), let tool = tool(named: inv.name) else { return nil }
         let id = sessionId.flatMap { isSafeId($0) ? $0 : nil }
-        var words = Array(inv.words.dropFirst())
-        let exe = inv.exe
+        let args = Array(inv.words.dropFirst())
+        // `codex exec …` and friends aren't sessions.
+        if tool == .codex, let first = args.first, !first.hasPrefix("-"), first != "resume" { return nil }
+        let words = withoutSession(tool, args)
         switch tool {
-        case .claude, .grok:
-            words = strip(words, flags: ["--resume", "-r", "--session-id"], switches: ["--continue", "-c", "--fork-session"])
-            return inv.joined([exe] + words + (id.map { ["--resume", $0] } ?? ["--continue"]))
-        case .codex:
-            if let first = words.first, !first.hasPrefix("-") {
-                guard first == "resume" else { return nil }  // `codex exec …` and friends aren't sessions
-                words.removeFirst()
-                if let next = words.first, !next.hasPrefix("-") { words.removeFirst() }
-                words.removeAll { $0 == "--last" }
-            }
-            return inv.joined([exe, "resume"] + (id.map { [$0] } ?? ["--last"]) + words)
-        case .opencode:
-            words = strip(words, flags: ["-s", "--session"], switches: ["-c", "--continue"])
-            return inv.joined([exe] + words + (id.map { ["-s", $0] } ?? ["-c"]))
-        case .omp:
-            words = strip(words, flags: ["-r", "--resume"], switches: ["-c", "--continue"])
-            return inv.joined([exe] + words + (id.map { ["-r", $0] } ?? ["-c"]))
+        case .claude, .grok: return inv.joined([inv.exe] + words + (id.map { ["--resume", $0] } ?? ["--continue"]))
+        case .codex: return inv.joined([inv.exe, "resume"] + (id.map { [$0] } ?? ["--last"]) + words)
+        case .opencode: return inv.joined([inv.exe] + words + (id.map { ["-s", $0] } ?? ["-c"]))
+        case .omp: return inv.joined([inv.exe] + words + (id.map { ["-r", $0] } ?? ["-c"]))
         }
     }
 
@@ -127,23 +116,37 @@ public enum SessionResume {
     /// reclaims `sessionId` when given (an id assigned but never saved).
     public static func freshLaunch(original: String, sessionId: String? = nil) -> String? {
         guard let inv = Invocation(original), let tool = tool(named: inv.name) else { return nil }
-        var words = Array(inv.words.dropFirst())
+        var words = withoutSession(tool, Array(inv.words.dropFirst()))
+        if tool == .claude || tool == .grok, let sessionId, isSafeId(sessionId), isDirect(inv) { words += ["--session-id", sessionId] }
+        return inv.joined([inv.exe] + words)
+    }
+
+    /// Commands that deliberately pick up the latest conversation (`claude -c`, `codex resume --last`).
+    public static func continuesLatest(_ command: String) -> Bool {
+        guard let inv = Invocation(command), let tool = tool(named: inv.name) else { return false }
+        let words = inv.words.dropFirst()
+        switch tool {
+        case .claude, .grok, .opencode, .omp: return words.contains("-c") || words.contains("--continue")
+        case .codex: return words.first == "resume" && words.contains("--last")
+        }
+    }
+
+    /// A tool's arguments without any session selection: its resume and continue flags, and for
+    /// Codex a leading `resume [<id>]` and `--last`.
+    private static func withoutSession(_ tool: Tool, _ words: [String]) -> [String] {
         switch tool {
         case .claude, .grok:
-            words = strip(words, flags: ["--resume", "-r", "--session-id"], switches: ["--continue", "-c", "--fork-session"])
-            if let sessionId, isSafeId(sessionId), isDirect(inv) { words += ["--session-id", sessionId] }
+            return strip(words, flags: ["--resume", "-r", "--session-id"], switches: ["--continue", "-c", "--fork-session"])
         case .codex:
-            if words.first == "resume" {
-                words.removeFirst()
-                if let next = words.first, !next.hasPrefix("-") { words.removeFirst() }
-                words.removeAll { $0 == "--last" }
-            }
+            guard words.first == "resume" else { return words }
+            var rest = words.dropFirst()
+            if let next = rest.first, !next.hasPrefix("-") { rest = rest.dropFirst() }
+            return rest.filter { $0 != "--last" }
         case .opencode:
-            words = strip(words, flags: ["-s", "--session"], switches: ["-c", "--continue"])
+            return strip(words, flags: ["-s", "--session"], switches: ["-c", "--continue"])
         case .omp:
-            words = strip(words, flags: ["-r", "--resume"], switches: ["-c", "--continue"])
+            return strip(words, flags: ["-r", "--resume"], switches: ["-c", "--continue"])
         }
-        return inv.joined([inv.exe] + words)
     }
 
     /// Session ids are interpolated into shell commands; only plain ids pass.
