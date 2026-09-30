@@ -28,7 +28,7 @@ extension AppModel {
     ///   `key=up,down,left,right,return,esc`, `type=<text>`, `cmd=[shift+][option+]<key>` and `ctrl=<key>`
     ///   (a ⌘ or ⌃ shortcut, through the menu bar; `<key>` may be `return` or `tab`), `undo` (Edit ▸ Undo,
     ///   with the board's window in front), `run=<BoardCommand>`, `closefront=<window title>`,
-    ///   `filter=all|attention|<tab>`;
+    ///   `filter=all|attention|<tab>`, `pane=<label>` (a pane of the open Settings window);
     /// - `dump=<file>[?<query>]`: what is selected, open, on show, waiting and closed, each tile's state,
     ///   who has the keyboard, and the palette's rows for `<query>`, as JSON;
     /// - `shot=<file>[?<window title>]`: a capture of the board's window (or the window so titled) as it
@@ -57,6 +57,10 @@ extension AppModel {
                 let side = arg.split(separator: "x").compactMap { Double($0) }
                 if side.count == 2, let window { window.setContentSize(CGSize(width: side[0], height: side[1])) }
             case "closefront": closeFront(key: NSApp.windows.first { $0.title == arg }) // ⌘W as if that window were key
+            case "pane":
+                // A pane of the Settings window, by the label in its toolbar.
+                let item = NSApp.windows.compactMap(\.toolbar).flatMap(\.items).first { $0.label == arg }
+                if let item, let action = item.action { NSApp.sendAction(action, to: item.target, from: item) }
             case "wait": next = Double(arg) ?? 1
             case "pace":
                 pace = Double(arg) ?? 1

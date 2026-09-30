@@ -141,6 +141,8 @@ struct RemoteSettings: View {
                     HStack {
                         Text(revealCode ? server.pairingCode : String(repeating: "•", count: 23))
                             .font(Style.mono(.body))
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.7)
                             .textSelection(.enabled)
                         Spacer()
                         Button(revealCode ? "Hide" : "Show") { revealCode.toggle() }
