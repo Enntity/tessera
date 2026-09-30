@@ -46,6 +46,36 @@ private extension Alignment {
     }
 }
 
+/// A state's mark: a small dot in its color, lit where it calls for the eye.
+public struct Dot: View {
+    let color: Color
+    let lit: Bool
+
+    public init(_ color: Color, lit: Bool = false) {
+        self.color = color
+        self.lit = lit
+    }
+
+    public var body: some View {
+        let dot = Circle().fill(color).frame(width: Style.Metrics.dot, height: Style.Metrics.dot)
+        if lit { dot.elevation(.glow(color)) } else { dot }
+    }
+}
+
+/// One phase for every age on show, so their updates land together.
+private let ageClockStart = Date()
+
+/// How long ago something last happened ("4m"), kept current.
+public struct Age: View {
+    let date: Date
+
+    public init(of date: Date) { self.date = date }
+
+    public var body: some View {
+        TimelineView(.periodic(from: ageClockStart, by: 15)) { ctx in Text(date.shortAge(now: ctx.date)) }
+    }
+}
+
 public extension Text {
     /// Pills and section headers: small capitals, spaced out.
     func micro() -> some View {

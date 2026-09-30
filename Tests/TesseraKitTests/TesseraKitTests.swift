@@ -702,6 +702,24 @@ final class RemoteVitalsTests: XCTestCase {
         XCTAssertFalse(MachineConfig.isValidHost("host; rm -rf /"))
         XCTAssertTrue(MachineConfig.isValidHost("me@10.0.0.4"))
     }
+
+    func testATrendKeepsTheLatestSamplesAndHoldsStillUnderASteadyLoad() {
+        var trend = MachineTrend()
+        for i in 0..<(MachineTrend.length + 5) { trend.record(cpu: Double(i) / 100, gpu: nil) }
+        XCTAssertEqual(trend.cpu.count, MachineTrend.length)
+        XCTAssertEqual(trend.cpu.last!, 0.34, accuracy: 1.0 / 32)
+        // No GPU to read: nothing to draw for it.
+        XCTAssertEqual(trend.gpu, [])
+        // A load that wobbles by less than a sparkline can show leaves the trend as it was.
+        var steady = MachineTrend()
+        for _ in 0..<MachineTrend.length { steady.record(cpu: 0.50, gpu: 0.03) }
+        var next = steady
+        next.record(cpu: 0.51, gpu: 0.02)
+        XCTAssertEqual(next, steady)
+        next.record(cpu: 0.9, gpu: 7)
+        XCTAssertNotEqual(next, steady)
+        XCTAssertEqual(next.gpu.last, 1)
+    }
 }
 
 final class SessionResumeTests: XCTestCase {

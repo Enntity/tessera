@@ -141,6 +141,8 @@ public enum Style {
         /// A border under the pointer.
         public static let borderHover = ink.opacity(0.28)
         public static let focus = ink.opacity(0.6)
+        /// Behind the letters the filter found in a title.
+        public static let found = ink.opacity(0.24)
     }
 
     // MARK: Motion
@@ -166,6 +168,17 @@ public enum Style {
         public static let control: CGFloat = 28
         public static let panelHeader: CGFloat = 40
         public static let sidebar: CGFloat = 290
+        /// The Needs-you lane.
+        public static let lane: CGFloat = 220
+        /// The filter field in the top bar: as wide as it gets, and as narrow.
+        public static let filter: CGFloat = 260
+        public static let filterMin: CGFloat = 120
+        /// A state's dot.
+        public static let dot: CGFloat = 5
+        /// How tall a one-tap answer's key is, in a row of the lane.
+        public static let key: CGFloat = 20
+        /// A load's sparkline on a machine chip; a chip stacks two in a control's height.
+        public static let spark = CGSize(width: 36, height: 8)
         /// A selected tile's ring, and the gap between it and the tile's edge.
         public static let ring: CGFloat = 2
     }
@@ -230,11 +243,21 @@ private struct MotionKey: EnvironmentKey {
     static let defaultValue = true
 }
 
+private struct HighlightKey: EnvironmentKey {
+    static let defaultValue = ""
+}
+
 public extension EnvironmentValues {
     /// Privacy mode: content keeps its shape and motion but can't be read (for screenshots and video).
     var tesseraPrivacy: Bool {
         get { self[PrivacyKey.self] }
         set { self[PrivacyKey.self] = newValue }
+    }
+
+    /// What the board's filter is looking for: tiles light it up where their titles have it.
+    var tesseraHighlight: String {
+        get { self[HighlightKey.self] }
+        set { self[HighlightKey.self] = newValue }
     }
 
     /// Off for tiles out of view: their continuous effects (sweep, pulse, typing dots) stop.

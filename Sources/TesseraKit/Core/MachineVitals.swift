@@ -21,6 +21,29 @@ public struct MachineConfig: Codable, Identifiable, Hashable, Sendable {
     }
 }
 
+/// A machine's recent CPU and GPU load, oldest first: what its chip draws as sparklines.
+public struct MachineTrend: Equatable, Sendable {
+    /// How many samples a sparkline shows.
+    public static let length = 30
+    public private(set) var cpu: [Double] = []
+    /// Empty for a machine with no GPU to read.
+    public private(set) var gpu: [Double] = []
+
+    public init() {}
+
+    /// Adds a sample, rounded to what a sparkline a few points tall can show, so a steady load
+    /// leaves the trend equal and redraws nothing.
+    public mutating func record(cpu: Double?, gpu: Double?) {
+        func push(_ value: Double?, onto values: inout [Double]) {
+            guard let value else { return }
+            values.append((min(1, max(0, value)) * 16).rounded() / 16)
+            values.removeFirst(max(0, values.count - Self.length))
+        }
+        push(cpu, onto: &self.cpu)
+        push(gpu, onto: &self.gpu)
+    }
+}
+
 public struct MachineVitals: Codable, Identifiable, Hashable, Sendable {
     public enum Status: String, Codable, Sendable { case connecting, ok, unreachable }
 

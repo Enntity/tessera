@@ -10,11 +10,14 @@ import TesseraKit
 public final class MachineMonitor {
     public private(set) var remotes: [MachineConfig] = []
     public private(set) var vitals: [String: MachineVitals] = [:]
+    /// Each machine's recent load, for its chip's sparklines. Apart from `vitals`, so that a sample
+    /// redraws the sparklines and nothing that only reads the numbers.
+    public private(set) var trends: [String: MachineTrend] = [:]
 
     public static let localId = "local"
-    public var ordered: [MachineVitals] {
-        ([Self.localId] + remotes.map(\.id)).compactMap { vitals[$0] }
-    }
+    /// Every watched machine, this Mac first. Reads which machines there are, not their readings.
+    public var ids: [String] { [Self.localId] + remotes.map(\.id) }
+    public var ordered: [MachineVitals] { ids.compactMap { vitals[$0] } }
 
     @ObservationIgnored private let store: URL
     @ObservationIgnored private var timer: Timer?
@@ -58,6 +61,7 @@ public final class MachineMonitor {
     public func remove(id: String) {
         remotes.removeAll { $0.id == id }
         vitals[id] = nil
+        trends[id] = nil
         lastCPU[id] = nil
         save()
     }
@@ -114,11 +118,15 @@ public final class MachineMonitor {
         publish(v)
     }
 
-    /// Stores a reading only when it would look different, so an unchanged poll re-renders nothing.
+    /// Stores a reading, and the trend it extends, only when it would look different, so an
+    /// unchanged poll re-renders nothing.
     private func publish(_ reading: MachineVitals) {
         var v = reading
         v.quantize()
         if vitals[v.id] != v { vitals[v.id] = v }
+        var trend = v.status == .ok ? trends[v.id] ?? MachineTrend() : MachineTrend()
+        if v.status == .ok { trend.record(cpu: v.cpu, gpu: v.gpu) }
+        if trends[v.id] != trend { trends[v.id] = trend }
     }
 
     private func pollRemote(_ config: MachineConfig) {

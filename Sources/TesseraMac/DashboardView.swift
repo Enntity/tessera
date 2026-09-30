@@ -252,8 +252,11 @@ struct MachineStrip: View {
         let monitor = model.workspace.machines
         HStack(spacing: Style.Space.s) {
             ViewThatFits(in: .horizontal) {
-                chips(monitor, compact: false)
-                chips(monitor, compact: true)
+                ForEach([false, true], id: \.self) { compact in
+                    HStack(spacing: Style.Space.s) {
+                        ForEach(monitor.ids, id: \.self) { WatchedMachine(id: $0, compact: compact).fixedSize() }
+                    }
+                }
                 Color.clear.frame(width: 0)
             }
             Menu {
@@ -282,22 +285,29 @@ struct MachineStrip: View {
             }
         }
     }
+}
 
-    private func chips(_ monitor: MachineMonitor, compact: Bool) -> some View {
-        HStack(spacing: Style.Space.s) {
-            ForEach(monitor.ordered) { vitals in
-                let host = monitor.config(vitals.id)?.sshHost
-                let connect = { model.create { $0.launch(command: host.map { "ssh \($0)" }, title: vitals.name) } }
-                MachineChip(vitals: vitals, compact: compact)
-                    .fixedSize()
-                    .onTapGesture { if host != nil { connect() } }
-                    .contextMenu {
-                        if host != nil {
-                            Button("Open Terminal on \(vitals.name)", action: connect)
-                            Button("Stop Watching", role: .destructive) { monitor.remove(id: vitals.id) }
-                        }
+/// One machine's chip. It alone reads the machine's readings and its trend, so a sample redraws
+/// the chip and nothing around it. A click on a remote opens a terminal there.
+struct WatchedMachine: View {
+    @Environment(AppModel.self) private var model
+    let id: String
+    let compact: Bool
+
+    var body: some View {
+        let monitor = model.workspace.machines
+        if let vitals = monitor.vitals[id] {
+            let host = monitor.config(id)?.sshHost
+            // The tile is named after the machine (see `TerminalSession`), not by the user.
+            let connect = { model.create { $0.launch(command: host.map { "ssh \($0)" }) } }
+            MachineChip(vitals: vitals, trend: monitor.trends[id] ?? MachineTrend(), compact: compact)
+                .onTapGesture { if host != nil { connect() } }
+                .contextMenu {
+                    if host != nil {
+                        Button("Open Terminal on \(vitals.name)", action: connect)
+                        Button("Stop Watching", role: .destructive) { monitor.remove(id: id) }
                     }
-            }
+                }
         }
     }
 }
