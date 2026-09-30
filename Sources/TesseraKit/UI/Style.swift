@@ -170,8 +170,9 @@ public enum Style {
         public static let sidebar: CGFloat = 290
         /// The Needs-you lane.
         public static let lane: CGFloat = 220
-        /// The watch dock: as wide as it starts, as narrow as it gets, and the least it leaves the board.
-        public static let dock: CGFloat = 480
+        /// The watch dock: as wide as it starts (a docked terminal is 80 columns then), as narrow as
+        /// it gets, and the least it leaves the board.
+        public static let dock: CGFloat = 540
         public static let dockMin: CGFloat = 320
         public static let boardMin: CGFloat = 300
         /// A docked tile's header.

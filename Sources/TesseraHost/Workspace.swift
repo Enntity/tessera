@@ -430,12 +430,18 @@ public final class Workspace {
         guard docked ? exists(id) && !dock.contains(id) : dock.contains(id) else { return }
         if docked {
             if expandedId == id { collapse() }
-            if let left = dock.add(id) { setViewed(left, false) }
+            if let left = dock.add(id) { show(left, inDock: false) }
         } else {
             dock.remove(id)
         }
-        setViewed(id, docked)
+        show(id, inDock: docked)
         save()
+    }
+
+    /// In the dock a tile is being looked at, and a terminal is drawn smaller.
+    private func show(_ id: String, inDock: Bool) {
+        setViewed(id, inDock)
+        terminals[id]?.setCompact(inDock)
     }
 
     /// Whether the user has the tile's content in front of them: open, or docked.
@@ -773,6 +779,6 @@ public final class Workspace {
         // in it is looked at from the start.
         dock = WatchDock((saved.dock ?? []).filter { order.contains($0) || $0.contains(":") })
         dockWidth = saved.dockWidth.map { CGFloat($0) }
-        for id in dock.ids { setViewed(id, true) }
+        for id in dock.ids { show(id, inDock: true) }
     }
 }

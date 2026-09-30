@@ -214,7 +214,8 @@ extension AppModel {
             "density": density.minTileWidth, "columns": grid(count: workspace.visibleIds.count, in: boardFrame?.size ?? .zero).columns,
             "hosted": workspace.order.compactMap { id -> String? in
                 guard let view: NSView = workspace.terminals[id]?.view ?? workspace.browsers[id]?.webView, let host = view.superview else { return nil }
-                return "\(title(id)): \(Int(view.frame.minX)),\(Int(view.frame.minY)) \(Int(view.frame.width))x\(Int(view.frame.height)) in \(Int(host.frame.width))x\(Int(host.frame.height))"
+                let cells = workspace.info(id).flatMap { tile in tile.cols.map { " \($0) columns" } } ?? ""
+                return "\(title(id)): \(Int(view.frame.minX)),\(Int(view.frame.minY)) \(Int(view.frame.width))x\(Int(view.frame.height)) in \(Int(host.frame.width))x\(Int(host.frame.height))\(cells)"
             },
             "lane": showLane, "places": workspace.allTiles.map { "\($0.title): \($0.subtitle)" },
             "palette": showPalette ? "\(paletteMode)" : "",

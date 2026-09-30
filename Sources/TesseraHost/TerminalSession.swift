@@ -63,7 +63,13 @@ public final class TerminalSession: NSObject {
     /// Raw output fan-out for remote clients.
     @ObservationIgnored public var outputObservers: [UUID: ([UInt8]) -> Void] = [:]
 
-    static let defaultFont = NSFont(name: "SFMono-Regular", size: 12.5) ?? .monospacedSystemFont(ofSize: 12.5, weight: .regular)
+    static let defaultFont = font(12.5)
+    /// In the dock: small enough that a column beside the board holds a program's 80 columns.
+    static let compactFont = font(10)
+
+    private static func font(_ size: CGFloat) -> NSFont {
+        NSFont(name: "SFMono-Regular", size: size) ?? .monospacedSystemFont(ofSize: size, weight: .regular)
+    }
 
     /// `label` names the tile until the program sets its own title (defaults to the command);
     /// `title` is a user-chosen name that always wins.
@@ -302,6 +308,12 @@ public final class TerminalSession: NSObject {
     }
 
     public var terminal: Terminal { view.getTerminal() }
+
+    /// A docked terminal is drawn smaller than an open one (its program is told its new size).
+    public func setCompact(_ compact: Bool) {
+        let font = compact ? Self.compactFont : Self.defaultFont
+        if view.font != font { view.font = font }
+    }
 
     public func setViewed(_ viewed: Bool) {
         tracker.isBeingViewed = viewed
