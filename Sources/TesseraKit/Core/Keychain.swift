@@ -18,14 +18,31 @@ public enum Keychain {
     }
 
     public static func get(account: String, service: String = Keychain.service) -> String? {
+        try? read(account: account, service: service)
+    }
+
+    /// The item's secret, or nil when there is no such item. Throws when it exists but can't be read
+    /// (e.g. access denied), so that is never mistaken for "absent" and overwritten.
+    public static func read(account: String, service: String = Keychain.service) throws -> String? {
         let query: [String: Any] = [kSecClass as String: kSecClassGenericPassword,
                                     kSecAttrService as String: service,
                                     kSecAttrAccount as String: account,
                                     kSecReturnData as String: true,
                                     kSecMatchLimit as String: kSecMatchLimitOne]
         var out: CFTypeRef?
-        guard SecItemCopyMatching(query as CFDictionary, &out) == errSecSuccess, let data = out as? Data else { return nil }
+        let status = SecItemCopyMatching(query as CFDictionary, &out)
+        guard status != errSecItemNotFound else { return nil }
+        guard status == errSecSuccess, let data = out as? Data else { throw NSError(domain: NSOSStatusErrorDomain, code: Int(status)) }
         return String(data: data, encoding: .utf8)
+    }
+
+    /// Whether the item exists. Reads no secret, so it never raises a Keychain prompt.
+    public static func contains(account: String) -> Bool {
+        let query: [String: Any] = [kSecClass as String: kSecClassGenericPassword,
+                                    kSecAttrService as String: service,
+                                    kSecAttrAccount as String: account,
+                                    kSecMatchLimit as String: kSecMatchLimitOne]
+        return SecItemCopyMatching(query as CFDictionary, nil) == errSecSuccess
     }
 
     /// Any generic password by service name alone (used to read Claude Code's own sign-in).

@@ -274,6 +274,19 @@ final class UsageAPITests: XCTestCase {
     }
 }
 
+final class KeychainTests: XCTestCase {
+    /// "No such item" is an answer, not a failure: only unreadable items throw.
+    func testPresenceWithoutReadingTheSecret() throws {
+        let account = "tessera-test-\(UUID().uuidString)"
+        XCTAssertFalse(Keychain.contains(account: account))
+        XCTAssertNil(try Keychain.read(account: account))
+        Keychain.set("secret", account: account)
+        defer { Keychain.set(nil, account: account) }
+        XCTAssertTrue(Keychain.contains(account: account))
+        XCTAssertEqual(try Keychain.read(account: account), "secret")
+    }
+}
+
 final class ClaudeOAuthTests: XCTestCase {
     let now = Date(timeIntervalSince1970: 1_800_000_000)
     func credentials(expiresIn: TimeInterval) -> String {

@@ -27,12 +27,18 @@ public final class HostServer {
 
     public init(workspace: Workspace) {
         self.workspace = workspace
-        if let saved = Keychain.get(account: "pairing-code") {
-            pairingCode = saved
-        } else {
-            let fresh = SecureChannel.makePairingCode()
-            Keychain.set(fresh, account: "pairing-code")
-            pairingCode = fresh
+        do {
+            if let saved = try Keychain.read(account: "pairing-code") {
+                pairingCode = saved
+            } else {
+                let fresh = SecureChannel.makePairingCode()
+                Keychain.set(fresh, account: "pairing-code")
+                pairingCode = fresh
+            }
+        } catch {
+            // Saved but not readable right now (access denied): use a code for this session only,
+            // never replacing the one the phone is paired with.
+            pairingCode = SecureChannel.makePairingCode()
         }
         if let id = Preferences.store.string(forKey: "tessera.hostId") {
             hostId = id

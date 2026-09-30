@@ -54,15 +54,7 @@ public final class UsageService {
     public func add(_ config: UsageProviderConfig, key: String?) {
         configs.removeAll { $0.id == config.id }
         configs.append(config)
-        if let key { Keychain.set(key, account: "provider." + config.id) }
-        save()
-        refresh(config, force: true)
-    }
-
-    public func update(_ config: UsageProviderConfig, key: String?) {
-        guard let i = configs.firstIndex(where: { $0.id == config.id }) else { return add(config, key: key) }
-        configs[i] = config
-        if let key { Keychain.set(key, account: "provider." + config.id) }
+        if let key { Keychain.set(key, account: Self.account(config.id)) }
         save()
         refresh(config, force: true)
     }
@@ -70,7 +62,7 @@ public final class UsageService {
     public func remove(id: String) {
         configs.removeAll { $0.id == id }
         readings[id] = nil
-        Keychain.set(nil, account: "provider." + id)
+        Keychain.set(nil, account: Self.account(id))
         save()
     }
 
@@ -87,7 +79,10 @@ public final class UsageService {
         save()
     }
 
-    public func hasKey(_ id: String) -> Bool { Keychain.get(account: "provider." + id) != nil }
+    /// Checked without reading the key, so rendering never raises a Keychain prompt.
+    public func hasKey(_ id: String) -> Bool { Keychain.contains(account: Self.account(id)) }
+
+    private static func account(_ id: String) -> String { "provider." + id }
 
     public func refreshAll() {
         for c in configs { refresh(c) }
@@ -121,12 +116,12 @@ public final class UsageService {
         readings[config.id] = current
 
         lastAttempt[config.id] = now
-        let secret = Keychain.get(account: "provider." + config.id)
+        let account = Self.account(config.id)
         Task { [session] in
-            // The Claude sign-in read can raise a Keychain prompt; keep it off the main thread.
-            let key: String? = config.kind == .claudePlan ? await ClaudeTokenCache.shared.token() : secret
+            // Reading a secret can raise a Keychain prompt; keep it off the main thread.
+            let key = await Task.detached(priority: .utility) { Keychain.get(account: account) }.value
             guard let request = UsageAPI.request(for: config, key: key) else {
-                self.readings[config.id] = self.failure(config, config.kind == .claudePlan ? "Sign in to Claude Code first" : "Incomplete configuration")
+                self.readings[config.id] = self.failure(config, "Incomplete configuration")
                 return
             }
             do {
@@ -137,10 +132,7 @@ public final class UsageService {
                     self.backOff(config, retryAfter: http?.value(forHTTPHeaderField: "Retry-After"), code: code)
                     return
                 }
-                guard (200..<300).contains(code) else {
-                    if code == 401, config.kind == .claudePlan { await ClaudeTokenCache.shared.invalidate() }
-                    throw UsageAPI.Failure.http(code, String(decoding: data, as: UTF8.self))
-                }
+                guard (200..<300).contains(code) else { throw UsageAPI.Failure.http(code, String(decoding: data, as: UTF8.self)) }
                 self.readings[config.id] = try UsageAPI.parse(data, for: config)
                 self.failures[config.id] = nil
                 self.retryAt[config.id] = nil
