@@ -19,7 +19,9 @@ final class ZstdTail {
         var (decoded, consumed) = Self.decodeCompleteFrames(data)
         // A frame bigger than what was read: read on until it completes (or the file ends).
         while consumed == 0, !data.isEmpty, UInt64(data.count) < size - offset {
-            data.append(handle.readData(ofLength: data.count))
+            let more = handle.readData(ofLength: data.count)
+            if more.isEmpty { break }  // cut short under us
+            data.append(more)
             (decoded, consumed) = Self.decodeCompleteFrames(data)
         }
         offset += UInt64(consumed)

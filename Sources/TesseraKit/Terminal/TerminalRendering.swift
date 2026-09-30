@@ -198,6 +198,8 @@ public final class MiniTerminalRenderer {
     private func color(_ c: RGB, alpha: CGFloat = 1) -> CGColor {
         let key = ColorKey(rgb: c, alpha: alpha)
         if let hit = colorCache[key] { return hit }
+        // Truecolor output (images, gradients) brings new colors without end.
+        if colorCache.count >= 4096 { colorCache.removeAll(keepingCapacity: true) }
         let made = c.cgColor(alpha: alpha)
         colorCache[key] = made
         return made
