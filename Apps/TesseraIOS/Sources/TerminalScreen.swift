@@ -178,8 +178,7 @@ struct LaunchSheet: View {
                     ForEach(session.launchers) { preset in
                         Button {
                             // App presets start a conversation in the Mac's Claude or Codex app.
-                            let app: AgentApp? = preset.flavor == .claudeDesktop ? .claude : preset.flavor == .codexDesktop ? .codex : nil
-                            session.send(.launch(app.map { LaunchRequest(app: $0) } ?? LaunchRequest(command: preset.command)))
+                            session.send(.launch(AgentApp(flavor: preset.flavor).map { LaunchRequest(app: $0) } ?? LaunchRequest(command: preset.command)))
                             dismiss()
                         } label: {
                             Label(preset.name, systemImage: preset.flavor.symbol).foregroundStyle(Style.accent(preset.flavor))

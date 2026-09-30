@@ -176,16 +176,19 @@ struct TileDetail: View {
         .navigationTitle(info?.title ?? "")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                Menu {
-                    Button { session.action(.openOnHost, on: id) } label: { Label("Open on Mac", systemImage: "desktopcomputer") }
-                    if info?.kind == .terminal {
-                        Button { session.action(.restart, on: id) } label: { Label("Restart", systemImage: "arrow.clockwise") }
-                    }
-                    Button(role: .destructive) { session.action(.close, on: id) } label: {
-                        Label(info?.kind == .agentSession ? "Hide" : "Close", systemImage: "xmark")
-                    }
-                } label: { Image(systemName: "ellipsis.circle") }
+            // A tile closed on the Mac has nothing left to act on.
+            if let kind = info?.kind {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Menu {
+                        Button { session.action(.openOnHost, on: id) } label: { Label("Open on Mac", systemImage: "desktopcomputer") }
+                        if kind == .terminal {
+                            Button { session.action(.restart, on: id) } label: { Label("Restart", systemImage: "arrow.clockwise") }
+                        }
+                        Button(role: .destructive) { session.action(.close, on: id) } label: {
+                            Label(kind.closeLabel, systemImage: kind.closeSymbol)
+                        }
+                    } label: { Image(systemName: "ellipsis.circle") }
+                }
             }
         }
         .onAppear {
