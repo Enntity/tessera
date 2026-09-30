@@ -66,6 +66,28 @@ final class StateFileTests: XCTestCase {
         XCTAssertEqual(saved.hidden, ["claude:y": Date(timeIntervalSince1970: 5)])
         XCTAssertEqual(saved.agentLookbackHours, 12)
     }
+
+    /// A closed tile is kept with what brings it back, across launches: an agent's command, folder
+    /// and conversation; a page's address.
+    func testRecentlyClosedTilesAreSaved() throws {
+        let board = try tempDir().appendingPathComponent("workspace.json")
+        let agent = ClosedTile(title: "Fix login", subtitle: "~/app",
+                               tile: .init(id: "t", kind: .terminal, command: "claude", cwd: "/app", sessionId: "S"), tab: "tab-1")
+        let page = ClosedTile(title: "Docs", subtitle: "example.com", tile: .init(id: "w", kind: .browser, url: "https://example.com"))
+        StateFile.save(Workspace.Saved(tiles: [], closed: [Lossy(page), Lossy(agent)]), to: board)
+        let closed = try XCTUnwrap(StateFile.load(Workspace.Saved.self, from: board)?.closed?.compactMap(\.value))
+        XCTAssertEqual(closed.map(\.id), ["w", "t"])
+        XCTAssertEqual(closed.map(\.kind), [.browser, .terminal])
+        XCTAssertEqual(closed[0].tile.url, "https://example.com")
+        XCTAssertEqual([closed[1].title, closed[1].tile.command, closed[1].tile.cwd, closed[1].tile.sessionId, closed[1].tab],
+                       ["Fix login", "claude", "/app", "S", "tab-1"])
+
+        // One this build can't read drops out alone, and boards saved before there was a list still load.
+        try Data(#"{"tiles":[],"closed":[{"title":"?","subtitle":"","tile":{"id":"x","kind":"hologram"}},{"title":"Docs","subtitle":"","tile":{"id":"w","kind":"browser"}}]}"#.utf8).write(to: board)
+        XCTAssertEqual(StateFile.load(Workspace.Saved.self, from: board)?.closed?.compactMap(\.value).map(\.id), ["w"])
+        try Data(#"{"tiles":[]}"#.utf8).write(to: board)
+        XCTAssertNil(try XCTUnwrap(StateFile.load(Workspace.Saved.self, from: board)).closed)
+    }
 }
 
 /// App sessions aren't saved as tiles, but their places on the board are.

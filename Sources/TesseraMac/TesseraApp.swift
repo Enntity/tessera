@@ -62,6 +62,9 @@ final class AppModel {
     private(set) var boardFocus = 0
     /// Bumped to put the cursor in the open web tile's address field (⌘L).
     private(set) var addressFocus = 0
+    /// The last close, while its toast offers to undo it.
+    private(set) var closedToast: ClosedToast?
+    @ObservationIgnored private var undoMarks: [UndoMark] = []
     @ObservationIgnored weak var window: NSWindow?
     @ObservationIgnored private var started = false
     @ObservationIgnored private var notifier: AttentionNotifier?
@@ -118,8 +121,12 @@ final class AppModel {
     /// app, landing where the opened tile would have. `inApp: false` shows such a conversation's
     /// transcript in Tessera instead.
     func open(_ id: String, inApp: Bool = true) {
-        let rect = openedRect(from: tileFrame(id)).flatMap(screenRect(fromWindow:))
-        act(Self.zoom) { workspace.open(id, inApp: inApp, nativeAt: rect) }
+        act(Self.zoom) { workspace.open(id, inApp: inApp, nativeAt: appRect(for: id)) }
+    }
+
+    /// Where the app's window goes when tile `id` opens in its app (AppKit screen coordinates).
+    private func appRect(for id: String) -> CGRect? {
+        openedRect(from: tileFrame(id)).flatMap(screenRect(fromWindow:))
     }
 
     /// Every way of starting a tile ends here: `make` starts it, and it opens at once.
@@ -132,9 +139,57 @@ final class AppModel {
         act(.spring(duration: 0.3, bounce: 0.05)) { workspace.collapse() }
     }
 
-    /// Closes a tile (an app conversation: hides it). Every close comes through here.
-    func close(_ id: String) {
-        act(.spring(duration: 0.3)) { workspace.close(id) }
+    /// Closes tiles (an app conversation: hides it), and offers the way back: a toast, and Undo on
+    /// the Edit menu (⌘Z). Every close comes through here.
+    func close(_ ids: [String]) {
+        var closed: [ClosedTile] = []
+        act(.spring(duration: 0.3)) {
+            closed = ids.compactMap(workspace.close)
+            if let first = closed.first {
+                let many = first.kind == .agentSession ? "conversations" : "tiles"
+                closedToast = ClosedToast(ids: closed.map(\.id), text: first.kind.closedLabel + " "
+                                          + (closed.count == 1 ? first.title.preview(40) : "\(closed.count) \(many)"))
+            }
+        }
+        guard let first = closed.first, let undo = window?.undoManager else { return }
+        let mark = UndoMark(ids: closed.map(\.id))
+        undoMarks.append(mark)
+        // Each close is an Undo of its own, however it arrives (a key, a menu, the phone): AppKit
+        // would group it with whatever else is registered before the next event.
+        undo.groupsByEvent = false
+        undo.beginUndoGrouping()
+        undo.registerUndo(withTarget: mark) { [weak self] mark in
+            self?.undoMarks.removeAll { $0 === mark }
+            self?.reopen(mark.ids)
+        }
+        undo.setActionName(first.kind == .agentSession ? "Hide Conversation" : "Close Tile")
+        undo.endUndoGrouping()
+        undo.groupsByEvent = true
+    }
+
+    func close(_ id: String) { close([id]) }
+
+    /// Brings closed tiles and hidden conversations back to their places (Undo, the toast, ⌘K's
+    /// "Reopen …", which also opens the tile).
+    func reopen(_ ids: [String], open: Bool = false) {
+        act(Self.zoom) {
+            let back = ids.filter(workspace.reopen)
+            if open, let id = back.first { workspace.open(id, nativeAt: appRect(for: id)) }
+            if let toast = closedToast, !toast.ids.contains(where: isClosed) { closedToast = nil }
+        }
+        // An Undo with nothing left to bring back leaves the Edit menu.
+        undoMarks.removeAll { mark in
+            guard !mark.ids.contains(where: isClosed) else { return false }
+            window?.undoManager?.removeAllActions(withTarget: mark)
+            return true
+        }
+    }
+
+    private func isClosed(_ id: String) -> Bool { workspace.recentlyClosed.tiles.contains { $0.id == id } }
+
+    /// The toast goes after a few seconds; Undo stays on the Edit menu.
+    func dismiss(_ toast: ClosedToast) {
+        if closedToast == toast { withAnimation(.spring(duration: 0.3)) { closedToast = nil } }
     }
 
     /// Tab clicks, ⌘1…9 and new tabs change the board itself, so an open panel closes first.
@@ -247,6 +302,20 @@ final class AppModel {
         if let sel = workspace.selectedId, let t = workspace.terminals[sel] { return t.cwd }
         return workspace.defaultDirectory
     }
+}
+
+/// What the toast says after a close, and the tiles its Undo brings back.
+struct ClosedToast: Equatable {
+    let ids: [String]
+    let text: String
+}
+
+/// The target of one close's Undo on the Edit menu, so that when its tiles come back some other
+/// way (the toast, ⌘K) that Undo can be taken off the menu.
+private final class UndoMark {
+    let ids: [String]
+
+    init(ids: [String]) { self.ids = ids }
 }
 
 struct BoardCommands: Commands {

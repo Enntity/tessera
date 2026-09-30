@@ -21,6 +21,13 @@ struct DashboardView: View {
                     }
                 }
             }
+            if let toast = model.closedToast {
+                UndoToast(toast: toast)
+                    .frame(maxHeight: .infinity, alignment: .bottom)
+                    .padding(.bottom, 26)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                    .zIndex(15)
+            }
             if model.showPalette {
                 CommandPalette()
                     .transition(.scale(scale: 0.97).combined(with: .opacity))
@@ -33,6 +40,37 @@ struct DashboardView: View {
         .ignoresSafeArea()
         .animation(.spring(duration: 0.25), value: model.showPalette)
         .onChange(of: model.showPalette) { _, shown in if !shown { model.restoreFocus() } }
+    }
+}
+
+/// After a close: what was closed and the way back, for a few seconds. (Undo stays on the Edit
+/// menu.)
+struct UndoToast: View {
+    @Environment(AppModel.self) private var model
+    let toast: ClosedToast
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Text(toast.text).font(Style.ui(12, .medium)).foregroundStyle(Style.ink).lineLimit(1)
+            Text("·").foregroundStyle(Style.faint)
+            Button { model.reopen(toast.ids) } label: {
+                HStack(spacing: 5) {
+                    Text("Undo").font(Style.ui(12, .semibold)).foregroundStyle(Style.cyan)
+                    Text("⌘Z").font(Style.mono(10)).foregroundStyle(Style.faint)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 8)
+        .background(Style.glass, in: Capsule())
+        .overlay(Capsule().strokeBorder(Style.ink.opacity(0.15)))
+        .shadow(color: .black.opacity(0.5), radius: 20, y: 8)
+        .task(id: toast) {
+            try? await Task.sleep(for: .seconds(8))
+            if !Task.isCancelled { model.dismiss(toast) }
+        }
     }
 }
 

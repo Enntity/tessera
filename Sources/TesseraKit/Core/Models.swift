@@ -10,6 +10,8 @@ public enum TileKind: String, Codable, Sendable {
     /// different from closing a terminal or page.
     public var closeLabel: String { self == .agentSession ? "Hide" : "Close" }
     public var closeSymbol: String { self == .agentSession ? "eye.slash" : "xmark" }
+    /// What the Undo toast says was done.
+    public var closedLabel: String { self == .agentSession ? "Hid" : "Closed" }
 }
 
 /// Which tool a tile belongs to. Drives accent color, glyph, and prompt heuristics.

@@ -40,6 +40,8 @@ public final class Workspace {
     public let boardHolder: pid_t?
     /// Kept current as tiles change (see `BoardState`).
     public private(set) var state = BoardState()
+    /// Tiles closed lately, newest first: Undo and ⌘K's "Reopen …" bring one back (see `reopen`).
+    public private(set) var recentlyClosed = RecentlyClosed<ClosedTile>()
     /// The tile ⌘J or a HUD counter last went to (see `next(in:)`).
     @ObservationIgnored private var visited: TileInfo?
 
@@ -191,17 +193,48 @@ public final class Workspace {
         save()
     }
 
-    /// Closes a terminal or page for good; an app conversation is only hidden until it is active again.
-    public func close(_ id: String) {
-        guard exists(id) else { return }
+    /// Closes a terminal or page, keeping what brings it back (see `reopen`): an agent in it is
+    /// stopped the way Shut Down stops it, its conversation kept. An app conversation is only hidden
+    /// until it is active again. Returns what was closed.
+    @discardableResult
+    public func close(_ id: String) -> ClosedTile? {
+        guard exists(id), let info = info(id) else { return nil }
         if expandedId == id { collapse() }
         let visible = visibleIds
+        // Read before the terminal ends: its folder comes from the live process.
+        let closed = ClosedTile(title: info.title, subtitle: info.subtitle, tile: savedTile(id) ?? .init(id: id, kind: info.kind),
+                                tab: groups.group(of: id)?.id)
         if let t = terminals.removeValue(forKey: id) { t.terminate() }
         if let b = browsers.removeValue(forKey: id) { b.webView.stopLoading() }
         if agents.sessions[id] != nil { hiddenAgents[id] = Date() } else { groups.assign(id, to: nil) }
+        // Its place as of now (an app session may have arrived since the board was last saved).
+        rememberOrder()
         order.removeAll { $0 == id }
         if selectedId == id { selectedId = Self.neighbor(of: id, in: visible) }
+        recentlyClosed.push(closed)
         save()
+        return closed
+    }
+
+    /// Brings back a tile closed lately, or a hidden conversation, to where it was: a terminal picks
+    /// its conversation up again in its folder, a page loads its address. False when there is
+    /// nothing to bring back.
+    @discardableResult
+    public func reopen(_ id: String) -> Bool {
+        let closed = recentlyClosed.take(id)
+        guard !exists(id) else { return false }
+        if hiddenAgents.removeValue(forKey: id) != nil {
+            syncAgents()
+        } else if let closed, revive(closed.tile, as: restorePlan(order.compactMap(savedTile) + [closed.tile])[id],
+                                     suspended: closed.tile.suspended == true) {
+            order.insert(id, at: Self.restoredIndex(of: id, saved: savedOrder, in: order))
+            groups.assign(id, to: closed.tab)
+        }
+        guard exists(id) else { return false }
+        // An open tile keeps the selection.
+        if expandedId == nil { select(id) }
+        save()
+        return true
     }
 
     /// What is selected once `id` leaves the tiles on show: the one that takes its place, else the
@@ -457,8 +490,12 @@ public final class Workspace {
         let newest = live.values.map(\.session).sorted { $0.lastActivityAt > $1.lastActivityAt }
         var added: [AgentAppSession] = []
         for a in newest where !order.contains(a.id) {
-            if let hidden = hiddenAgents[a.id], a.lastActivityAt <= hidden { continue }
-            hiddenAgents[a.id] = nil
+            if let hidden = hiddenAgents[a.id] {
+                if a.lastActivityAt <= hidden { continue }
+                // Active again, it is back by itself: there is nothing left to undo.
+                hiddenAgents[a.id] = nil
+                _ = recentlyClosed.take(a.id)
+            }
             if agentAcknowledged[a.id] == nil { agentAcknowledged[a.id] = .distantPast }
             order.insert(a.id, at: Self.restoredIndex(of: a.id, saved: savedOrder, in: order))
             added.append(a)
@@ -523,49 +560,17 @@ public final class Workspace {
 
     // MARK: Persistence
 
-    struct Saved: Codable {
-        struct Tile: Codable {
-            var id: String
-            var kind: TileKind
-            var command: String?
-            var cwd: String?
-            var title: String?
-            var url: String?
-            var sessionId: String?
-            var suspended: Bool?
-        }
-        var tiles: [Lossy<Tile>]
-        var defaultDirectory: String?
-        var placeNativeWindows: Bool?
-        var groups: [TileGroup]?
-        var resumeOnLaunch: Bool?
-        /// Every tile's place, app sessions included (they aren't in `tiles`).
-        var order: [String]?
-        /// App sessions the user closed, and when.
-        var hidden: [String: Date]?
-        var agentLookbackHours: Double?
-        /// Names the user gave app sessions (a terminal's or page's is in its tile).
-        var titles: [String: String]?
-    }
-
     private var saveURL: URL { directory.appendingPathComponent("workspace.json") }
 
     public func save() {
         var savedIds: Set<String> = []
-        let tiles: [Saved.Tile] = order.compactMap { id in
-            if let t = terminals[id] {
-                // Never record one conversation for two tiles; the later one will start fresh.
-                let session = t.sessionId.flatMap { savedIds.insert($0).inserted ? $0 : nil }
-                return .init(id: id, kind: .terminal, command: t.command, cwd: t.liveDirectory() ?? t.cwd, title: t.customTitle,
-                             sessionId: session, suspended: t.isSuspended)
-            }
-            if let b = browsers[id] { return .init(id: id, kind: .browser, title: b.customTitle, url: b.url?.absoluteString) }
-            return nil
+        let tiles: [Saved.Tile] = order.compactMap(savedTile).map { tile in
+            // Never record one conversation for two tiles; the later one will start fresh.
+            var tile = tile
+            tile.sessionId = tile.sessionId.flatMap { savedIds.insert($0).inserted ? $0 : nil }
+            return tile
         }
-        // App sessions not on the board now (closed, or not rescanned yet since launch) keep their places.
-        savedOrder = Self.persistedOrder(order, saved: savedOrder) { [agents] id in
-            agents.sessions[id] != nil || (!agents.hasScanned && id.contains(":"))
-        }
+        rememberOrder()
         // Closed longer ago than the lookback: that session can't be on the board anyway.
         let now = Date()
         hiddenAgents = hiddenAgents.filter { now.timeIntervalSince($0.value) < agents.lookback }
@@ -573,27 +578,53 @@ public final class Workspace {
         for id in agentTitles.keys where !savedOrder.contains(id) { agentTitles[id] = nil }
         StateFile.save(Saved(tiles: tiles.map(Lossy.init), defaultDirectory: defaultDirectory, placeNativeWindows: placeNativeWindows,
                              groups: groups.list, resumeOnLaunch: resumeOnLaunch, order: savedOrder, hidden: hiddenAgents,
-                             agentLookbackHours: agents.lookback / 3600, titles: agentTitles), to: saveURL)
+                             agentLookbackHours: agents.lookback / 3600, titles: agentTitles,
+                             closed: recentlyClosed.tiles.map(Lossy.init)), to: saveURL)
     }
 
-    /// Where a tile that reappears (an app session found again after launch) goes: right after the
-    /// nearest tile that preceded it when saved, at the front if none of those is on the board, or at
-    /// the end if it was never saved.
-    nonisolated static func restoredIndex(of id: String, saved: [String], in order: [String]) -> Int {
-        guard let i = saved.firstIndex(of: id) else { return order.endIndex }
-        for previous in saved[..<i].reversed() {
-            if let j = order.firstIndex(of: previous) { return j + 1 }
+    /// Notes every tile's place. App sessions not on the board now (closed, or not rescanned yet
+    /// since launch) keep theirs, as do tiles closed lately, for when they come back.
+    private func rememberOrder() {
+        let closed = Set(recentlyClosed.tiles.map(\.id))
+        savedOrder = Self.persistedOrder(order, saved: savedOrder) { [agents] id in
+            closed.contains(id) || agents.sessions[id] != nil || (!agents.hasScanned && id.contains(":"))
         }
-        return 0
     }
 
-    /// The board's order plus the saved ids `keep` wants remembered, each at its old place.
-    nonisolated static func persistedOrder(_ order: [String], saved: [String], keep: (String) -> Bool) -> [String] {
-        var result = order
-        for id in saved where !result.contains(id) && keep(id) {
-            result.insert(id, at: restoredIndex(of: id, saved: saved, in: result))
+    /// What it takes to bring a terminal or page back, as it is now.
+    private func savedTile(_ id: String) -> Saved.Tile? {
+        if let t = terminals[id] {
+            return .init(id: id, kind: .terminal, command: t.command, cwd: t.liveDirectory() ?? t.cwd, title: t.customTitle,
+                         sessionId: t.sessionId, suspended: t.isSuspended)
         }
-        return result
+        if let b = browsers[id] { return .init(id: id, kind: .browser, title: b.customTitle, url: b.url?.absoluteString) }
+        return nil
+    }
+
+    /// One tile per conversation; "continue latest" only where it can't collide (see RestorePlan).
+    private func restorePlan(_ tiles: [Saved.Tile]) -> [String: RestorePlan.Decision] {
+        RestorePlan.plan(tiles.filter { $0.kind == .terminal }.map { tile in
+            RestorePlan.Tile(id: tile.id, command: tile.command, cwd: tile.cwd ?? defaultDirectory, sessionId: tile.sessionId)
+        })
+    }
+
+    /// Makes a saved terminal or page a tile again (at launch, or reopened after a close); false
+    /// when it can't be. Its place on the board is the caller's to give.
+    private func revive(_ tile: Saved.Tile, as decision: RestorePlan.Decision?, suspended: Bool) -> Bool {
+        switch tile.kind {
+        case .terminal:
+            let cwd = tile.cwd.flatMap { FileManager.default.fileExists(atPath: $0) ? $0 : nil } ?? defaultDirectory
+            let decision = decision ?? RestorePlan.Decision(sessionId: nil, mayContinueLatest: false)
+            adopt(TerminalSession(id: tile.id, command: tile.command, cwd: cwd, title: tile.title, label: tile.command,
+                                  sessionId: decision.sessionId, resuming: true, mayContinueLatest: decision.mayContinueLatest,
+                                  startSuspended: suspended))
+        case .browser:
+            guard let url = tile.url.flatMap(URL.init(string:)) else { return false }
+            browsers[tile.id] = BrowserSession(id: tile.id, url: url, title: tile.title)
+        case .agentSession:
+            return false
+        }
+        return true
     }
 
     private func restore() {
@@ -609,29 +640,10 @@ public final class Workspace {
         hiddenAgents = saved.hidden ?? [:]
         agentTitles = saved.titles ?? [:]
         if let hours = saved.agentLookbackHours, AgentAppWatcher.lookbackHours.contains(hours) { agents.lookback = hours * 3600 }
-        // One tile per conversation; "continue latest" only where it can't collide (see RestorePlan).
-        let plan = RestorePlan.plan(tiles.filter { $0.kind == .terminal }.map { tile in
-            RestorePlan.Tile(id: tile.id, command: tile.command, cwd: tile.cwd ?? defaultDirectory, sessionId: tile.sessionId)
-        })
-        for tile in tiles {
-            switch tile.kind {
-            case .terminal:
-                let cwd = tile.cwd.flatMap { FileManager.default.fileExists(atPath: $0) ? $0 : nil } ?? defaultDirectory
-                let decision = plan[tile.id] ?? RestorePlan.Decision(sessionId: nil, mayContinueLatest: false)
-                let s = TerminalSession(id: tile.id, command: tile.command, cwd: cwd, title: tile.title, label: tile.command,
-                                        sessionId: decision.sessionId, resuming: true, mayContinueLatest: decision.mayContinueLatest,
-                                        startSuspended: tile.suspended == true || !resumeOnLaunch)
-                adopt(s)
-                order.append(s.id)
-            case .browser:
-                if let raw = tile.url, let url = URL(string: raw) {
-                    let b = BrowserSession(id: tile.id, url: url, title: tile.title)
-                    browsers[b.id] = b
-                    order.append(b.id)
-                }
-            case .agentSession:
-                break
-            }
+        recentlyClosed = RecentlyClosed(saved.closed?.compactMap(\.value) ?? [])
+        let plan = restorePlan(tiles)
+        for tile in tiles where revive(tile, as: plan[tile.id], suspended: tile.suspended == true || !resumeOnLaunch) {
+            order.append(tile.id)
         }
         selectedId = order.first
     }

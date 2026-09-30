@@ -57,3 +57,23 @@ final class AttentionQueueTests: XCTestCase {
         XCTAssertNil(state.waiting(in: ["w", "i", "f-seen"]))
     }
 }
+
+final class TileHistoryTests: XCTestCase {
+    private struct Closed: Identifiable, Equatable {
+        var id: String
+        var note = ""
+    }
+
+    func testRecentlyClosedKeepsTheLatestNewestFirst() {
+        var closed = RecentlyClosed<Closed>(limit: 3)
+        for id in ["a", "b", "c", "d"] { closed.push(Closed(id: id)) }
+        XCTAssertEqual(closed.tiles.map(\.id), ["d", "c", "b"])
+        // Closed again, a tile has one record: the new one.
+        closed.push(Closed(id: "b", note: "again"))
+        XCTAssertEqual(closed.tiles, [Closed(id: "b", note: "again"), Closed(id: "d"), Closed(id: "c")])
+        XCTAssertEqual(closed.take("d"), Closed(id: "d"))
+        XCTAssertNil(closed.take("d"))
+        XCTAssertEqual(closed.tiles.map(\.id), ["b", "c"])
+        XCTAssertEqual(RecentlyClosed([Closed(id: "x"), Closed(id: "y")], limit: 1).tiles.map(\.id), ["x"])
+    }
+}
