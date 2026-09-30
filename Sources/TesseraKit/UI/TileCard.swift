@@ -115,17 +115,16 @@ public struct StatePill: View {
     }
 }
 
-/// "Needs you" breathes amber; an unseen result (done, failed) holds a calm ring in its color.
+/// A slow breathing ring for unseen results; a rotating comet for "needs you".
 struct AttentionHalo: View {
     let activity: TileActivity
 
     var body: some View {
+        let color = Style.state(activity)
         if activity == .needsInput {
-            Ambient(.pulse(Style.amber, cornerRadius: 10, lineWidth: 2.5, low: 0.35, high: 1, period: 1.4))
+            Ambient(.comet(color, cornerRadius: 10, lineWidth: 2.5, period: 2.2))
         } else {
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .strokeBorder(Style.state(activity).opacity(0.8), lineWidth: 2)
-                .allowsHitTesting(false)
+            Ambient(.pulse(color, cornerRadius: 10, lineWidth: 2, low: 0.35, high: 0.95, period: 1.6))
         }
     }
 }

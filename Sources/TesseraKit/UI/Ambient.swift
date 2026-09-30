@@ -18,6 +18,8 @@ public struct Ambient: View {
         /// A rounded shape (an outline when `lineWidth` > 0, a capsule when `cornerRadius` is nil)
         /// breathing between two opacities.
         case pulse(Color, cornerRadius: CGFloat?, lineWidth: CGFloat = 0, low: Float, high: Float, period: Double)
+        /// A highlight circling a rounded outline.
+        case comet(Color, cornerRadius: CGFloat, lineWidth: CGFloat, period: Double)
         /// Three dots fading in turn.
         case dots(Color, size: CGFloat, spacing: CGFloat)
     }
@@ -125,6 +127,7 @@ final class AmbientView: PlatformView {
         let made: CALayer
         let target: CALayer
         let animation: CABasicAnimation
+        var timing = CAMediaTimingFunctionName.easeInEaseOut
         switch effect {
         case .sweep(let color):
             let gradient = CAGradientLayer()
@@ -157,6 +160,28 @@ final class AmbientView: PlatformView {
             animation.autoreverses = true
             made = shape
             target = shape
+        case .comet(let color, _, let lineWidth, let period):
+            let c = Self.cg(color)
+            let gradient = CAGradientLayer()
+            gradient.type = .conic
+            gradient.colors = [0.05, 1, 0.05, 0.05].compactMap { c.copy(alpha: $0) }
+            gradient.startPoint = CGPoint(x: 0.5, y: 0.5)
+            gradient.endPoint = CGPoint(x: 1, y: 0.5)
+            // The gradient turns behind an outline-shaped mask, so only the outline shows it.
+            let outline = CALayer()
+            outline.cornerCurve = .continuous
+            outline.borderWidth = lineWidth
+            outline.borderColor = CGColor(gray: 0, alpha: 1)
+            let ring = CALayer()
+            ring.mask = outline
+            ring.addSublayer(gradient)
+            animation = CABasicAnimation(keyPath: "transform.rotation.z")
+            animation.fromValue = 0
+            animation.toValue = Self.clockwise * 2 * Double.pi
+            animation.duration = period
+            timing = .linear
+            made = ring
+            target = gradient
         case .dots(let color, let size, let spacing):
             let dot = CALayer()
             dot.backgroundColor = Self.cg(color)
@@ -174,7 +199,7 @@ final class AmbientView: PlatformView {
             made = row
             target = dot
         }
-        animation.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+        animation.timingFunction = CAMediaTimingFunction(name: timing)
         animation.repeatCount = .infinity
         animation.isRemovedOnCompletion = false
         animated = (target, animation)
@@ -194,6 +219,13 @@ final class AmbientView: PlatformView {
             break
         case .pulse(_, let radius, _, _, _, _):
             content.cornerRadius = min(radius ?? .infinity, min(bounds.width, bounds.height) / 2)
+        case .comet(_, let radius, _, _):
+            content.mask?.frame = bounds
+            content.mask?.cornerRadius = radius
+            // A square that covers the outline at every angle.
+            let side = hypot(bounds.width, bounds.height)
+            content.sublayers?.first?.bounds = CGRect(x: 0, y: 0, width: side, height: side)
+            content.sublayers?.first?.position = CGPoint(x: bounds.midX, y: bounds.midY)
         case .dots(_, let size, _):
             content.sublayers?.first?.frame = CGRect(x: 0, y: (bounds.height - size) / 2, width: size, height: size)
         }
@@ -212,7 +244,10 @@ final class AmbientView: PlatformView {
 
     #if os(macOS)
     private static func cg(_ color: Color) -> CGColor { NSColor(color).cgColor }
+    /// AppKit layers count angles counter-clockwise (y points up); UIKit's count clockwise.
+    private static let clockwise = -1.0
     #else
     private static func cg(_ color: Color) -> CGColor { UIColor(color).cgColor }
+    private static let clockwise = 1.0
     #endif
 }
