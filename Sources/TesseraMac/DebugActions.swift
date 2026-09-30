@@ -212,6 +212,10 @@ extension AppModel {
             }),
             "dock": workspace.docked.map(title), "dockWidth": workspace.dockWidth ?? 0, "keyboardDock": title(keyboardDock),
             "density": density.minTileWidth, "columns": grid(count: workspace.visibleIds.count, in: boardFrame?.size ?? .zero).columns,
+            "hosted": workspace.order.compactMap { id -> String? in
+                guard let view: NSView = workspace.terminals[id]?.view ?? workspace.browsers[id]?.webView, let host = view.superview else { return nil }
+                return "\(title(id)): \(Int(view.frame.minX)),\(Int(view.frame.minY)) \(Int(view.frame.width))x\(Int(view.frame.height)) in \(Int(host.frame.width))x\(Int(host.frame.height))"
+            },
             "lane": showLane, "places": workspace.allTiles.map { "\($0.title): \($0.subtitle)" },
             "palette": showPalette ? "\(paletteMode)" : "",
             "firstResponder": window?.firstResponder.map { String(describing: type(of: $0)) } ?? "",

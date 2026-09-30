@@ -346,7 +346,8 @@ struct ReparentHost: NSViewRepresentable {
 
     func updateNSView(_ container: HostContainer, context: Context) {
         container.keyboard = keyboard
-        if container.hosted !== view {
+        // (A view left with no host at all is anyone's to take.)
+        if container.hosted !== view || view.superview == nil {
             container.adopt(view, focus: focus)
         } else if focus, view.superview === container, context.coordinator.take != take {
             container.takeKeyboard()
@@ -423,9 +424,9 @@ struct ScaledWebHost: NSViewRepresentable {
         return c
     }
 
-    func updateNSView(_ container: ScaledContainer, context: Context) {
-        if webView.superview !== container { container.adopt(webView) }
-    }
+    /// The page is the tile's from when this is made until another host is made for it (the open
+    /// panel, the dock): like `ReparentHost`, it never takes the page back.
+    func updateNSView(_ container: ScaledContainer, context: Context) {}
 
     static func dismantleNSView(_ container: ScaledContainer, coordinator: ()) {
         for sub in container.subviews { sub.removeFromSuperview() }
