@@ -148,7 +148,7 @@ public enum RemoteVitals {
             }
         }
         if let memTotal, let memAvail, memTotal > 0 {
-            r.memory = 1 - memAvail / memTotal
+            r.memory = min(1, max(0, 1 - memAvail / memTotal))
             r.memoryTotalGB = memTotal / 1_048_576
         }
         return r

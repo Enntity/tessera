@@ -478,6 +478,8 @@ final class RemoteVitalsTests: XCTestCase {
         XCTAssertNil(r.gpu)
         XCTAssertNil(r.gpuTemperature)
         XCTAssertNil(r.gpuPowerW)
+        // Memory stays a fraction however the two numbers relate.
+        XCTAssertEqual(RemoteVitals.parse("@memtotal 1e-300\n@memavail 1e11").memory, 0)
     }
 
     func testCPUUtilizationFromDeltas() {
