@@ -22,6 +22,9 @@ public struct CodexTranscriptParser: TranscriptParser {
     private var finalMessage: String?
     private var toolStartedAt: (name: String, at: Date)?
 
+    /// An open turn this quiet was left open, not working (see TranscriptSupport.openTurnActivity).
+    static let openTurnStaleAfter: TimeInterval = 15 * 60
+
     public init() {}
 
     public mutating func ingest(line: Substring) {
@@ -124,11 +127,8 @@ public struct CodexTranscriptParser: TranscriptParser {
             activity = .needsInput
             detail = approval
         } else if turnOpen {
-            let stale = lastEventAt.map { now.timeIntervalSince($0) > 900 } ?? true
-            activity = stale ? .idle : .working
-            if let tool = toolStartedAt {
-                detail = "Running \(tool.name) · \(ClaudeTranscriptParser.format(now.timeIntervalSince(tool.at)))"
-            }
+            activity = TranscriptSupport.openTurnActivity(lastEventAt: lastEventAt, now: now, staleAfter: Self.openTurnStaleAfter)
+            if let tool = toolStartedAt { detail = TranscriptSupport.running(tool.name, since: tool.at, now: now) }
         } else if finished {
             activity = .done
             detail = finalMessage

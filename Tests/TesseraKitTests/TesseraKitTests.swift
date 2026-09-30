@@ -183,6 +183,15 @@ final class TranscriptParserTests: XCTestCase {
         XCTAssertEqual(s.items.last?.text, "Fixed.")
     }
 
+    func testRunningToolAndStaleTurns() {
+        let now = Date(timeIntervalSince1970: 1_000_000)
+        XCTAssertEqual(TranscriptSupport.running("Bash", since: now.addingTimeInterval(-42), now: now), "Running Bash · 42s")
+        XCTAssertEqual(TranscriptSupport.running("Bash", since: now.addingTimeInterval(-65), now: now), "Running Bash · 1m 5s")
+        XCTAssertEqual(TranscriptSupport.openTurnActivity(lastEventAt: now.addingTimeInterval(-60), now: now, staleAfter: 600), .working)
+        XCTAssertEqual(TranscriptSupport.openTurnActivity(lastEventAt: now.addingTimeInterval(-601), now: now, staleAfter: 600), .idle)
+        XCTAssertEqual(TranscriptSupport.openTurnActivity(lastEventAt: nil, now: now, staleAfter: 600), .idle)
+    }
+
     func testClaudeStalledEditIsNeedsInput() {
         var p = ClaudeTranscriptParser()
         p.ingest(text: """

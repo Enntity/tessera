@@ -23,6 +23,8 @@ public struct ClaudeTranscriptParser: TranscriptParser {
     static let approvalGrace: TimeInterval = 20
     /// A tool pending this long belongs to an abandoned session, not a live one.
     static let abandonedAfter: TimeInterval = 30 * 60
+    /// An open turn this quiet was left open, not working (see TranscriptSupport.openTurnActivity).
+    static let openTurnStaleAfter: TimeInterval = 10 * 60
 
     public init() {}
 
@@ -153,20 +155,18 @@ public struct ClaudeTranscriptParser: TranscriptParser {
         var detail: String?
         if let (name, since) = pending.values.min(by: { $0.since < $1.since }),
            now.timeIntervalSince(lastEventAt ?? since) < Self.abandonedAfter {
-            let age = now.timeIntervalSince(since)
             if Self.userDirectedTools.contains(name) {
                 activity = .needsInput
                 detail = name == "AskUserQuestion" ? "Asking you a question" : "Plan ready for review"
-            } else if Self.instantTools.contains(name), age > Self.approvalGrace {
+            } else if Self.instantTools.contains(name), now.timeIntervalSince(since) > Self.approvalGrace {
                 activity = .needsInput
                 detail = "Waiting to approve \(name)"
             } else {
                 activity = .working
-                detail = "Running \(name) · \(Self.format(age))"
+                detail = TranscriptSupport.running(name, since: since, now: now)
             }
         } else if turnOpen {
-            let stale = lastEventAt.map { now.timeIntervalSince($0) > 600 } ?? true
-            activity = stale ? .idle : .working
+            activity = TranscriptSupport.openTurnActivity(lastEventAt: lastEventAt, now: now, staleAfter: Self.openTurnStaleAfter)
         } else if !subagents.isEmpty,
                   let last = [lastEventAt, subagentActivity].compactMap({ $0 }).max(),
                   now.timeIntervalSince(last) < Self.abandonedAfter {
@@ -181,10 +181,5 @@ public struct ClaudeTranscriptParser: TranscriptParser {
         }
         return ConversationSnapshot(items: items, activity: activity, detail: detail, model: model,
                                     lastEventAt: lastEventAt, contextTokens: contextTokens)
-    }
-
-    static func format(_ seconds: TimeInterval) -> String {
-        let s = max(0, Int(seconds))
-        return s < 60 ? "\(s)s" : "\(s / 60)m \(s % 60)s"
     }
 }

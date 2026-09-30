@@ -17,6 +17,9 @@ public struct DshTranscriptParser: TranscriptParser {
     private var approvals: [String: String] = [:]
     private var pendingTools: [String: (name: String, at: Date)] = [:]
 
+    /// An open turn this quiet was left open, not working (see TranscriptSupport.openTurnActivity).
+    static let openTurnStaleAfter: TimeInterval = 15 * 60
+
     public init() {}
 
     public mutating func ingest(line: Substring) {
@@ -97,11 +100,9 @@ public struct DshTranscriptParser: TranscriptParser {
             activity = .needsInput
             detail = ask
         } else if turnOpen {
-            // A turn left open by a crash or a closed harness shouldn't read as working forever.
-            let stale = lastEventAt.map { now.timeIntervalSince($0) > 900 } ?? true
-            activity = stale ? .idle : .working
+            activity = TranscriptSupport.openTurnActivity(lastEventAt: lastEventAt, now: now, staleAfter: Self.openTurnStaleAfter)
             if let tool = pendingTools.values.min(by: { $0.at < $1.at }) {
-                detail = "Running \(tool.name) · \(ClaudeTranscriptParser.format(now.timeIntervalSince(tool.at)))"
+                detail = TranscriptSupport.running(tool.name, since: tool.at, now: now)
             }
         } else if let end = lastTurnEnd {
             activity = end == "completed" ? .done : .idle

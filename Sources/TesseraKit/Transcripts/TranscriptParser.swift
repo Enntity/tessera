@@ -59,6 +59,18 @@ enum TranscriptSupport {
         return ""
     }
 
+    /// `Running Bash · 1m 5s`: the tool call in progress and how long it has run.
+    static func running(_ name: String, since: Date, now: Date) -> String {
+        let s = max(0, Int(now.timeIntervalSince(since)))
+        return "Running \(name) · " + (s < 60 ? "\(s)s" : "\(s / 60)m \(s % 60)s")
+    }
+
+    /// An open turn is working until it has been quiet for `staleAfter`; then it was left open (a
+    /// crash, a closed app) and reads as idle.
+    static func openTurnActivity(lastEventAt: Date?, now: Date, staleAfter: TimeInterval) -> TileActivity {
+        lastEventAt.map { now.timeIntervalSince($0) <= staleAfter } == true ? .working : .idle
+    }
+
     static func append(_ item: ConversationItem, to items: inout [ConversationItem]) {
         items.append(item)
         if items.count > maxItems { items.removeFirst(items.count - maxItems) }
