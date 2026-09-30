@@ -3,7 +3,7 @@ import PackageDescription
 
 let package = Package(
     name: "Tessera",
-    platforms: [.macOS(.v14), .iOS(.v17)],
+    platforms: [.macOS(.v15), .iOS(.v17)],
     products: [
         .library(name: "TesseraKit", targets: ["TesseraKit"]),
         .library(name: "TesseraHost", targets: ["TesseraHost"]),

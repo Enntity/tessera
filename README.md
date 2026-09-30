@@ -153,7 +153,7 @@ empty name goes back to the tile's own title.
 
 ## Build and run
 
-Requires macOS 14+ and Xcode 26 (Swift 6 toolchain); the iOS companion needs iOS 17+.
+Requires macOS 15+ and Xcode 26 (Swift 6 toolchain); the iOS companion needs iOS 17+.
 
 ```bash
 swift test                          # core tests (parsers, attention, layout, usage APIs, TLS channel)

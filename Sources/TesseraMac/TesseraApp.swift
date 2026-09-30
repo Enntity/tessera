@@ -18,6 +18,7 @@ struct TesseraApp: App {
         }
         .windowStyle(.hiddenTitleBar)
         .defaultSize(width: 1680, height: 1000)
+        .alwaysPresented()
         .commands { BoardCommands(model: model) }
 
         Settings {
@@ -25,6 +26,14 @@ struct TesseraApp: App {
                 .environment(model)
                 .preferredColorScheme(.dark)
         }
+    }
+}
+
+extension Scene {
+    /// The board restores itself, so the system's window restoration only gets in the way: state
+    /// saved with no window open (a copy killed mid-run) would bring Tessera back with no board.
+    func alwaysPresented() -> some Scene {
+        defaultLaunchBehavior(.presented).restorationBehavior(.disabled)
     }
 }
 
