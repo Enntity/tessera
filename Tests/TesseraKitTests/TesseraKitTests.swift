@@ -24,15 +24,13 @@ final class GridLayoutTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(g.tileSize.width, 200)
     }
 
-    func testOriginCentresGridAndTopAlignsWhenScrolling() {
-        let fits = GridLayout.fit(count: 2, in: CGSize(width: 1000, height: 1000), spacing: 10)
-        XCTAssertFalse(fits.scrolls)
-        let first = fits.origin(of: 0, in: CGSize(width: 1000, height: 1000))
-        let last = fits.origin(of: 1, in: CGSize(width: 1000, height: 1000))
-        // Centred: equal margins on both sides, in both directions.
-        let right = 1000 - (last.x + fits.tileSize.width), bottom = 1000 - (last.y + fits.tileSize.height)
-        XCTAssertEqual(first.x, right, accuracy: 0.5)
-        XCTAssertEqual(first.y, bottom, accuracy: 0.5)
+    func testGridStartsAtTheTopCentredAcross() {
+        // 810 wide in 1000: the room left over is shared across, and all of it is below.
+        let area = CGSize(width: 1000, height: 1000)
+        let grid = GridLayout(columns: 2, rows: 2, tileSize: CGSize(width: 400, height: 250), spacing: 10, scrolls: false)
+        XCTAssertEqual(grid.origin(of: 0, in: area), CGPoint(x: 95, y: 0))
+        XCTAssertEqual(grid.origin(of: 1, in: area), CGPoint(x: 505, y: 0))
+        XCTAssertEqual(grid.origin(of: 2, in: area), CGPoint(x: 95, y: 260))
         let scrolling = GridLayout.fit(count: 200, in: CGSize(width: 1000, height: 600), spacing: 10, minTileWidth: 200)
         XCTAssertTrue(scrolling.scrolls)
         XCTAssertEqual(scrolling.origin(of: 0, in: CGSize(width: 1000, height: 600)).y, 0)

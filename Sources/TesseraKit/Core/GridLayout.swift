@@ -41,16 +41,15 @@ public struct GridLayout: Equatable, Sendable {
         return best
     }
 
-    /// Top-left origin of tile `index`, with the whole grid centred in `size`.
+    /// Top-left origin of tile `index`: the grid starts at the top of `size`, centred across it, so
+    /// the first row lines up with what is beside the board and any room left over is below.
     public func origin(of index: Int, in size: CGSize) -> CGPoint {
         let col = index % max(columns, 1)
         let row = index / max(columns, 1)
         let usedW = CGFloat(columns) * tileSize.width + CGFloat(columns - 1) * spacing
-        let usedH = CGFloat(rows) * tileSize.height + CGFloat(max(rows - 1, 0)) * spacing
         let x0 = max(0, (size.width - usedW) / 2)
-        let y0 = scrolls ? 0 : max(0, (size.height - usedH) / 2)
         return CGPoint(x: x0 + CGFloat(col) * (tileSize.width + spacing),
-                       y: y0 + CGFloat(row) * (tileSize.height + spacing))
+                       y: CGFloat(row) * (tileSize.height + spacing))
     }
 
     public var contentHeight: CGFloat {
