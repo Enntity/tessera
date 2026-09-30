@@ -202,7 +202,9 @@ struct AgentPanel: View {
             HStack(spacing: Style.Space.gutter) {
                 if let model = session?.snapshot.model { Tag(text: model) }
                 if let tokens = session?.snapshot.contextTokens { Tag(text: "\(tokens.compactTokens) ctx") }
-                if let summary = session?.summary { Text(summary).font(Style.caption).foregroundStyle(Style.dim).lineLimit(1) }
+                if let summary = session?.summary {
+                    Text(summary.obscured(model.privacyMode)).font(Style.caption).foregroundStyle(Style.dim).lineLimit(1)
+                }
                 Spacer()
                 if isDsh {
                     Picker("", selection: $showLive) {
