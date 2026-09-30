@@ -393,6 +393,7 @@ struct TabChip: View {
     var dropTile: ((String) -> Void)?
     let action: () -> Void
     @State private var targeted = false
+    @State private var hovering = false
 
     var body: some View {
         Button(action: action) {
@@ -412,11 +413,13 @@ struct TabChip: View {
             .foregroundStyle(selected ? Style.ink : Style.dim)
             .padding(.horizontal, Style.Space.gutter)
             .frame(height: Style.Metrics.control)
-            .background(selected ? Style.Neutral.selected : .clear, in: Capsule())
+            .background(selected ? Style.Neutral.selected : hovering ? Style.Neutral.hover : .clear, in: Capsule())
             .overlay(Capsule().strokeBorder(targeted ? Style.Neutral.focus : .clear, lineWidth: 1.5))
             .contentShape(Capsule())
         }
         .buttonStyle(.plain)
+        .onHover { hovering = $0 }
+        .animation(Style.Motion.quick, value: hovering)
         .onDrop(of: [.text], isTargeted: dropTile == nil ? nil : $targeted) { providers in
             guard let dropTile else { return false }
             return providers.loadTileId { dropTile($0) }

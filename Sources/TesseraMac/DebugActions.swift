@@ -10,7 +10,8 @@ extension AppModel {
         if let actions = ProcessInfo.processInfo.environment["TESSERA_DEBUG_ACTIONS"] {
             runDebugActions(actions.split(separator: ";").map(String.init))
         }
-        if let path = ProcessInfo.processInfo.environment["TESSERA_SNAPSHOT"] {
+        // (Encoding a large window takes long enough to hold everything up; `shot=` alone does without.)
+        if let path = ProcessInfo.processInfo.environment["TESSERA_SNAPSHOT"], !path.isEmpty {
             Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
                 MainActor.assumeIsolated { self?.writeSnapshot(of: self?.window, to: path) }
             }

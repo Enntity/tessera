@@ -2,6 +2,7 @@
 # Development: build a debug copy, launch it with scripted actions, and write window captures to $1.
 # Runs from its own bundle and data folder, so a Tessera you're actually using is left alone.
 # Usage: scripts/debug-run.sh /tmp/snap.png "launch=htop;wait=2;open=terminal"
+# The PNG is rewritten every 2 s; pass "" to take captures only where the actions say (shot=<png>).
 # With TESSERA_DEBUG_HOME=<dir> the copy takes <dir> for the home folder: a board with none of your
 # Claude, Codex or dsh sessions on it.
 set -euo pipefail
