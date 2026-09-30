@@ -68,8 +68,8 @@ public struct TileCard<Content: View>: View {
     private var edge: (color: Color, width: CGFloat) {
         let color = Style.state(info.activity)
         switch info.activity {
-        case .needsInput: return (color, 1.5)
-        case .failed where info.attention: return (color, 1.5)
+        case .needsInput: return (color, Style.Metrics.edge)
+        case .failed where info.attention: return (color, Style.Metrics.edge)
         case .failed: return (color.opacity(Style.Tint.stroke), 1)
         case .done where info.attention: return (color.opacity(Style.Tint.stroke), 1)
         default: return (isHovered ? Style.Neutral.borderHover : Style.Neutral.border, 1)

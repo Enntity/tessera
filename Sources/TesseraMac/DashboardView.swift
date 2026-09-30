@@ -208,7 +208,7 @@ struct HUDBar: View {
 struct Wordmark: View {
     var body: some View {
         HStack(spacing: Style.Space.m) {
-            TesseraGlyph().frame(width: 16, height: 16)
+            TesseraGlyph().frame(width: Style.Space.xl, height: Style.Space.xl)
             // The one text outside the type ramp.
             Text("TESSERA")
                 .font(Style.ui(12, .heavy))
@@ -446,7 +446,7 @@ struct TabStrip: View {
     private func nameField(_ prompt: String, commit: @escaping (String) -> Void) -> some View {
         TextField(prompt, text: $draft)
             .textFieldStyle(.roundedBorder)
-            .frame(width: 200)
+            .frame(width: Style.Metrics.nameField)
             .padding(Style.Space.gutter)
             .onSubmit {
                 commit(draft)
@@ -497,7 +497,7 @@ struct TabChip: View {
             .fixedSize()
             .background(selected ? Style.Neutral.selected : hovering ? Style.Neutral.hover : .clear, in: Capsule())
             .overlay { if outlined { Capsule().strokeBorder(selected ? Style.Neutral.focus : Style.Neutral.border) } }
-            .overlay(Capsule().strokeBorder(targeted ? Style.Neutral.focus : .clear, lineWidth: 1.5))
+            .overlay(Capsule().strokeBorder(targeted ? Style.Neutral.focus : .clear, lineWidth: Style.Metrics.edge))
             .contentShape(Capsule())
         }
         .buttonStyle(.plain)

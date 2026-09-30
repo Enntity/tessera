@@ -207,7 +207,7 @@ struct TileView: View {
 
     var body: some View {
         let workspace = model.workspace
-        let compact = size.width < 280
+        let compact = size.width < Style.Metrics.compactTile
         // (An open tile's panel says it is the one; its ring would only show past the panel's edge.)
         TileCard(info: info, isSelected: workspace.selectedId == info.id && workspace.expandedId != info.id, isHovered: hovering, compact: compact,
                  mark: workspace.dock.contains(info.id) ? AppModel.dockSymbol : nil) {
@@ -275,7 +275,7 @@ struct TileHoverControls: View {
         Button(action: action.run) {
             Image(systemName: action.symbol)
                 .font(Style.ui(.caption, .bold))
-                .frame(width: 20, height: 20)
+                .frame(width: Style.Metrics.key, height: Style.Metrics.key)
                 .background(Style.scrim, in: Circle())
                 .foregroundStyle(Style.ink)
         }

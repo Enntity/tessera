@@ -19,7 +19,7 @@ public struct ConversationDetail: View {
                     }
                 }
                 .padding(Style.Space.l)
-                .frame(maxWidth: 980, alignment: .leading)
+                .frame(maxWidth: Style.Metrics.measure, alignment: .leading)
                 .frame(maxWidth: .infinity)
             }
             .onAppear { proxy.scrollTo(snapshot?.items.last?.id, anchor: .bottom) }

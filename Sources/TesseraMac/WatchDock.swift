@@ -35,7 +35,7 @@ struct WatchDockColumn: View {
             .padding(Style.Space.l)
         }
         .chromeSurface(rule: .leading)
-        .overlay { if targeted { Rectangle().strokeBorder(Style.Neutral.focus, lineWidth: 1.5).allowsHitTesting(false) } }
+        .overlay { if targeted { Rectangle().strokeBorder(Style.Neutral.focus, lineWidth: Style.Metrics.edge).allowsHitTesting(false) } }
         .onDrop(of: [.text], isTargeted: $targeted) { providers in providers.loadTileId { model.setDocked($0, true) } }
         .overlay(alignment: .leading) { DockGrip(width: width, widest: widest) }
         .animation(Style.Motion.standard, value: ids)

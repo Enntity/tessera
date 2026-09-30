@@ -42,13 +42,13 @@ struct CommandPalette: View {
                         }
                         .padding(Style.Space.s)
                     }
-                    .frame(maxHeight: 380)
+                    .frame(maxHeight: Style.Metrics.palette.height)
                     .onChange(of: selection) { _, s in proxy.scrollTo(s) }
                 }
             }
-            .frame(width: 640)
+            .frame(width: Style.Metrics.palette.width)
             .overlaySurface()
-            .padding(.top, 120)
+            .padding(.top, Style.Metrics.paletteTop)
         }
         .onAppear { focused = true }
         .onChange(of: query) { _, _ in selection = 0 }

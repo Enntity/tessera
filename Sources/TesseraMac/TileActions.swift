@@ -110,7 +110,7 @@ struct RenamePopover: ViewModifier {
             .popover(isPresented: $isPresented) {
                 TextField("Title", text: $draft)
                     .textFieldStyle(.roundedBorder)
-                    .frame(width: 240)
+                    .frame(width: Style.Metrics.nameField)
                     .padding(Style.Space.gutter)
                     .onAppear { draft = info.title }
                     .onSubmit {

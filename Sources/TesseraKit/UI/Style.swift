@@ -187,8 +187,19 @@ public enum Style {
         public static let filterMin: CGFloat = 120
         /// A state's dot.
         public static let dot: CGFloat = 5
-        /// How tall a one-tap answer's key is, in a row of the lane.
+        /// A small control: a one-tap answer's key in a row of the lane, a button on a hovered tile.
         public static let key: CGFloat = 20
+        /// A lit edge: a tile that waits on the user, what a drag is over.
+        public static let edge: CGFloat = 1.5
+        /// Narrower than this, a tile's header and footer tighten.
+        public static let compactTile: CGFloat = 280
+        /// The command palette: how wide it is and how tall its list gets, and how far down it sits.
+        public static let palette = CGSize(width: 640, height: 380)
+        public static let paletteTop: CGFloat = 120
+        /// A field in a popover: a tab's name, a tile's.
+        public static let nameField: CGFloat = 240
+        /// The widest a transcript's lines run.
+        public static let measure: CGFloat = 980
         /// A load's sparkline on a machine chip; a chip stacks two in a control's height.
         public static let spark = CGSize(width: 36, height: 8)
         /// A selected tile's ring, and the gap between it and the tile's edge.
