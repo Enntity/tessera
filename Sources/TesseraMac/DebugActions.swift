@@ -23,9 +23,11 @@ extension AppModel {
     ///   `remote`, `pairurl=<file>`, `privacy`, `size=<w>x<h>`, `wait=<s>`;
     /// - what a user does: `select=<title>`, `open[=terminal|web|<title>|<id>]` (never an app conversation),
     ///   `click=<title>`, `dblclick=<title>`, `key=up,down,left,right,return,esc`, `type=<text>`,
-    ///   `cmd=[shift+][option+]<key>` (a ⌘ shortcut, through the menu bar), `closefront=<window title>`,
-    ///   `filter=all|attention|<tab>`;
-    /// - `dump=<file>`: what is selected, open and on show, and who has the keyboard, as JSON.
+    ///   `cmd=[shift+][option+]<key>` and `ctrl=<key>` (a ⌘ or ⌃ shortcut, through the menu bar; `<key>` may
+    ///   be `return` or `tab`), `undo` (Edit ▸ Undo, as whoever has the keyboard gets it), `run=<BoardCommand>`,
+    ///   `closefront=<window title>`, `filter=all|attention|<tab>`;
+    /// - `dump=<file>[?<query>]`: what is selected, open, on show, waiting and closed, who has the
+    ///   keyboard, and the palette's rows for `<query>`, as JSON.
     private func runDebugActions(_ actions: [String], after delay: Double = 2) {
         guard let first = actions.first else { return }
         DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [self] in
@@ -67,15 +69,17 @@ extension AppModel {
                     if let (code, chars) = keys[String(name)] { debugKey(chars, code: code, flags: code > 122 ? [.function, .numericPad] : []) }
                 }
             case "type": for c in arg { debugKey(String(c)) }
-            case "cmd":
+            case "cmd", "ctrl":
                 var names = arg.split(separator: "+").map(String.init)
                 let key = names.popLast() ?? ""
-                var flags: NSEvent.ModifierFlags = .command
+                var flags: NSEvent.ModifierFlags = parts[0] == "ctrl" ? .control : .command
                 if names.contains("shift") { flags.insert(.shift) }
                 if names.contains("option") { flags.insert(.option) }
-                if let event = debugKeyEvent(.keyDown, key == "return" ? "\r" : key, code: 0, flags: flags) {
+                if let event = debugKeyEvent(.keyDown, ["return": "\r", "tab": "\t"][key] ?? key, code: 0, flags: flags) {
                     NSApp.mainMenu?.performKeyEquivalent(with: event)
                 }
+            case "undo": window?.firstResponder?.tryToPerform(Selector(("undo:")), with: nil)
+            case "run": BoardCommand(rawValue: arg).map(run)
             case "filter":
                 onBoard { $0.filter = arg == "attention" ? .attention : $0.groups.list.first { $0.name == arg }.map { .group($0.id) } ?? .all }
             case "dump": debugDump(to: arg)
@@ -118,9 +122,13 @@ extension AppModel {
         }
     }
 
-    private func debugDump(to path: String) {
+    private func debugDump(to target: String) {
         func title(_ id: String?) -> String { id.flatMap(workspace.info)?.title ?? "" }
+        let parts = target.split(separator: "?", maxSplits: 1).map(String.init)
+        let path = parts[0]
         let key = NSApp.keyWindow
+        let board = workspace.state
+        let undo = window?.undoManager
         let state: [String: Any] = [
             "selected": title(workspace.selectedId), "open": title(workspace.expandedId),
             "panelOnScreen": workspace.expandedId.flatMap { workspace.terminals[$0]?.view.window ?? workspace.browsers[$0]?.webView.window } != nil,
@@ -134,6 +142,11 @@ extension AppModel {
             "windows": NSApp.windows.filter(\.isVisible).map(\.title),
             "scroll": boardScroll,
             "suspended": workspace.order.filter(workspace.isSuspended).map(title),
+            "queue": board.queue.map(title),
+            "counts": ["needsInput": board.needsInput.count, "failed": board.failed.count, "done": board.done.count, "working": board.working.count],
+            "closed": workspace.recentlyClosed.tiles.map(\.title), "hidden": workspace.hiddenTiles.map(\.title),
+            "toast": closedToast?.text ?? "", "undo": undo?.canUndo == true ? undo?.undoMenuItemTitle ?? "" : "",
+            "rows": paletteItems(parts.count > 1 ? parts[1] : "").map { "\($0.title) — \($0.subtitle)" },
             "wouldOpenInApp": WindowPlacer.dryRun ?? []
         ]
         try? JSONSerialization.data(withJSONObject: state, options: [.prettyPrinted, .sortedKeys]).write(to: URL(fileURLWithPath: path))

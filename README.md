@@ -29,7 +29,9 @@ Native macOS app, with a focused iOS companion built on the same core.
 - **Attention.** Output-then-silence → *Done* (green breathing ring). Permission prompts, `(y/n)`,
   "Do you want to…", OSC 9/777 notifications, Claude's own "needs action" turn summaries, and
   Codex approval events → *Needs you* (amber comet ring), plus a Dock badge and system
-  notifications while Tessera is in the background. ⌘J jumps to the next one.
+  notifications while Tessera is in the background. ⌘J goes to the next thing that needs you, in
+  one order everywhere (the top-bar counters, ⌘K, the Needs you tab, the iPhone's queue): open
+  questions first, then failures, then results you haven't seen, the oldest first.
 - **Web tiles.** Live, scaled WKWebViews; unread counts in titles (`(3) Inbox`) raise attention.
 - **Accounts sidebar.** Remaining balance / plan headroom with one-click top-up: OpenRouter,
   DeepSeek, Moonshot, OpenAI and Anthropic (admin-key spend vs. budget), xAI, ChatGPT/Codex plan
@@ -38,8 +40,14 @@ Native macOS app, with a focused iOS companion built on the same core.
   JSON balance endpoint. Keys live in the login Keychain.
 - **Tabs.** All · Needs you · your own tabs. Drag tiles onto a tab (or Move to Tab); new tiles land
   in the tab you're viewing, as does a Claude or Codex app conversation started there once its tile
-  appears (from Needs you, new tiles go to All and the view follows); each tab shows a count and an
-  attention dot. ⌘1…9 switch. The selection is always a tile the tab shows.
+  appears (from Needs you, new tiles go to All and the view follows); each tab shows a count and a
+  dot in the colour of the most pressing thing waiting in it. ⌘1…9 switch. The selection is always
+  a tile the tab shows. Board commands (Mark All Seen, Close Exited, …) act on the tab being viewed.
+- **Close with Undo.** Closing a tile never silently destroys work. A toast offers Undo for a few
+  seconds, ⌘Z (Edit ▸ Undo Close Tile) brings it back later, and ⌘K lists the last 20 closed tiles
+  as "Reopen …", across restarts. A terminal comes back in its folder and, if it ran an agent, in
+  the same conversation; a web tile at its address; a hidden Claude or Codex conversation
+  reappears. Each returns to its place and tab.
 - **Machines.** Top-bar chips for this Mac and any SSH hosts (e.g. DGX Sparks): CPU / GPU / memory
   bars, hottest temperature, GPU watts; hover for details, click a remote to open an ssh tile.
 - **Shut down & resume.** Quit Tessera (or shut tiles down) and every agent comes back in the same
@@ -62,9 +70,9 @@ Native macOS app, with a focused iOS companion built on the same core.
 - **Privacy mode (⇧⌘P).** For screenshots and video: terminal and conversation text become
   word-length bars in place, web pages a coarse mosaic. Everything keeps moving.
 - **iPhone / iPad.** Pair by scanning the QR code in Settings → iPhone with the Camera. The phone
-  gets a "Needs you" queue, live mini tiles, a terminal view (reader mode that re-wraps text, or
-  the exact screen with pinch-zoom), one-tap answers (`1 2 3 y n ⏎`, esc, ^C, arrows), transcripts,
-  launching, and the accounts panel.
+  gets a "Needs you" queue (in ⌘J's order), live mini tiles, a terminal view (reader mode that
+  re-wraps text, or the exact screen with pinch-zoom), one-tap answers (`1 2 3 y n ⏎`, esc, ^C,
+  arrows), transcripts, launching, and the accounts panel.
 
 ## Mouse and keyboard
 
@@ -76,21 +84,24 @@ Every gesture means the same thing on every kind of tile.
 | Click outside the panel · ⌘⏎ · ⌘W | Back to the board; the tile stays selected |
 | Esc | Back to the board from a transcript or a terminal that has ended. A live terminal or page gets the key itself (agents use it to interrupt) |
 | ⌘⏎ (board) | Open the selected tile |
-| ⌘W (board) | Close the selected tile; a Claude or Codex conversation is only hidden. In another window (Settings), ⌘W closes that window |
-| Hover ✕ | Close the tile. On a Claude or Codex conversation the button is an eye (Hide): nothing is stopped |
+| ⌘W (board) | Close the selected tile, with Undo; a Claude or Codex conversation is only hidden. In another window (Settings), ⌘W closes that window |
+| Hover ✕ | Close the tile, with Undo. On a Claude or Codex conversation the button is an eye (Hide): nothing is stopped |
+| ⌘Z · Undo in the toast | Bring back the tile just closed or hidden, where it was (in a text field, ⌘Z undoes typing as usual) |
 | ←↑→↓ | Move the selection across the grid; it stops at the edges and a scrolling board follows |
 | ⌘[ ⌘] | Previous / next tile, round and round. With a tile open, the open tile changes in place (a Claude or Codex conversation shows its transcript; ⌘O goes to the app) |
+| ⌃Tab | Back to the tile opened before this one; again to return |
 | Right-click · ⋯ in the open panel | Open · Open in app / Show Transcript · Continue in Terminal · Rename… · Shut Down / Resume · Restart / Reload · Open in Browser · Mark as Seen · Move to Tab · Close / Hide — whichever apply |
 | Drag | Reorder tiles; drop one on a tab to file it there |
-| ⌘K | Command palette: launch agents, run commands, open URLs, jump to tiles |
+| ⌘K | Find or do anything. Typing finds tiles first — by title, folder, tab or state (`failed`, `needs`), hidden conversations included — and ⏎ goes to the top one. Below them: Open a URL, New …, the board commands, Reopen … (closed tiles), Run …, Ask Claude / Codex app …, web search. With nothing typed: what can be started, what needs you, and the commands that have something to do |
 | ⌘T / ⇧⌘T / ⌥⌘T | New shell / Claude Code / Codex (in the selected tile's folder) |
 | ⌘L | New web tile; with a web tile open, its address field |
-| ⌘J | Next tile that needs you |
-| need you · done · working (top bar) | Open the next tile in that state, oldest first |
+| ⌘J | The next thing that needs you: questions, then failures, then unseen results, oldest first. Pressed again it moves on from the tile you're on once you have seen it, also when that one opened in its app |
+| need you · failed · done · working (top bar) | Open the next tile in that state, oldest first (failed shows only while something has) |
 | ⌘1 / ⌘2 / ⌘3…9 | All / Needs you / your tabs |
 | ⌘\ | Toggle the accounts sidebar |
 | ⇧⌘P | Privacy mode |
 | ⌥⇧⌘W / ⌥⇧⌘R | Shut down / resume all terminals |
+| Board menu · ⌘K | Mark All Seen · Close Exited · Restart Failed · Hide Idle Conversations · Show Hidden Conversations, each for the tab being viewed |
 
 New tiles open at once, wherever they come from (⌘T, ⌘L, the palette, a preset, a machine chip,
 Continue in Terminal, a link clicked in a terminal). Tabs, the top-bar counters and ⌘1…9 close an
@@ -129,7 +140,7 @@ cd Apps/TesseraIOS && xcodegen generate && open TesseraIOS.xcodeproj
 
 Development helpers: `scripts/debug-run.sh <png> "<actions>"` builds a debug copy with its own data
 folder, runs scripted actions in it (`launch=cmd;url=…;select=title;open;key=down,return;cmd=k;`
-`type=text;click=title;dump=state.json;wait=2` — the full list is in
+`type=text;click=title;ctrl=tab;undo;run=closeExited;dump=state.json;wait=2` — the full list is in
 `Sources/TesseraMac/DebugActions.swift`) and writes window captures to the PNG. A scripted run never
 opens the Claude or Codex app; it records what it would have opened. With `TESSERA_DEBUG_HOME=<dir>`
 the copy's board has none of your own app sessions on it. `swift scripts/make-icons.swift`
