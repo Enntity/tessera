@@ -191,7 +191,8 @@ public final class Workspace {
         } else {
             order.append(id)
         }
-        selectedId = id
+        // An open tile keeps the selection (a tile started from the phone mustn't take it).
+        if expandedId == nil { selectedId = id }
         save()
     }
 
@@ -413,7 +414,7 @@ public final class Workspace {
         agentAcknowledged[match.id] = Date()
         if let tab = pending.tab { groups.assign(match.id, to: tab) }
         // The app already shows it; the board just points at its new tile, where that is on show.
-        if visibleIds.contains(match.id) { selectedId = match.id }
+        if expandedId == nil, visibleIds.contains(match.id) { selectedId = match.id }
         save()
     }
 

@@ -243,7 +243,7 @@ final class AppModel {
 
     /// ⌘W closes what is in front: another window (Settings), the palette, the open panel (back to
     /// the board), and on the board itself the selected tile. `key` is the window with the keyboard.
-    func closeFront(key: NSWindow? = NSApp.keyWindow) {
+    func closeFront(key: NSWindow?) {
         if let key, key !== window { return key.performClose(nil) }
         if showPalette {
             showPalette = false
@@ -277,9 +277,10 @@ final class AppModel {
     /// The web tile that is open, if one is.
     var openPage: BrowserSession? { workspace.expandedId.flatMap { workspace.browsers[$0] } }
 
-    /// ⌘L: the open web tile's address field, or a new web tile.
+    /// ⌘L: the open web tile's address field, or (also from the palette, which covers that field)
+    /// a new web tile.
     func openLocation() {
-        if openPage != nil {
+        if openPage != nil, !showPalette {
             addressFocus &+= 1
         } else {
             paletteMode = .url

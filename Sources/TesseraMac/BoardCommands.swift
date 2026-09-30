@@ -21,7 +21,7 @@ struct BoardCommands: Commands {
             Button(model.openPage == nil ? "Open Web Tile…" : "Edit Address") { model.openLocation() }
                 .keyboardShortcut("l")
             Divider()
-            Button("Close") { model.closeFront() }
+            Button("Close") { model.closeFront(key: NSApp.keyWindow) }
                 .keyboardShortcut("w")
         }
         CommandMenu("Board") {
