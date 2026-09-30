@@ -165,6 +165,7 @@ final class AppModel {
         undo.setActionName(first.kind == .agentSession ? "Hide Conversation" : "Close Tile")
         undo.endUndoGrouping()
         undo.groupsByEvent = true
+        pruneUndo()
     }
 
     func close(_ id: String) { close([id]) }
@@ -177,15 +178,20 @@ final class AppModel {
             if open, let id = back.first { workspace.open(id, nativeAt: appRect(for: id)) }
             if let toast = closedToast, !toast.ids.contains(where: isClosed) { closedToast = nil }
         }
-        // An Undo with nothing left to bring back leaves the Edit menu.
+        pruneUndo()
+    }
+
+    private func isClosed(_ id: String) -> Bool { workspace.recentlyClosed.tiles.contains { $0.id == id } }
+
+    /// An Undo with nothing left to bring back (its tiles are back already, or closed too long ago
+    /// to still be kept) leaves the Edit menu.
+    private func pruneUndo() {
         undoMarks.removeAll { mark in
             guard !mark.ids.contains(where: isClosed) else { return false }
             window?.undoManager?.removeAllActions(withTarget: mark)
             return true
         }
     }
-
-    private func isClosed(_ id: String) -> Bool { workspace.recentlyClosed.tiles.contains { $0.id == id } }
 
     /// The toast goes after a few seconds; Undo stays on the Edit menu.
     func dismiss(_ toast: ClosedToast) {
