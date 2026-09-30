@@ -58,6 +58,51 @@ final class AttentionQueueTests: XCTestCase {
     }
 }
 
+/// ⌘K finds tiles by title, folder, tab and state; the best match leads, so ⏎ jumps to it.
+final class TileSearchTests: XCTestCase {
+    private func found(_ query: String, _ candidates: [TileSearch.Candidate]) -> [String] {
+        TileSearch.rank(query, candidates).map(\.tile.id)
+    }
+
+    func testTitleBeatsFolderBeatsTabBeatsState() {
+        let candidates = [
+            TileSearch.Candidate(tile: tile("state", .failed, title: "build")),
+            TileSearch.Candidate(tile: tile("tab", title: "notes"), tab: "Failed experiments"),
+            TileSearch.Candidate(tile: tile("folder", title: "shell", folder: "~/src/failed-run")),
+            TileSearch.Candidate(tile: tile("inside", title: "an unfailed run")),
+            TileSearch.Candidate(tile: tile("word", title: "the failed deploy")),
+            TileSearch.Candidate(tile: tile("prefix", title: "Failed deploy")),
+            TileSearch.Candidate(tile: tile("other", title: "tessera", folder: "~/src/tessera"))
+        ]
+        XCTAssertEqual(found("failed", candidates), ["prefix", "word", "inside", "folder", "tab", "state"])
+        XCTAssertEqual(found("FAIL", candidates).first, "prefix")
+        XCTAssertEqual(TileSearch.match("dep", in: "Failed deploy"), 1)
+        XCTAssertEqual(TileSearch.match("ploy", in: "Failed deploy"), 2)
+        XCTAssertNil(TileSearch.match("x", in: "Failed deploy"))
+    }
+
+    func testEveryWordMustMatchSomewhere() {
+        let candidates = [
+            TileSearch.Candidate(tile: tile("a", .needsInput, title: "api server", folder: "~/src/shop"), tab: "Work"),
+            TileSearch.Candidate(tile: tile("b", title: "api client", folder: "~/src/blog"))
+        ]
+        XCTAssertEqual(found("api shop", candidates), ["a"])
+        XCTAssertEqual(found("api work needs", candidates), ["a"])
+        XCTAssertEqual(found("api server", candidates), ["a"])
+        XCTAssertEqual(found("api nothing", candidates), [])
+        XCTAssertEqual(found("  ", candidates), [])
+    }
+
+    func testEqualMatchesPutTheBoardBeforeHiddenAndTheLatestFirst() {
+        let candidates = [
+            TileSearch.Candidate(tile: tile("hidden", age: 90, title: "deploy notes"), hidden: true),
+            TileSearch.Candidate(tile: tile("old", age: 10, title: "deploy staging")),
+            TileSearch.Candidate(tile: tile("new", age: 50, title: "deploy prod"))
+        ]
+        XCTAssertEqual(found("deploy", candidates), ["new", "old", "hidden"])
+    }
+}
+
 final class TileHistoryTests: XCTestCase {
     private struct Closed: Identifiable, Equatable {
         var id: String
@@ -75,5 +120,27 @@ final class TileHistoryTests: XCTestCase {
         XCTAssertNil(closed.take("d"))
         XCTAssertEqual(closed.tiles.map(\.id), ["b", "c"])
         XCTAssertEqual(RecentlyClosed([Closed(id: "x"), Closed(id: "y")], limit: 1).tiles.map(\.id), ["x"])
+    }
+}
+
+final class BoardCommandTests: XCTestCase {
+    private func targets(_ command: BoardCommand, suspended: Set<String> = []) -> [String] {
+        let tiles = [tile("unseen", .done, attention: true), tile("asking", .needsInput), tile("exited", .exited), tile("down", .exited),
+                     tile("failed", .failed, attention: true), tile("shell"), tile("page", kind: .browser),
+                     tile("chat", kind: .agentSession), tile("chat-busy", .working, kind: .agentSession)]
+        return tiles.filter { command.applies(to: $0, suspended: suspended.contains($0.id)) }.map(\.id)
+    }
+
+    func testEachCommandPicksItsOwnTiles() {
+        XCTAssertEqual(targets(.markAllSeen), ["unseen", "failed"])
+        // A terminal the user shut down is kept for Resume, not swept away.
+        XCTAssertEqual(targets(.closeExited, suspended: ["down"]), ["exited"])
+        XCTAssertEqual(targets(.restartFailed), ["failed"])
+        XCTAssertEqual(targets(.hideIdle), ["chat"])
+        XCTAssertEqual(targets(.resumeAll, suspended: ["down"]), ["down"])
+        XCTAssertEqual(targets(.shutDownAll, suspended: ["down"]), ["unseen", "asking", "exited", "failed", "shell"])
+        // Hidden conversations aren't among the board's tiles.
+        XCTAssertEqual(targets(.showHidden), [])
+        XCTAssertEqual(BoardCommand.allCases.filter(\.everyTab), [.shutDownAll, .resumeAll])
     }
 }

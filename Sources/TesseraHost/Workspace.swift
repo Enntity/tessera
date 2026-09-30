@@ -237,6 +237,23 @@ public final class Workspace {
         return true
     }
 
+    /// Conversations the user hid that can be shown again, the latest first.
+    public var hiddenTiles: [TileInfo] {
+        hiddenAgents.keys.compactMap { agents.session($0) }.map(agentInfo).sorted { $0.lastActivityAt > $1.lastActivityAt }
+    }
+
+    /// The tiles `command` would act on now: those on show in the tab being viewed (in every tab,
+    /// for Shut Down All and Resume All), and for Show Hidden Conversations the hidden ones filed there.
+    public func targets(of command: BoardCommand) -> [String] {
+        if command == .showHidden {
+            guard case .group(let tab) = filter else { return hiddenTiles.map(\.id) }
+            return hiddenTiles.map(\.id).filter(groups.members(of: tab).contains)
+        }
+        return (command.everyTab ? order : visibleIds).filter { id in
+            info(id).map { command.applies(to: $0, suspended: isSuspended(id)) } ?? false
+        }
+    }
+
     /// What is selected once `id` leaves the tiles on show: the one that takes its place, else the
     /// one before it.
     nonisolated static func neighbor(of id: String, in visible: [String]) -> String? {
@@ -260,16 +277,6 @@ public final class Workspace {
 
     public func resume(_ id: String) {
         terminals[id]?.resume()
-        save()
-    }
-
-    public func shutDownAll() {
-        for t in terminals.values where !t.isSuspended { t.shutDown() }
-        save()
-    }
-
-    public func resumeAll() {
-        for id in order { if let t = terminals[id], t.isSuspended { t.resume() } }
         save()
     }
 
