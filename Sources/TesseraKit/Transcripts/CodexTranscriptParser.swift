@@ -3,7 +3,6 @@ import Foundation
 /// Parses Codex rollout files (`~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl`), written by both the
 /// Codex CLI and the Codex desktop app.
 public struct CodexTranscriptParser: TranscriptParser {
-    public private(set) var title: String?
     public private(set) var items: [ConversationItem] = []
     public private(set) var model: String?
     public private(set) var contextTokens: Int?

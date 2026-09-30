@@ -4,8 +4,6 @@ import Foundation
 public protocol TranscriptParser {
     mutating func ingest(line: Substring)
     func snapshot(now: Date) -> ConversationSnapshot
-    /// A title the transcript itself carries, if any.
-    var title: String? { get }
 }
 
 public extension TranscriptParser {

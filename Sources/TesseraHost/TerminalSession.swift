@@ -537,7 +537,7 @@ extension TerminalSession: TerminalViewDelegate {
 
     nonisolated public func bell(source: TerminalView) {
         MainActor.assumeIsolated {
-            tracker.noteBell(screenTail: terminal.screenTail(14), at: Date())
+            tracker.noteBell(screenTail: terminal.screenTail(14))
             refreshInfo()
         }
     }

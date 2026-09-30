@@ -57,7 +57,7 @@ public struct TerminalActivityTracker: Sendable {
         lastOutputAt = now
     }
 
-    public mutating func noteBell(screenTail: [String], at now: Date) {
+    public mutating func noteBell(screenTail: [String]) {
         let prompt = openPrompt(in: Array(screenTail.suffix(14)))
         raise(needsInput: prompt != nil, detail: prompt)
     }
