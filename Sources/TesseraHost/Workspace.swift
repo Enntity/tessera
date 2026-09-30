@@ -426,12 +426,8 @@ public final class Workspace {
         guard !binding else { return }
         bindPasses &+= 1
         let now = Date()
-        // Keep looking for as long as the agent runs: a conversation may start long after launch. After
-        // ten minutes unbound it rarely will, so those are looked for once a minute.
-        let waiting = terminals.values.filter {
-            $0.isRunning && !$0.isSuspended && $0.sessionId == nil
-                && (now.timeIntervalSince($0.launchedAt) < 600 || bindPasses % 12 == 0)
-        }
+        // Keep looking for as long as the agent runs: a conversation may start long after launch.
+        let waiting = terminals.values.filter { $0.isRunning && !$0.isSuspended && $0.sessionId == nil }
         func candidates(_ tool: SessionResume.Tool) -> [CodexRollouts.Candidate] {
             let all = waiting.filter { $0.command.flatMap(SessionResume.tool(for:)) == tool }
                 .map { CodexRollouts.Candidate(tileId: $0.id, cwd: $0.cwd, launchedAt: $0.launchedAt,
@@ -441,6 +437,8 @@ public final class Workspace {
             // leave both unbound (they resume fresh) rather than guess.
             return all.filter { c in
                 !all.contains { $0.tileId != c.tileId && $0.cwd == c.cwd && abs($0.launchedAt.timeIntervalSince(c.launchedAt)) < 60 }
+                    // After ten minutes unbound it rarely happens, so those are looked for once a minute.
+                    && (now.timeIntervalSince(c.launchedAt) < 600 || bindPasses % 12 == 0)
             }
         }
         let codex = candidates(.codex), claude = candidates(.claude)
