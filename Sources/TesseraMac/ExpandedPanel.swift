@@ -56,9 +56,9 @@ struct ExpandedPanel: View {
             settled = false
             withAnimation(.spring(duration: 0.36, bounce: 0.1)) { settled = true }
         }
-        .task(id: id) {
-            takesClicks = false
-            if (try? await Task.sleep(for: .seconds(min(NSEvent.doubleClickInterval, 0.5)))) != nil { takesClicks = true }
+        .task {
+            try? await Task.sleep(for: .seconds(min(NSEvent.doubleClickInterval, 0.5)))
+            takesClicks = true
         }
     }
 }
