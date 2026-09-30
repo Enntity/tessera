@@ -20,7 +20,10 @@ final class AttentionNotifier: NSObject, UNUserNotificationCenterDelegate {
     func update(with tiles: [TileInfo]) {
         let waiting = tiles.filter { $0.attention }
         let waitingIds = Set(waiting.map(\.id))
-        // Forget tiles that were seen, so their next event notifies again.
+        // Forget tiles that were seen, so their next event notifies again, and take their notices
+        // out of Notification Center: they no longer need anything.
+        let seen = notified.subtracting(waitingIds)
+        if !seen.isEmpty { UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: Array(seen)) }
         notified.formIntersection(waitingIds)
         guard !NSApp.isActive else {
             notified.formUnion(waitingIds)

@@ -137,6 +137,17 @@ final class TerminalActivityTrackerTests: XCTestCase {
         XCTAssertEqual(TerminalSession.exitCode(fromWaitStatus: 9), 137)
     }
 
+    func testProgramThatNeverStartedIsAFailure() {
+        var t = TerminalActivityTracker()
+        t.noteExit(code: nil, failure: "Couldn't start zsh")
+        XCTAssertEqual(t.activity, .failed)
+        XCTAssertEqual(t.detail, "Couldn't start zsh")
+        XCTAssertTrue(t.attention)
+        t.restart()
+        t.noteExit(code: nil)
+        XCTAssertEqual(t.activity, .exited)
+    }
+
     func testFailedExitRaisesAttention() {
         var t = TerminalActivityTracker()
         t.noteExit(code: 2)

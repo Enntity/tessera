@@ -117,6 +117,8 @@ extension BrowserSession: WKNavigationDelegate {
     nonisolated public func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         MainActor.assumeIsolated {
             if info.activity == .working || info.activity == .starting { info.activity = .idle }
+            // A loaded page clears an earlier load's error; an unread count stays.
+            if lastBadge == 0 { info.detail = nil }
             info.lastActivityAt = Date()
             if let script = pendingScript {
                 pendingScript = nil
@@ -127,16 +129,17 @@ extension BrowserSession: WKNavigationDelegate {
     }
 
     nonisolated public func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
-        MainActor.assumeIsolated {
-            info.activity = .failed
-            info.detail = error.localizedDescription
-        }
+        MainActor.assumeIsolated { loadFailed(error) }
     }
 
     nonisolated public func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
-        MainActor.assumeIsolated {
-            info.activity = .failed
-            info.detail = error.localizedDescription
-        }
+        MainActor.assumeIsolated { loadFailed(error) }
+    }
+
+    /// A load superseded by another (a redirect, a click mid-load) is cancelled, not failed.
+    private func loadFailed(_ error: Error) {
+        guard (error as NSError).code != NSURLErrorCancelled else { return }
+        info.activity = .failed
+        info.detail = error.localizedDescription
     }
 }

@@ -68,10 +68,11 @@ public struct TerminalActivityTracker: Sendable {
         raise(needsInput: asksForInput, detail: text.isEmpty ? nil : text.preview(120))
     }
 
-    public mutating func noteExit(code: Int32?) {
+    /// The program ended with `code`, or never started at all (`failure` says why).
+    public mutating func noteExit(code: Int32?, failure: String? = nil) {
         exited = true
-        activity = (code ?? 0) == 0 ? .exited : .failed
-        detail = code.map { "Exited with status \($0)" } ?? "Exited"
+        activity = (code ?? 0) == 0 && failure == nil ? .exited : .failed
+        detail = failure ?? code.map { "Exited with status \($0)" } ?? "Exited"
         if activity == .failed, !isBeingViewed { attention = true }
     }
 

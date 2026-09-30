@@ -210,6 +210,11 @@ public final class TerminalSession: NSObject {
         }
         process.startProcess(executable: executable, args: args, environment: Self.environment(tileId: id, shell: shell, nonce: shellNonce, overrides: environmentOverrides),
                              execName: nil, currentDirectory: cwd)
+        // forkpty fails when the system is out of terminals; say so (with Restart) instead of "Starting" forever.
+        guard process.shellPid > 0 else {
+            tracker.noteExit(code: nil, failure: "Couldn't start \((executable as NSString).lastPathComponent): too many terminals open?")
+            return refreshInfo()
+        }
         isRunning = true
         refreshInfo()
     }
