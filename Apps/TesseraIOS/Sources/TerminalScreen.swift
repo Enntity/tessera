@@ -17,7 +17,6 @@ struct TerminalScreen: View {
 
     var body: some View {
         let info = session.tiles.first { $0.id == id }
-        let revision = session.revisions[id] ?? 0
         VStack(spacing: 0) {
             HStack(spacing: 8) {
                 if let info { StatePill(activity: info.activity) }
@@ -33,8 +32,8 @@ struct TerminalScreen: View {
             Group {
                 if let mirror = session.mirrors[id] {
                     switch mode {
-                    case .reader: reader(mirror, revision: revision)
-                    case .screen: screen(mirror, revision: revision)
+                    case .reader: reader(mirror, revision: mirror.revision)
+                    case .screen: screen(mirror, revision: mirror.revision)
                     }
                 } else {
                     ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)

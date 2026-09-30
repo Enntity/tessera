@@ -1,3 +1,4 @@
+import Observation
 import SwiftTerm
 import XCTest
 @testable import TesseraHost
@@ -365,6 +366,14 @@ final class TerminalSnapshotTests: XCTestCase {
         XCTAssertEqual(copy.terminal.getCursorLocation().y, source.terminal.getCursorLocation().y)
         let red = copy.terminal.getCharData(col: 0, row: 1)!.attribute.fg
         XCTAssertEqual(red, .ansi256(code: 1))
+    }
+
+    func testMirrorRedrawsOnItsOwnRevision() {
+        let mirror = TerminalMirror(cols: 20, rows: 4)
+        let redraw = expectation(description: "revision observed")
+        withObservationTracking { _ = mirror.revision } onChange: { redraw.fulfill() }
+        mirror.feed(Array("hi".utf8))
+        wait(for: [redraw], timeout: 1)
     }
 
     func testSmartPunctuationIsUndone() {
