@@ -68,6 +68,7 @@ final class AppModel {
         guard !started else { return }
         started = true
         workspace.start()
+        reportUnreadableFiles()
         if Preferences.store.bool(forKey: "tessera.remoteEnabled") { server.start() }
         // Record every terminal's folder and conversation, then stop them, so next launch resumes.
         NotificationCenter.default.addObserver(forName: NSApplication.willTerminateNotification, object: nil, queue: .main) { [weak self] _ in

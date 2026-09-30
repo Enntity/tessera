@@ -36,12 +36,8 @@ public final class UsageService {
 
     public init(directory: URL) {
         store = directory.appendingPathComponent("providers.json")
-        if let data = try? Data(contentsOf: store), let saved = try? JSONDecoder().decode([UsageProviderConfig].self, from: data) {
-            configs = saved
-        } else {
-            // Local plan readers need no key, so they're on by default.
-            configs = [UsageProviderConfig(id: "codex-plan", kind: .codexPlan)]
-        }
+        // Local plan readers need no key, so they're on by default.
+        configs = StateFile.loadList(UsageProviderConfig.self, from: store) ?? [UsageProviderConfig(id: "codex-plan", kind: .codexPlan)]
     }
 
     public var orderedReadings: [UsageReading] {
@@ -244,8 +240,7 @@ public final class UsageService {
     }
 
     private func save() {
-        try? FileManager.default.createDirectory(at: store.deletingLastPathComponent(), withIntermediateDirectories: true)
-        if let data = try? JSONEncoder().encode(configs) { try? data.write(to: store, options: .atomic) }
+        StateFile.save(configs, to: store)
     }
 
 }

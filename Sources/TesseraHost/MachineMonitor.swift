@@ -25,9 +25,7 @@ public final class MachineMonitor {
 
     public init(directory: URL) {
         store = directory.appendingPathComponent("machines.json")
-        if let data = try? Data(contentsOf: store), let saved = try? JSONDecoder().decode([MachineConfig].self, from: data) {
-            remotes = saved.filter { $0.sshHost.map(MachineConfig.isValidHost) ?? false }
-        }
+        remotes = (StateFile.loadList(MachineConfig.self, from: store) ?? []).filter { $0.sshHost.map(MachineConfig.isValidHost) ?? false }
         vitals[Self.localId] = MachineVitals(id: Self.localId, name: Host.current().localizedName ?? "This Mac", isLocal: true)
         for r in remotes { vitals[r.id] = MachineVitals(id: r.id, name: r.name, isLocal: false) }
     }
@@ -69,8 +67,7 @@ public final class MachineMonitor {
     }
 
     private func save() {
-        try? FileManager.default.createDirectory(at: store.deletingLastPathComponent(), withIntermediateDirectories: true)
-        if let data = try? JSONEncoder().encode(remotes) { try? data.write(to: store, options: .atomic) }
+        StateFile.save(remotes, to: store)
     }
 
     private func poll() {

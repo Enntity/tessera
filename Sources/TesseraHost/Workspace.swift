@@ -486,7 +486,7 @@ public final class Workspace {
             var sessionId: String?
             var suspended: Bool?
         }
-        var tiles: [Tile]
+        var tiles: [Lossy<Tile>]
         var defaultDirectory: String?
         var placeNativeWindows: Bool?
         var groups: [TileGroup]?
@@ -507,22 +507,24 @@ public final class Workspace {
             if let b = browsers[id] { return .init(id: id, kind: .browser, url: b.url?.absoluteString) }
             return nil
         }
-        let saved = Saved(tiles: tiles, defaultDirectory: defaultDirectory, placeNativeWindows: placeNativeWindows,
-                          groups: groups.list, resumeOnLaunch: resumeOnLaunch)
-        if let data = try? JSONEncoder().encode(saved) { try? data.write(to: saveURL, options: .atomic) }
+        StateFile.save(Saved(tiles: tiles.map(Lossy.init), defaultDirectory: defaultDirectory, placeNativeWindows: placeNativeWindows,
+                             groups: groups.list, resumeOnLaunch: resumeOnLaunch), to: saveURL)
     }
 
     private func restore() {
-        guard let data = try? Data(contentsOf: saveURL), let saved = try? JSONDecoder().decode(Saved.self, from: data) else { return }
+        guard let saved = StateFile.load(Saved.self, from: saveURL) else { return }
+        // A tile this build can't read (say, a kind from a newer Tessera) drops out alone; the file is kept.
+        let tiles = saved.tiles.compactMap(\.value)
+        if tiles.count < saved.tiles.count { StateFile.keepAside(saveURL) }
         defaultDirectory = saved.defaultDirectory ?? defaultDirectory
         placeNativeWindows = saved.placeNativeWindows ?? true
         groups = TileGroups(saved.groups ?? [])
         resumeOnLaunch = saved.resumeOnLaunch ?? true
         // One tile per conversation; "continue latest" only where it can't collide (see RestorePlan).
-        let plan = RestorePlan.plan(saved.tiles.filter { $0.kind == .terminal }.map { tile in
+        let plan = RestorePlan.plan(tiles.filter { $0.kind == .terminal }.map { tile in
             RestorePlan.Tile(id: tile.id, command: tile.command, cwd: tile.cwd ?? defaultDirectory, sessionId: tile.sessionId)
         })
-        for tile in saved.tiles {
+        for tile in tiles {
             switch tile.kind {
             case .terminal:
                 let cwd = tile.cwd.flatMap { FileManager.default.fileExists(atPath: $0) ? $0 : nil } ?? defaultDirectory
