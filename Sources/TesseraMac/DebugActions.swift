@@ -33,7 +33,7 @@ extension AppModel {
     ///   the open Settings window), `dock=<title>` and `undock=<title>` (as the tile's menu does),
     ///   `expand=<title>` (a docked tile's full-size button), `drag=<x>,<y>,<x>,<y>` (from a point to a point);
     /// - `dump=<file>[?<query>]`: what is selected, open, on show, waiting and closed, each tile's state,
-    ///   who has the keyboard, and the palette's rows for `<query>`, as JSON;
+    ///   who has the keyboard, whether the window can be seen, and the palette's rows for `<query>`, as JSON;
     /// - `shot=<file>[?<window title>]`: a capture of the board's window (or the window so titled) as it
     ///   is at that moment.
     private func runDebugActions(_ actions: [String], after delay: Double = 2, pace: Double = 1) {
@@ -221,6 +221,8 @@ extension AppModel {
             "palette": showPalette ? "\(paletteMode)" : "",
             "firstResponder": window?.firstResponder.map { String(describing: type(of: $0)) } ?? "",
             "keyWindow": key === window ? "board" : key?.title ?? "",
+            // Hidden (behind other windows, the screen locked), continuous effects stop and nothing is drawn.
+            "onScreen": window?.occlusionState.contains(.visible) == true,
             "windows": NSApp.windows.filter(\.isVisible).map(\.title),
             "scroll": boardScroll,
             "suspended": workspace.order.filter(workspace.isSuspended).map(title),
