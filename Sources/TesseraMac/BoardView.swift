@@ -102,7 +102,12 @@ struct BoardView: View {
         // Anything else typed on the board filters it: the typing goes on in the top bar's field.
         .onKeyPress(phases: .down) { press in
             let query = model.workspace.query
-            guard model.workspace.expandedId == nil, press.modifiers.isDisjoint(with: [.command, .control, .option]) else { return .ignored }
+            // Under an open panel the board takes no key: it is the panel's (see `AppModel.keyboardToPanel`).
+            guard model.workspace.expandedId == nil else {
+                model.keyboardToPanel()
+                return .ignored
+            }
+            guard press.modifiers.isDisjoint(with: [.command, .control, .option]) else { return .ignored }
             // (⌫ arrives as the character DEL, which is not what SwiftUI calls `.delete`.)
             if press.key == .delete || press.characters == "\u{7F}", query.hasText {
                 model.beginFilter(text: String(query.text.dropLast()))

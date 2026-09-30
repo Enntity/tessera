@@ -374,6 +374,15 @@ final class AppModel {
         }
     }
 
+    /// A click on an open panel's own chrome (its header, its hints) leaves the keyboard on the
+    /// board under it. The board is offered every key before it is typed: offered one then, it
+    /// puts the keyboard back in the panel's terminal or page, where the key goes on to be typed.
+    /// (A field being typed in, a page's address, is offered its keys the same way and keeps them.)
+    func keyboardToPanel() {
+        guard let window, let view = workspace.expandedId.flatMap(keyView), view.window === window else { return }
+        if window.firstResponder !== view, !(window.firstResponder is NSText) { window.makeFirstResponder(view) }
+    }
+
     /// The keyboard to the board itself: the arrows move the selection, typing filters.
     private func toBoard() {
         if keyboardDock != nil { keyboardDock = nil }
