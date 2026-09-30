@@ -17,7 +17,7 @@ enum CodexRollouts {
     static var root: URL { URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent(".codex/sessions") }
 
     /// Rollouts modified within `lookback`, newest first.
-    static func recentFiles(lookback: TimeInterval, now: Date = Date()) -> [(path: String, modified: Date)] {
+    static func recentFiles(lookback: TimeInterval, now: Date = Date(), root: URL = CodexRollouts.root) -> [(path: String, modified: Date)] {
         let fm = FileManager.default
         let cal = Calendar.current
         var files: [(String, Date)] = []
@@ -47,36 +47,17 @@ enum CodexRollouts {
                                 startedAt: parser.startedAt)
     }
 
-    struct Candidate: Sendable {
-        let tileId: String
-        let cwd: String
-        let launchedAt: Date
-        /// The command continues an existing conversation (`resume --last`, `--continue`), so its
-        /// session file predates the launch; match on being written after it instead.
-        var continuing = false
-    }
-
-    /// Matches Codex CLI tiles to the rollouts they started: same folder, begun just after the tile
-    /// launched, not a desktop or helper thread, and not already someone else's. Earliest wins.
-    static func bind(_ candidates: [Candidate], claimed: Set<String>) -> [String: String] {
+    /// Matches Codex CLI tiles to the rollouts they started (see SessionBinding); desktop and helper
+    /// threads never match. The earliest rollout that fits wins.
+    static func bind(_ candidates: [SessionBinding.Candidate], claimed: Set<String>, root: URL = CodexRollouts.root) -> [String: String] {
         let earliest = candidates.map(\.launchedAt).min() ?? Date()
-        let heads: [(head: CodexRolloutHead, modified: Date)] = recentFiles(lookback: max(900, Date().timeIntervalSince(earliest) + 60))
+        let heads: [(head: CodexRolloutHead, modified: Date)] = recentFiles(lookback: max(900, Date().timeIntervalSince(earliest) + 60), root: root)
             .compactMap { file in readHead(file.path).map { ($0, file.modified) } }
-            .filter { !$0.head.isDesktop && !$0.head.isSubagent && SessionResume.isSafeId($0.head.id) && !claimed.contains($0.head.id) }
-        var taken = claimed
-        var result: [String: String] = [:]
-        for c in candidates.sorted(by: { $0.launchedAt < $1.launchedAt }) {
-            let dir = URL(fileURLWithPath: c.cwd).standardizedFileURL.path
-            let since = c.launchedAt.addingTimeInterval(-3)
-            let match = heads
-                .filter { !taken.contains($0.head.id) && URL(fileURLWithPath: $0.head.cwd).standardizedFileURL.path == dir }
+            .filter { !$0.head.isDesktop && !$0.head.isSubagent && SessionResume.isSafeId($0.head.id) }
+        return SessionBinding.assign(candidates, claimed: claimed) { c, folder, since, taken in
+            heads.filter { !taken.contains($0.head.id) && $0.head.cwd.standardizedPath == folder }
                 .filter { ($0.head.startedAt ?? .distantPast) >= since || (c.continuing && $0.modified >= since) }
-                .min { ($0.head.startedAt ?? .distantPast) < ($1.head.startedAt ?? .distantPast) }
-            if let match {
-                result[c.tileId] = match.head.id
-                taken.insert(match.head.id)
-            }
+                .min { ($0.head.startedAt ?? .distantPast) < ($1.head.startedAt ?? .distantPast) }?.head.id
         }
-        return result
     }
 }

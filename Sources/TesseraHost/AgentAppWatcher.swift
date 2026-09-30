@@ -103,11 +103,6 @@ final class TranscriptScanner: @unchecked Sendable {
     /// First read of a large transcript only looks at the end; the state we need is recent.
     static let initialTailBytes: UInt64 = 1_000_000
 
-    /// Session ids end up in shell commands ("Continue in Terminal"), so only plain ids pass.
-    static func isSafeId(_ id: String) -> Bool {
-        !id.isEmpty && id.count <= 128 && id.allSatisfy { $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "-" || $0 == "_") }
-    }
-
     private var touched: Set<String> = []
 
     func scan(lookback: TimeInterval, now: Date) -> Result {
@@ -135,8 +130,9 @@ final class TranscriptScanner: @unchecked Sendable {
             guard let data = try? Data(contentsOf: url),
                   let meta = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
                   meta["isArchived"] as? Bool != true,
-                  let localId = meta["sessionId"] as? String, Self.isSafeId(localId),
-                  let cliId = meta["cliSessionId"] as? String, Self.isSafeId(cliId) else { continue }
+                  // Session ids end up in shell commands ("Continue in Terminal"), so only plain ids pass.
+                  let localId = meta["sessionId"] as? String, SessionResume.isSafeId(localId),
+                  let cliId = meta["cliSessionId"] as? String, SessionResume.isSafeId(cliId) else { continue }
             let lastMs = (meta["lastActivityAt"] as? NSNumber)?.doubleValue ?? 0
             let lastActivity = Date(timeIntervalSince1970: lastMs / 1000)
             guard now.timeIntervalSince(lastActivity) < lookback else { continue }
@@ -184,7 +180,7 @@ final class TranscriptScanner: @unchecked Sendable {
 
     private func claudeTranscriptPath(_ cliId: String) -> String? {
         if let hit = claudeTranscriptIndex[cliId], fm.fileExists(atPath: hit) { return hit }
-        let projects = home.appendingPathComponent(".claude/projects")
+        let projects = ClaudeSessions.projects
         for dir in (try? fm.contentsOfDirectory(atPath: projects.path)) ?? [] {
             let candidate = projects.appendingPathComponent(dir).appendingPathComponent(cliId + ".jsonl").path
             if fm.fileExists(atPath: candidate) {
@@ -240,7 +236,7 @@ final class TranscriptScanner: @unchecked Sendable {
                     }
                 }
                 let parser = tail.parser
-                guard let id = parser.sessionId, !parser.isDelegated, Self.isSafeId(id) else { continue }
+                guard let id = parser.sessionId, !parser.isDelegated, SessionResume.isSafeId(id) else { continue }
                 let snapshot = parser.snapshot(now: now)
                 // Sessions that never got a message aren't worth a tile.
                 guard snapshot.items.contains(where: { $0.role == .user }) else { continue }
@@ -278,7 +274,7 @@ final class TranscriptScanner: @unchecked Sendable {
         var out: [AgentAppSession] = []
         for (path, _) in CodexRollouts.recentFiles(lookback: lookback, now: now) {
             guard let head = codexHead(path), head.isDesktop, !head.isSubagent,
-                  Self.isSafeId(head.id) else { continue }
+                  SessionResume.isSafeId(head.id) else { continue }
             let tail = tails[path] ?? Tail(parser: .codex(CodexTranscriptParser()))
             tails[path] = tail
             advance(tail, path: path)

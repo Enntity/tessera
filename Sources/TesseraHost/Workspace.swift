@@ -444,22 +444,15 @@ public final class Workspace {
 
     @ObservationIgnored private var binding = false
 
-    /// Agents whose conversation id isn't known yet (Codex, or anything typed into a shell or started
-    /// through a launcher) are matched to the session file their tool writes.
+    /// Agents whose conversation id isn't known yet are matched to the session file their tool writes.
     private func bindAgentSessions(now: Date) {
         guard !binding else { return }
         // Keep looking for as long as the agent runs: a conversation may start long after launch.
         let waiting = terminals.values.filter { $0.isRunning && !$0.isSuspended && $0.sessionId == nil }
-        func candidates(_ tool: SessionResume.Tool) -> [CodexRollouts.Candidate] {
-            let all = waiting.filter { $0.command.flatMap(SessionResume.tool(for:)) == tool }
-                .map { CodexRollouts.Candidate(tileId: $0.id, cwd: $0.cwd, launchedAt: $0.launchedAt,
-                                               continuing: $0.command.map(SessionResume.continuesLatest) ?? false) }
-            // Two unbound agents started in the same folder within a minute can't be told apart by
-            // folder and time; binding the wrong one would resume someone else's conversation, so
-            // leave both unbound (they resume fresh) rather than guess.
-            return all.filter { c in
-                !all.contains { $0.tileId != c.tileId && $0.cwd == c.cwd && abs($0.launchedAt.timeIntervalSince(c.launchedAt)) < 60 }
-            }
+        func candidates(_ tool: SessionResume.Tool) -> [SessionBinding.Candidate] {
+            SessionBinding.unambiguous(waiting.filter { $0.command.flatMap(SessionResume.tool(for:)) == tool }
+                .map { SessionBinding.Candidate(tileId: $0.id, cwd: $0.cwd, launchedAt: $0.launchedAt,
+                                                continuing: $0.command.map(SessionResume.continuesLatest) ?? false) })
         }
         let codex = candidates(.codex), claude = candidates(.claude)
         guard !codex.isEmpty || !claude.isEmpty else { return }

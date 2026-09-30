@@ -35,7 +35,7 @@ public enum RestorePlan {
     public static func plan(_ tiles: [Tile]) -> [String: Decision] {
         func key(_ t: Tile) -> String? {
             guard let command = t.command, let tool = SessionResume.tool(for: command) else { return nil }
-            return tool.rawValue + "@" + URL(fileURLWithPath: t.cwd).standardizedFileURL.path
+            return tool.rawValue + "@" + t.cwd.standardizedPath
         }
         var perFolder: [String: Int] = [:]
         for t in tiles { if let k = key(t) { perFolder[k, default: 0] += 1 } }

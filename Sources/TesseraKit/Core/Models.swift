@@ -214,6 +214,9 @@ public extension String {
         return (try? AttributedString(markdown: text, options: options)) ?? AttributedString(text)
     }
 
+    /// The path with `.` and `..` resolved, for comparing folders.
+    var standardizedPath: String { URL(fileURLWithPath: self).standardizedFileURL.path }
+
     /// `/Users/me/src/app` → `~/src/app`.
     var abbreviatingHome: String {
         let home = NSHomeDirectory()
