@@ -418,13 +418,20 @@ public final class Workspace {
     // MARK: Session binding
 
     @ObservationIgnored private var binding = false
+    @ObservationIgnored private var bindPasses = 0
 
     /// Agents whose conversation id isn't known yet (Codex, or anything typed into a shell or started
     /// through a launcher) are matched to the session file their tool writes.
     private func bindAgentSessions() {
         guard !binding else { return }
-        // Keep looking for as long as the agent runs: a conversation may start long after launch.
-        let waiting = terminals.values.filter { $0.isRunning && !$0.isSuspended && $0.sessionId == nil }
+        bindPasses &+= 1
+        let now = Date()
+        // Keep looking for as long as the agent runs: a conversation may start long after launch. After
+        // ten minutes unbound it rarely will, so those are looked for once a minute.
+        let waiting = terminals.values.filter {
+            $0.isRunning && !$0.isSuspended && $0.sessionId == nil
+                && (now.timeIntervalSince($0.launchedAt) < 600 || bindPasses % 12 == 0)
+        }
         func candidates(_ tool: SessionResume.Tool) -> [CodexRollouts.Candidate] {
             let all = waiting.filter { $0.command.flatMap(SessionResume.tool(for:)) == tool }
                 .map { CodexRollouts.Candidate(tileId: $0.id, cwd: $0.cwd, launchedAt: $0.launchedAt,

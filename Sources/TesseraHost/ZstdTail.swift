@@ -8,8 +8,7 @@ final class ZstdTail {
 
     /// Newly decoded bytes, or nil if nothing complete was added. A file that shrank restarts.
     func readAppended(path: String) -> Data? {
-        guard let attrs = try? FileManager.default.attributesOfItem(atPath: path),
-              let size = (attrs[.size] as? NSNumber)?.uint64Value else { return nil }
+        guard let size = FileStat(path)?.size else { return nil }
         if size < offset { offset = 0 }
         guard size > offset, let handle = FileHandle(forReadingAtPath: path) else { return nil }
         defer { try? handle.close() }

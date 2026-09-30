@@ -238,5 +238,10 @@ final class ClaudeLocalUsageTests: XCTestCase {
         try handle.close()
         totals = usage.refresh(now: now)
         XCTAssertEqual(totals.fiveHours.replies, 2)
+
+        // Read in chunks far smaller than a line, the counts come out the same.
+        let chunked = ClaudeLocalUsage(root: root, chunkSize: 37).refresh(now: now)
+        XCTAssertEqual(chunked.fiveHours, totals.fiveHours)
+        XCTAssertEqual(chunked.week, totals.week)
     }
 }

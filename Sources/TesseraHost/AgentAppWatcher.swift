@@ -128,7 +128,11 @@ final class TranscriptScanner: @unchecked Sendable {
     private let home = URL(fileURLWithPath: NSHomeDirectory())
     private var tails: [String: Tail] = [:]
     private var claudeTranscriptIndex: [String: String] = [:]
-    private var codexHeads: [String: CodexRolloutHead] = [:]
+    /// Parsed session metadata and folder listings, redone only when the file or folder changes.
+    private var claudeMeta: [String: (stat: FileStat, meta: [String: Any])] = [:]
+    private var listings: [String: (modified: Date, names: [String])] = [:]
+    private var listed: Set<String> = []
+    private var dshTitles: [String: (modified: Date?, title: String?)] = [:]
     private var codexTitles: [String: String] = [:]
     private var codexIndexModified: Date = .distantPast
     private var lastRateLimitScan: Date = .distantPast
@@ -147,11 +151,14 @@ final class TranscriptScanner: @unchecked Sendable {
     func scan(lookback: TimeInterval, now: Date) -> Result {
         var sessions: [String: AgentAppSession] = [:]
         touched.removeAll(keepingCapacity: true)
+        listed.removeAll(keepingCapacity: true)
         for s in scanClaudeDesktop(lookback: lookback, now: now) { sessions[s.id] = s }
         for s in scanCodexDesktop(lookback: lookback, now: now) { sessions[s.id] = s }
         for s in scanDsh(lookback: lookback, now: now) { sessions[s.id] = s }
-        // Drop parsers for transcripts that aged out.
+        // Drop what belongs to transcripts and folders that aged out or went away.
         for path in tails.keys where !touched.contains(path) { tails[path] = nil }
+        for path in claudeMeta.keys where !touched.contains(path) { claudeMeta[path] = nil }
+        for dir in listings.keys where !listed.contains(dir) { listings[dir] = nil }
         if now.timeIntervalSince(lastRateLimitScan) > 60 {
             lastRateLimitScan = now
             rateLimits = scanCodexRateLimits(now: now) ?? rateLimits
@@ -166,8 +173,7 @@ final class TranscriptScanner: @unchecked Sendable {
         guard let e = fm.enumerator(at: root, includingPropertiesForKeys: [.contentModificationDateKey]) else { return [] }
         var out: [AgentAppSession] = []
         for case let url as URL in e where url.lastPathComponent.hasPrefix("local_") && url.pathExtension == "json" {
-            guard let data = try? Data(contentsOf: url),
-                  let meta = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+            guard let meta = claudeMetadata(url.path),
                   meta["isArchived"] as? Bool != true,
                   let localId = meta["sessionId"] as? String, Self.isSafeId(localId),
                   let cliId = meta["cliSessionId"] as? String, Self.isSafeId(cliId) else { continue }
@@ -205,6 +211,28 @@ final class TranscriptScanner: @unchecked Sendable {
                 lastActivityAt: max(lastActivity, parser.lastEventAt ?? .distantPast)))
         }
         return out
+    }
+
+    private func claudeMetadata(_ path: String) -> [String: Any]? {
+        touched.insert(path)
+        guard let stat = FileStat(path) else { return nil }
+        if let hit = claudeMeta[path], hit.stat == stat { return hit.meta }
+        // Caught mid-write, a file may not parse; keep its last good contents until it does.
+        guard let data = fm.contents(atPath: path),
+              let meta = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { return claudeMeta[path]?.meta }
+        claudeMeta[path] = (stat, meta)
+        return meta
+    }
+
+    /// A folder's entries, listed again only when the folder itself changes (an entry came or went).
+    private func list(_ dir: URL) -> [String] {
+        let path = dir.path
+        listed.insert(path)
+        guard let modified = FileStat(path)?.modified else { return [] }
+        if let hit = listings[path], hit.modified == modified { return hit.names }
+        let names = (try? fm.contentsOfDirectory(atPath: path)) ?? []
+        listings[path] = (modified, names)
+        return names
     }
 
     /// Background subagents write `<session>/subagents/agent-<id>.jsonl` beside the transcript.
@@ -250,17 +278,15 @@ final class TranscriptScanner: @unchecked Sendable {
         let root = Self.dshHome.appendingPathComponent("sessions")
         var out: [AgentAppSession] = []
         var seen: Set<String> = []
-        for workspace in (try? fm.contentsOfDirectory(atPath: root.path)) ?? [] {
+        for workspace in list(root) {
             let wsURL = root.appendingPathComponent(workspace)
-            for session in (try? fm.contentsOfDirectory(atPath: wsURL.path)) ?? [] {
+            for session in list(wsURL) {
                 let dir = wsURL.appendingPathComponent(session)
                 // A migrated session may hold several formats; the newest version is the live log.
-                let logs = ((try? fm.contentsOfDirectory(atPath: dir.path)) ?? [])
-                    .filter { $0.hasPrefix("session.v") && $0.hasSuffix(".jsonl.zstd") }
+                let logs = list(dir).filter { $0.hasPrefix("session.v") && $0.hasSuffix(".jsonl.zstd") }
                 guard let log = logs.max(by: { Self.dshVersion($0) < Self.dshVersion($1) }) else { continue }
                 let path = dir.appendingPathComponent(log).path
-                guard let modified = (try? fm.attributesOfItem(atPath: path))?[.modificationDate] as? Date,
-                      now.timeIntervalSince(modified) < lookback else { continue }
+                guard let modified = FileStat(path)?.modified, now.timeIntervalSince(modified) < lookback else { continue }
                 seen.insert(path)
                 let tail = dshTails[path] ?? DshTail()
                 dshTails[path] = tail
@@ -278,7 +304,7 @@ final class TranscriptScanner: @unchecked Sendable {
                 let snapshot = parser.snapshot(now: now)
                 // Sessions that never got a message aren't worth a tile.
                 guard snapshot.items.contains(where: { $0.role == .user }) else { continue }
-                let title = parser.title ?? Self.dshCachedTitle(id)
+                let title = parser.title ?? dshTitle(id)
                     ?? snapshot.items.first(where: { $0.role == .user })?.text.preview(60) ?? "DeepSeek session"
                 out.append(AgentAppSession(
                     id: "dsh:" + id, flavor: .dsh, title: title, cwd: parser.cwd ?? "",
@@ -296,8 +322,16 @@ final class TranscriptScanner: @unchecked Sendable {
     }
 
     /// dsh's projection cache holds the generated title even before it's in the log we've read.
-    static func dshCachedTitle(_ id: String) -> String? {
-        let url = dshHome.appendingPathComponent("storages/session_projcache/sessions/\(id).json")
+    private func dshTitle(_ id: String) -> String? {
+        let url = Self.dshHome.appendingPathComponent("storages/session_projcache/sessions/\(id).json")
+        let modified = FileStat(url.path)?.modified
+        if let hit = dshTitles[id], hit.modified == modified { return hit.title }
+        let title = Self.dshCachedTitle(at: url)
+        dshTitles[id] = (modified, title)
+        return title
+    }
+
+    static func dshCachedTitle(at url: URL) -> String? {
         guard let data = try? Data(contentsOf: url),
               let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
               let rows = (obj["record"] as? [String: Any])?["rows"] as? [String: Any],
@@ -311,7 +345,7 @@ final class TranscriptScanner: @unchecked Sendable {
         refreshCodexTitles()
         var out: [AgentAppSession] = []
         for (path, _) in CodexRollouts.recentFiles(lookback: lookback, now: now) {
-            guard let head = codexHead(path), head.isDesktop, !head.isSubagent,
+            guard let head = CodexRollouts.head(path), head.isDesktop, !head.isSubagent,
                   Self.isSafeId(head.id) else { continue }
             let tail = tails[path] ?? Tail(parser: .codex(CodexTranscriptParser()))
             tails[path] = tail
@@ -329,16 +363,9 @@ final class TranscriptScanner: @unchecked Sendable {
         return out
     }
 
-    private func codexHead(_ path: String) -> CodexRolloutHead? {
-        if let hit = codexHeads[path] { return hit }
-        guard let head = CodexRollouts.readHead(path) else { return nil }
-        codexHeads[path] = head
-        return head
-    }
-
     private func refreshCodexTitles() {
         let path = home.appendingPathComponent(".codex/session_index.jsonl").path
-        let modified = ((try? fm.attributesOfItem(atPath: path))?[.modificationDate] as? Date) ?? .distantPast
+        let modified = FileStat(path)?.modified ?? .distantPast
         guard modified > codexIndexModified, let text = try? String(contentsOfFile: path, encoding: .utf8) else { return }
         codexIndexModified = modified
         for line in text.split(separator: "\n") {
@@ -368,9 +395,8 @@ final class TranscriptScanner: @unchecked Sendable {
 
     private func advance(_ tail: Tail, path: String) {
         touched.insert(path)
-        guard let attrs = try? fm.attributesOfItem(atPath: path),
-              let size = (attrs[.size] as? NSNumber)?.uint64Value else { return }
-        let modified = attrs[.modificationDate] as? Date ?? Date()
+        guard let stat = FileStat(path) else { return }
+        let size = stat.size, modified = stat.modified
         if size < tail.offset {
             // Truncated or replaced: start over.
             tail.offset = 0

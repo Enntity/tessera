@@ -163,7 +163,7 @@ public final class TerminalSession: NSObject {
         }
         // Claude only saves a conversation once a message is sent; an assigned id with no transcript
         // can't be resumed, so start it fresh under the same id.
-        if SessionResume.tool(for: command) == .claude, !ClaudeSessions.transcriptExists(id),
+        if SessionResume.tool(for: command) == .claude, !ClaudeSessions.transcriptExists(id, cwd: cwd),
            let fresh = SessionResume.freshLaunch(original: command, sessionId: id) {
             return fresh
         }
