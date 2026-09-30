@@ -339,6 +339,7 @@ struct BrowserTileContent: View {
     let browser: BrowserSession
     let isExpanded: Bool
     @Environment(\.tesseraPrivacy) private var privacy
+    @Environment(\.tesseraMotion) private var onScreen
 
     var body: some View {
         if isExpanded {
@@ -349,9 +350,12 @@ struct BrowserTileContent: View {
             } else {
                 Color.black
             }
-        } else {
+        } else if onScreen {
             ScaledWebHost(webView: browser.webView)
                 .overlay { if privacy { PrivateWebCover(browser: browser) } }
+        } else {
+            // Scrolled out of view, the page leaves the window too, so WebKit throttles it.
+            Style.terminalBackground
         }
     }
 }
@@ -364,7 +368,7 @@ struct PrivateWebCover: View {
     var body: some View {
         ZStack {
             Style.deck
-            if let image = browser.snapshot.flatMap(Self.mosaic) {
+            if let image = browser.mosaic {
                 Image(nsImage: image).interpolation(.none).resizable().aspectRatio(contentMode: .fill)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                     .clipped()
@@ -377,19 +381,6 @@ struct PrivateWebCover: View {
                 try? await Task.sleep(for: .seconds(3))
             }
         }
-    }
-
-    /// Downsample to wide, short cells; drawn without interpolation, lines of text become bars —
-    /// the same look as a terminal's word blocks.
-    static func mosaic(_ image: NSImage) -> NSImage? {
-        guard let cg = image.cgImage(forProposedRect: nil, context: nil, hints: nil) else { return nil }
-        let w = max(1, cg.width / 16), h = max(1, cg.height / 5)
-        guard let ctx = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: 0,
-                                  space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
-        ctx.interpolationQuality = .medium
-        ctx.draw(cg, in: CGRect(x: 0, y: 0, width: w, height: h))
-        // Keep the page's shape: stretched back to it, the pixels become the wide, short cells.
-        return ctx.makeImage().map { NSImage(cgImage: $0, size: image.size) }
     }
 }
 
