@@ -15,10 +15,10 @@ struct PairingView: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 22) {
-                HStack(spacing: 10) {
+            VStack(alignment: .leading, spacing: Style.Space.xxl) {
+                HStack(spacing: Style.Space.gutter) {
                     TesseraGlyph().frame(width: 26, height: 26)
-                    Text("TESSERA").font(.system(size: 17, weight: .heavy, design: .rounded)).tracking(4)
+                    Text("TESSERA").font(Style.ui(17, .heavy)).tracking(4)
                 }
                 .padding(.top, 40)
                 Text("Your whole board, in your pocket.")
@@ -30,16 +30,16 @@ struct PairingView: View {
                     Text(error).font(Style.ui(13)).foregroundStyle(Style.coral)
                 }
 
-                VStack(alignment: .leading, spacing: 10) {
-                    Text("MACS NEARBY").font(.system(size: 11, weight: .heavy, design: .rounded)).tracking(2).foregroundStyle(Style.faint)
+                VStack(alignment: .leading, spacing: Style.Space.gutter) {
+                    SectionLabel(text: "Macs nearby", color: Style.muted)
                     if discovered.isEmpty {
-                        HStack(spacing: 10) {
+                        HStack(spacing: Style.Space.gutter) {
                             ProgressView()
                             Text("Looking for Tessera on your network…").font(Style.ui(14)).foregroundStyle(Style.dim)
                         }
-                        .padding(14)
+                        .padding(Style.Space.l)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(Style.glass, in: RoundedRectangle(cornerRadius: 14))
+                        .background(Style.glass, in: Style.shape(Style.Radius.m))
                     }
                     ForEach(discovered, id: \.self) { name in
                         Button {
@@ -47,13 +47,13 @@ struct PairingView: View {
                             code = ""
                         } label: {
                             HStack {
-                                Image(systemName: "desktopcomputer").foregroundStyle(Style.cyan)
+                                Image(systemName: "desktopcomputer").foregroundStyle(Style.dim)
                                 Text(name).font(Style.ui(16, .semibold)).foregroundStyle(Style.ink)
                                 Spacer()
                                 Image(systemName: "chevron.right").foregroundStyle(Style.faint)
                             }
-                            .padding(14)
-                            .background(Style.glass, in: RoundedRectangle(cornerRadius: 14))
+                            .padding(Style.Space.l)
+                            .background(Style.glass, in: Style.shape(Style.Radius.m))
                         }
                     }
                 }
@@ -61,7 +61,7 @@ struct PairingView: View {
                 Button(showManual ? "Hide" : "Connect by address (Tailscale, VPN)…") { withAnimation { showManual.toggle() } }
                     .font(Style.ui(14, .semibold))
                 if showManual {
-                    VStack(spacing: 10) {
+                    VStack(spacing: Style.Space.gutter) {
                         TextField("mac.tailnet.ts.net or 100.x.y.z", text: $manualAddress)
                             .textInputAutocapitalization(.never).autocorrectionDisabled()
                         SecureField("Pairing code", text: $code)
@@ -75,12 +75,12 @@ struct PairingView: View {
                     .textFieldStyle(.roundedBorder)
                 }
             }
-            .padding(24)
+            .padding(Style.Space.xxl)
         }
         .onAppear(perform: startBrowsing)
         .onDisappear { browser?.cancel() }
         .sheet(item: Binding(get: { chosen.map(Chosen.init) }, set: { chosen = $0?.name })) { item in
-            VStack(spacing: 18) {
+            VStack(spacing: Style.Space.xl) {
                 Text("Pair with \(item.name)").font(Style.ui(20, .bold))
                 Text("Enter the code shown in Tessera → Settings → iPhone.").font(Style.ui(14)).foregroundStyle(Style.dim)
                 SecureField("XXXXX-XXXXX-XXXXX-XXXXX", text: $code)
@@ -94,7 +94,7 @@ struct PairingView: View {
                 .buttonStyle(.borderedProminent)
                 .disabled(SecureChannel.normalize(code).count < 20)
             }
-            .padding(28)
+            .padding(Style.Space.xxl)
             .presentationDetents([.medium])
         }
     }

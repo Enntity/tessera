@@ -64,15 +64,15 @@ struct TileMenu: View {
         Menu("Move to Tab") {
             let current = workspace.groups.group(of: info.id)?.id
             ForEach(workspace.groups.list) { group in
-                Button(group.name) { withAnimation(.spring(duration: 0.4)) { workspace.move(tile: info.id, toGroup: group.id) } }
+                Button(group.name) { withAnimation(Style.Motion.standard) { workspace.move(tile: info.id, toGroup: group.id) } }
                     .disabled(group.id == current)
             }
             if !workspace.groups.list.isEmpty { Divider() }
             Button("New Tab with This Tile") {
-                withAnimation(.spring(duration: 0.4)) { _ = workspace.createGroup(named: Self.suggestedTabName(info), with: info.id) }
+                withAnimation(Style.Motion.standard) { _ = workspace.createGroup(named: Self.suggestedTabName(info), with: info.id) }
             }
             if current != nil {
-                Button("Remove from Tab") { withAnimation(.spring(duration: 0.4)) { workspace.move(tile: info.id, toGroup: nil) } }
+                Button("Remove from Tab") { withAnimation(Style.Motion.standard) { workspace.move(tile: info.id, toGroup: nil) } }
             }
         }
         Divider()
@@ -100,7 +100,7 @@ struct RenamePopover: ViewModifier {
                 TextField("Title", text: $draft)
                     .textFieldStyle(.roundedBorder)
                     .frame(width: 240)
-                    .padding()
+                    .padding(Style.Space.gutter)
                     .onAppear { draft = info.title }
                     .onSubmit {
                         model.workspace.rename(info.id, to: draft)

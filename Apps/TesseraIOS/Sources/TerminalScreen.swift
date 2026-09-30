@@ -18,7 +18,7 @@ struct TerminalScreen: View {
     var body: some View {
         let info = session.tiles.first { $0.id == id }
         VStack(spacing: 0) {
-            HStack(spacing: 8) {
+            HStack(spacing: Style.Space.m) {
                 if let info { StatePill(activity: info.activity) }
                 Text(info?.detail ?? info?.subtitle ?? "").font(Style.mono(11))
                     .foregroundStyle(info?.activity == .needsInput ? Style.amber : Style.dim).lineLimit(1)
@@ -26,7 +26,7 @@ struct TerminalScreen: View {
                 Picker("", selection: $mode) { ForEach(Mode.allCases, id: \.self) { Text($0.rawValue) } }
                     .pickerStyle(.segmented).frame(width: 150)
             }
-            .padding(.horizontal, 12).padding(.vertical, 8)
+            .padding(.horizontal, Style.Space.l).padding(.vertical, Style.Space.m)
             .background(Style.glass)
 
             Group {
@@ -54,7 +54,7 @@ struct TerminalScreen: View {
                 .foregroundStyle(Style.ink)
                 .textSelection(.enabled)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(10)
+                .padding(Style.Space.gutter)
                 .id(revision)
         }
         .defaultScrollAnchor(.bottom)
@@ -80,53 +80,53 @@ struct TerminalScreen: View {
     }
 
     private func inputBar(needsInput: Bool) -> some View {
-        VStack(spacing: 8) {
+        VStack(spacing: Style.Space.m) {
             if needsInput {
-                HStack(spacing: 8) {
+                HStack(spacing: Style.Space.m) {
                     ForEach(["1", "2", "3", "y", "n"], id: \.self) { answer in
                         Button(answer) { session.type(answer, into: id) }
                             .font(Style.mono(15, .bold))
                             .frame(maxWidth: .infinity, minHeight: 36)
-                            .background(Style.amber.opacity(0.18), in: RoundedRectangle(cornerRadius: 9))
+                            .background(Style.amber.opacity(Style.Tint.fill), in: Style.shape(Style.Radius.m))
                             .foregroundStyle(Style.amber)
                     }
                     Button("⏎") { session.key(.enter, into: id) }
                         .font(Style.mono(15, .bold))
                         .frame(maxWidth: .infinity, minHeight: 36)
-                        .background(Style.amber.opacity(0.3), in: RoundedRectangle(cornerRadius: 9))
+                        .background(Style.amber.opacity(Style.Tint.strong), in: Style.shape(Style.Radius.m))
                         .foregroundStyle(Style.amber)
                 }
                 .transition(.move(edge: .bottom).combined(with: .opacity))
             }
             ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 6) {
+                HStack(spacing: Style.Space.s) {
                     ForEach([TerminalKey.escape, .tab, .ctrlC, .up, .down, .left, .right, .backspace, .ctrlD], id: \.self) { key in
                         Button(key.label) { session.key(key, into: id) }
                             .font(Style.mono(13, .semibold))
-                            .padding(.horizontal, 12).frame(minHeight: 32)
-                            .background(Style.glass, in: RoundedRectangle(cornerRadius: 8))
+                            .padding(.horizontal, Style.Space.l).frame(minHeight: 32)
+                            .background(Style.glass, in: Style.shape(Style.Radius.m))
                             .foregroundStyle(Style.ink)
                     }
                 }
             }
-            HStack(spacing: 8) {
+            HStack(spacing: Style.Space.m) {
                 TextField("Send to terminal", text: $draft, axis: .vertical)
                     .lineLimit(1...4)
                     .font(Style.mono(14))
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
                     .focused($typing)
-                    .padding(.horizontal, 10).padding(.vertical, 8)
-                    .background(Style.glass, in: RoundedRectangle(cornerRadius: 10))
+                    .padding(.horizontal, Style.Space.gutter).padding(.vertical, Style.Space.m)
+                    .background(Style.glass, in: Style.shape(Style.Radius.m))
                     .onSubmit(send)
                 Button(action: send) {
-                    Image(systemName: "arrow.up.circle.fill").font(.system(size: 30))
+                    Image(systemName: "arrow.up.circle.fill").font(Style.ui(30))
                 }
             }
         }
-        .padding(10)
+        .padding(Style.Space.gutter)
         .background(Style.deck)
-        .animation(.spring(duration: 0.3), value: needsInput)
+        .animation(Style.Motion.standard, value: needsInput)
     }
 
     private func send() {
@@ -146,7 +146,7 @@ struct UsageScreen: View {
     var body: some View {
         NavigationStack {
             ScrollView {
-                VStack(spacing: 10) {
+                VStack(spacing: Style.Space.gutter) {
                     ForEach(session.usage) { reading in
                         UsageRow(reading: reading) { openURL($0) }
                     }
@@ -154,7 +154,7 @@ struct UsageScreen: View {
                         Text("Connect providers in Tessera on your Mac.").font(Style.ui(14)).foregroundStyle(Style.dim).padding(.top, 40)
                     }
                 }
-                .padding(16)
+                .padding(Style.Space.xl)
             }
             .background(Style.void)
             .refreshable { session.send(.refreshUsage) }

@@ -12,7 +12,17 @@ struct SettingsView: View {
             GeneralSettings().tabItem { Label("General", systemImage: "gearshape") }
         }
         .frame(width: 620, height: 520)
+        // Native controls, in Tessera's type and colors rather than the system's.
+        .font(Style.body)
+        .tint(Style.control)
+        .scrollContentBackground(.hidden)
+        .background(Style.deck)
     }
+}
+
+private extension Text {
+    /// The small print under a setting.
+    func note() -> some View { font(Style.ui(.label)).foregroundStyle(Style.dim) }
 }
 
 struct ProvidersSettings: View {
@@ -28,19 +38,18 @@ struct ProvidersSettings: View {
 
     var body: some View {
         let usage = model.workspace.usage
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: Style.Space.l) {
             List {
                 ForEach(usage.configs) { config in
                     HStack {
                         Image(systemName: config.kind.spec.symbol).frame(width: 20)
                         VStack(alignment: .leading) {
                             Text(config.name)
-                            Text(config.kind.spec.keyHint == nil ? "No key needed" : (usage.hasKey(config.id) ? "Key saved in Keychain" : "No key"))
-                                .font(.caption).foregroundStyle(.secondary)
+                            Text(config.kind.spec.keyHint == nil ? "No key needed" : (usage.hasKey(config.id) ? "Key saved in Keychain" : "No key")).note()
                         }
                         Spacer()
                         if let budget = config.monthlyBudget {
-                            Text("Budget $\(budget.formatted(.number.precision(.fractionLength(0))))").font(.caption).foregroundStyle(.secondary)
+                            Text("Budget $\(budget.formatted(.number.precision(.fractionLength(0))))").note()
                         }
                         Button(role: .destructive) { usage.remove(id: config.id) } label: { Image(systemName: "trash") }
                             .buttonStyle(.borderless)
@@ -51,25 +60,24 @@ struct ProvidersSettings: View {
             .frame(maxHeight: .infinity)
 
             HStack {
-                Text("Keys are stored in your login Keychain and only sent to the provider they belong to. Drag to reorder.")
-                    .font(.caption).foregroundStyle(.secondary)
+                Text("Keys are stored in your login Keychain and only sent to the provider they belong to. Drag to reorder.").note()
                 Spacer()
                 Button("Add Account…") { model.showAddAccount = true }
             }
         }
-        .padding(18)
+        .padding(Style.Space.xl)
         .sheet(isPresented: Bindable(model).showAddAccount) { addSheet }
     }
 
     /// A focused sheet: pick a provider, paste a key, Connect — or Cancel / Esc.
     private var addSheet: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Text("Connect an Account").font(.title3.weight(.semibold))
+        VStack(alignment: .leading, spacing: Style.Space.l) {
+            Text("Connect an Account").font(Style.ui(.title, .semibold))
             Form {
                 Picker("Provider", selection: $kind) {
                     ForEach(UsageProviderKind.allCases, id: \.self) { k in Text(k.spec.name).tag(k) }
                 }
-                Text(kind.spec.help).font(.caption).foregroundStyle(.secondary)
+                Text(kind.spec.help).note()
                 TextField("Display name", text: $name, prompt: Text(kind.spec.name))
                 if let hint = kind.spec.keyHint {
                     SecureField("Key", text: $key, prompt: Text(hint))
@@ -95,7 +103,7 @@ struct ProvidersSettings: View {
                               || !budget.isEmpty && UsageProviderConfig.budget(from: budget) == nil)
             }
         }
-        .padding(22)
+        .padding(Style.Space.xxl)
         .frame(width: 520)
     }
 
@@ -121,42 +129,42 @@ struct RemoteSettings: View {
 
     var body: some View {
         let server = model.server
-        HStack(alignment: .top, spacing: 24) {
-            VStack(alignment: .leading, spacing: 14) {
+        HStack(alignment: .top, spacing: Style.Space.xxl) {
+            VStack(alignment: .leading, spacing: Style.Space.l) {
                 Toggle("Allow the Tessera iPhone app to connect", isOn: Binding(get: { server.isRunning }, set: { model.setRemote($0) }))
                     .toggleStyle(.switch)
-                Text(server.status).font(.caption).foregroundStyle(.secondary)
+                Text(server.status).note()
                 Text("Your iPhone finds this Mac over Bonjour on the same network, or by address over Tailscale/VPN. The connection is encrypted with a key derived from the pairing code; anyone with the code can see and type into your terminals.")
-                    .font(.caption).foregroundStyle(.secondary)
+                    .note()
                     .fixedSize(horizontal: false, vertical: true)
                 GroupBox("Pairing code") {
                     HStack {
                         Text(revealCode ? server.pairingCode : String(repeating: "•", count: 23))
-                            .font(.system(.body, design: .monospaced))
+                            .font(Style.mono(.body))
                             .textSelection(.enabled)
                         Spacer()
                         Button(revealCode ? "Hide" : "Show") { revealCode.toggle() }
                         Button("New Code") { server.regenerateCode() }
                     }
-                    .padding(4)
+                    .padding(Style.Space.xs)
                 }
                 if !server.clientNames.isEmpty {
-                    Text("Connected: " + server.clientNames.joined(separator: ", ")).font(.callout)
+                    Text("Connected: " + server.clientNames.joined(separator: ", "))
                 }
                 Spacer()
             }
-            VStack(spacing: 8) {
+            VStack(spacing: Style.Space.m) {
                 if revealCode, let url = server.pairingURL, let image = QRCode.image(for: url.absoluteString) {
                     Image(nsImage: image).interpolation(.none).resizable().frame(width: 200, height: 200)
-                        .padding(10).background(.white, in: RoundedRectangle(cornerRadius: 12))
-                    Text("Scan with the Tessera iPhone app").font(.caption).foregroundStyle(.secondary)
+                        .padding(Style.Space.gutter).background(.white, in: Style.shape(Style.Radius.m))
+                    Text("Scan with the Tessera iPhone app").note()
                 } else {
-                    RoundedRectangle(cornerRadius: 12).fill(.quaternary).frame(width: 220, height: 220)
-                        .overlay(Text("Show the code to\ndisplay the QR").multilineTextAlignment(.center).foregroundStyle(.secondary))
+                    Style.shape(Style.Radius.m).fill(Style.glass).frame(width: 220, height: 220)
+                        .overlay(Text("Show the code to\ndisplay the QR").multilineTextAlignment(.center).foregroundStyle(Style.dim))
                 }
             }
         }
-        .padding(20)
+        .padding(Style.Space.xl)
     }
 }
 
@@ -183,14 +191,13 @@ struct GeneralSettings: View {
             Section("Terminals") {
                 Toggle("Resume terminal sessions when Tessera opens", isOn: $workspace.resumeOnLaunch)
                     .onChange(of: workspace.resumeOnLaunch) { _, _ in workspace.save() }
-                Text("Claude Code, Codex, Grok, opencode and omp tiles reopen in the same conversation; shells reopen in their last folder. Off: tiles wait, shut down, until you resume them.")
-                    .font(.caption).foregroundStyle(.secondary)
+                Text("Claude Code, Codex, Grok, opencode and omp tiles reopen in the same conversation; shells reopen in their last folder. Off: tiles wait, shut down, until you resume them.").note()
             }
             Section("New tiles") {
                 HStack {
                     Text("Default folder")
                     Spacer()
-                    Text(workspace.defaultDirectory.abbreviatingHome).foregroundStyle(.secondary)
+                    Text(workspace.defaultDirectory.abbreviatingHome).foregroundStyle(Style.dim)
                     Button("Choose…") { chooseFolder() }
                 }
             }
@@ -199,7 +206,7 @@ struct GeneralSettings: View {
                     .onChange(of: workspace.placeNativeWindows) { _, _ in workspace.save() }
                 HStack {
                     Image(systemName: trusted ? "checkmark.seal.fill" : "exclamationmark.triangle.fill")
-                        .foregroundStyle(trusted ? .green : .orange)
+                        .foregroundStyle(trusted ? Style.mint : Style.amber)
                     Text(trusted ? "Accessibility access granted" : "Needs Accessibility access to move other apps' windows")
                     Spacer()
                     if !trusted {
@@ -216,7 +223,7 @@ struct GeneralSettings: View {
             }
         }
         .formStyle(.grouped)
-        .padding(10)
+        .padding(Style.Space.gutter)
     }
 
     private func chooseFolder() {
@@ -239,7 +246,7 @@ struct MachinesSettings: View {
 
     var body: some View {
         let monitor = model.workspace.machines
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: Style.Space.l) {
             List {
                 ForEach(monitor.ordered) { v in
                     HStack {
@@ -247,7 +254,7 @@ struct MachinesSettings: View {
                         VStack(alignment: .leading) {
                             Text(v.name)
                             Text(v.isLocal ? "This Mac" : (monitor.config(v.id)?.sshHost ?? "") + " · " + (v.message ?? v.status.rawValue))
-                                .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                                .note().lineLimit(1)
                         }
                         Spacer()
                         if !v.isLocal {
@@ -259,23 +266,21 @@ struct MachinesSettings: View {
             }
             .frame(maxHeight: .infinity)
             HStack {
-                Text("Linux hosts reached with your SSH keys (no password prompts). Reports CPU, NVIDIA GPU, memory and temperature.")
-                    .font(.caption).foregroundStyle(.secondary)
+                Text("Linux hosts reached with your SSH keys (no password prompts). Reports CPU, NVIDIA GPU, memory and temperature.").note()
                 Spacer()
                 Button("Add Machine…") { model.showAddMachine = true }
             }
         }
-        .padding(18)
+        .padding(Style.Space.xl)
         .sheet(isPresented: Bindable(model).showAddMachine) { addSheet(monitor) }
     }
 
     private func addSheet(_ monitor: MachineMonitor) -> some View {
-        let known = Set(monitor.remotes.compactMap(\.sshHost))
-        let suggestions = monitor.suggestedHosts().filter { !known.contains($0) }
-        return VStack(alignment: .leading, spacing: 14) {
-            Text("Watch a Machine").font(.title3.weight(.semibold))
+        let suggestions = monitor.unwatchedHosts
+        return VStack(alignment: .leading, spacing: Style.Space.l) {
+            Text("Watch a Machine").font(Style.ui(.title, .semibold))
             if !suggestions.isEmpty {
-                Text("From your SSH config").font(.caption).foregroundStyle(.secondary)
+                Text("From your SSH config").note()
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack {
                         ForEach(suggestions, id: \.self) { h in
@@ -300,7 +305,7 @@ struct MachinesSettings: View {
                 .disabled(!MachineConfig.isValidHost(host.trimmingCharacters(in: .whitespaces)))
             }
         }
-        .padding(22)
+        .padding(Style.Space.xxl)
         .frame(width: 480)
     }
 

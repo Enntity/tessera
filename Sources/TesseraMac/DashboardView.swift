@@ -11,34 +11,36 @@ struct DashboardView: View {
             VStack(spacing: 0) {
                 HUDBar()
                 HStack(spacing: 0) {
-                    BoardView()
-                        .padding(.horizontal, 12)
-                        .padding(.bottom, 12)
+                    VStack(spacing: 0) {
+                        TabStrip()
+                        BoardView()
+                    }
+                    .overlay(alignment: .bottom) {
+                        if let toast = model.closedToast {
+                            UndoToast(toast: toast)
+                                .padding(.bottom, Style.Space.xxl)
+                                .transition(.move(edge: .bottom).combined(with: .opacity))
+                        }
+                    }
                     if model.showSidebar {
                         AccountsSidebar()
-                            .frame(width: 290)
+                            .frame(width: Style.Metrics.sidebar)
                             .transition(.move(edge: .trailing).combined(with: .opacity))
                     }
                 }
             }
-            if let toast = model.closedToast {
-                UndoToast(toast: toast)
-                    .frame(maxHeight: .infinity, alignment: .bottom)
-                    .padding(.bottom, 26)
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
-                    .zIndex(15)
-            }
             if model.showPalette {
                 CommandPalette()
-                    .transition(.scale(scale: 0.97).combined(with: .opacity))
+                    .transition(.opacity)
                     .zIndex(20)
             }
         }
         .environment(\.tesseraPrivacy, model.privacyMode)
+        .tint(Style.control)
         .coordinateSpace(name: "window")
         .background(WindowAccessor { model.window = $0 })
         .ignoresSafeArea()
-        .animation(.spring(duration: 0.25), value: model.showPalette)
+        .animation(Style.Motion.quick, value: model.showPalette)
         .onChange(of: model.showPalette) { _, shown in if !shown { model.restoreFocus() } }
     }
 }
@@ -50,24 +52,20 @@ struct UndoToast: View {
     let toast: ClosedToast
 
     var body: some View {
-        HStack(spacing: 8) {
-            Text(toast.text).font(Style.ui(12, .medium)).foregroundStyle(Style.ink).lineLimit(1)
-            Text("·").foregroundStyle(Style.faint)
+        HStack(alignment: .firstTextBaseline, spacing: Style.Space.m) {
+            Text(toast.text).font(Style.ui(.label, .medium)).foregroundStyle(Style.dim).lineLimit(1)
             Button { model.reopen(toast.ids) } label: {
-                HStack(spacing: 5) {
-                    Text("Undo").font(Style.ui(12, .semibold)).foregroundStyle(Style.cyan)
-                    Text("⌘Z").font(Style.mono(10)).foregroundStyle(Style.faint)
+                HStack(alignment: .firstTextBaseline, spacing: Style.Space.xs) {
+                    Text("Undo").font(Style.label).foregroundStyle(Style.ink)
+                    Text("⌘Z").font(Style.caption).foregroundStyle(Style.muted)
                 }
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 8)
-        .background(Style.glass, in: Capsule())
-        // Left to take clicks, the outline swallows those on Undo's centre line.
-        .overlay(Capsule().strokeBorder(Style.ink.opacity(0.15)).allowsHitTesting(false))
-        .shadow(color: .black.opacity(0.5), radius: 20, y: 8)
+        .padding(.horizontal, Style.Space.l)
+        .frame(height: Style.Metrics.control)
+        .overlaySurface(Capsule())
         .task(id: toast) {
             try? await Task.sleep(for: .seconds(8))
             if !Task.isCancelled { model.dismiss(toast) }
@@ -87,7 +85,7 @@ struct FillProposal: Layout {
     }
 }
 
-/// The void behind the board: a faint lattice with a glow, so tiles float.
+/// The void behind the board: a faint lattice under a glow, so tiles float.
 struct Backdrop: View {
     var body: some View {
         ZStack {
@@ -106,8 +104,8 @@ struct Backdrop: View {
                 }
                 ctx.fill(path, with: .color(.white.opacity(0.05)))
             }
-            RadialGradient(colors: [Style.cyan.opacity(0.07), .clear], center: .top, startRadius: 0, endRadius: 900)
-            RadialGradient(colors: [Style.violet.opacity(0.05), .clear], center: .bottomTrailing, startRadius: 0, endRadius: 800)
+            // A cool glow from above, in no state's color.
+            RadialGradient(colors: [Style.control.opacity(Style.Tint.wash), .clear], center: .top, startRadius: 0, endRadius: 900)
         }
         .ignoresSafeArea()
     }
@@ -135,132 +133,131 @@ struct WindowAccessor: NSViewRepresentable {
     func updateNSView(_ nsView: NSView, context: Context) {}
 }
 
+/// The top bar: the mark and what is going on at the left, the machines and what can be started at
+/// the right.
 struct HUDBar: View {
     @Environment(AppModel.self) private var model
 
     var body: some View {
-        let state = model.workspace.state
-        HStack(spacing: 14) {
+        HStack(spacing: Style.Space.l) {
             Wordmark()
                 .padding(.leading, 78) // clear the traffic lights
-            Divider().frame(height: 18).overlay(Style.hairline)
-            HStack(spacing: 8) {
-                // Each counter opens the next tile in its state, oldest first.
-                CountChip(value: state.needsInput.count, label: "need you", color: Style.amber, pulse: !state.needsInput.isEmpty) {
-                    model.jump(to: state.needsInput)
-                }
-                if !state.failed.isEmpty {
-                    CountChip(value: state.failed.count, label: "failed", color: Style.coral, pulse: false) {
-                        model.jump(to: state.failed)
-                    }
-                }
-                CountChip(value: state.done.count, label: "done", color: Style.mint, pulse: false) {
-                    model.jump(to: state.done)
-                }
-                CountChip(value: state.working.count, label: "working", color: Style.cyan, pulse: false) {
-                    model.jump(to: state.working)
-                }
-            }
-            Spacer()
-            TabStrip()
-            Spacer()
+            StateCounters()
+            Spacer(minLength: Style.Space.l)
             MachineStrip()
             Button {
                 model.paletteMode = .all
                 model.showPalette = true
             } label: {
-                HStack(spacing: 6) {
+                HStack(alignment: .firstTextBaseline, spacing: Style.Space.s) {
                     Image(systemName: "plus")
-                    Text("New").font(Style.ui(12, .semibold))
-                    Text("⌘K").font(Style.mono(10)).foregroundStyle(Style.faint)
+                    Text("New")
+                    Text("⌘K").font(Style.caption).foregroundStyle(Style.muted)
                 }
-                .padding(.horizontal, 10)
-                .padding(.vertical, 5)
-                .background(Style.cyan.opacity(0.14), in: Capsule())
-                .overlay(Capsule().strokeBorder(Style.cyan.opacity(0.35)))
-                .foregroundStyle(Style.cyan)
             }
-            .buttonStyle(.plain)
-            Button {
-                withAnimation(.easeInOut(duration: 0.25)) { model.privacyMode.toggle() }
-            } label: {
-                Image(systemName: model.privacyMode ? "eye.slash.fill" : "eye")
-                    .foregroundStyle(model.privacyMode ? Style.amber : Style.dim)
+            .buttonStyle(.capsule)
+            HStack(spacing: 0) {
+                toggle(model.privacyMode ? "eye.slash.fill" : "eye", on: model.privacyMode,
+                       help: "Privacy mode (⇧⌘P): terminals and conversations stay lively but unreadable") { model.togglePrivacy() }
+                toggle("sidebar.right", on: model.showSidebar, help: "Accounts (⌘\\)") { model.toggleSidebar() }
             }
-            .buttonStyle(.plain)
-            .help("Privacy mode (⇧⌘P): terminals and conversations stay lively but unreadable")
-                        Button {
-                withAnimation(.spring(duration: 0.3)) { model.showSidebar.toggle() }
-            } label: {
-                Image(systemName: "sidebar.right").foregroundStyle(model.showSidebar ? Style.ink : Style.dim)
-            }
-            .buttonStyle(.plain)
-            .padding(.trailing, 14)
         }
-        .frame(height: 44)
-        .background(.ultraThinMaterial.opacity(0.35))
-        .overlay(alignment: .bottom) { Rectangle().fill(Style.hairline).frame(height: 1) }
+        .padding(.trailing, Style.Space.l)
+        .frame(height: Style.Metrics.hud)
+        .chromeSurface(rule: .bottom)
+    }
+
+    private func toggle(_ symbol: String, on: Bool, help: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: symbol)
+                .font(Style.body)
+                .foregroundStyle(on ? Style.ink : Style.dim)
+                .frame(width: Style.Metrics.control, height: Style.Metrics.control)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(help)
     }
 }
 
 struct Wordmark: View {
     var body: some View {
-        HStack(spacing: 7) {
+        HStack(spacing: Style.Space.m) {
             TesseraGlyph().frame(width: 16, height: 16)
+            // The one text outside the type ramp.
             Text("TESSERA")
-                .font(.system(size: 12, weight: .heavy, design: .rounded))
+                .font(Style.ui(12, .heavy))
                 .tracking(3)
                 .foregroundStyle(Style.ink)
         }
     }
 }
 
-struct CountChip: View {
-    let value: Int
-    let label: String
-    let color: Color
-    let pulse: Bool
-    let action: () -> Void
+/// What is going on, as counters: each opens the next tile in its state, oldest first. A state
+/// nothing is in has no counter.
+struct StateCounters: View {
+    @Environment(AppModel.self) private var model
 
     var body: some View {
-        Button(action: action) {
-            HStack(spacing: 5) {
-                Text("\(value)")
-                    .font(Style.mono(12, .bold))
-                    .contentTransition(.numericText())
-                Text(label).font(Style.ui(11))
-            }
-            .foregroundStyle(value > 0 ? color : Style.faint)
-            .padding(.horizontal, 9)
-            .padding(.vertical, 4)
-            .background {
-                if pulse {
-                    Ambient(.pulse(color, cornerRadius: nil, low: 0.1, high: 0.28, period: 0.9))
-                } else {
-                    Capsule().fill((value > 0 ? color : Style.faint).opacity(0.1))
+        let state = model.workspace.state
+        HStack(spacing: Style.Space.s) {
+            ForEach([(TileActivity.needsInput, state.needsInput), (.failed, state.failed), (.done, state.done), (.working, state.working)],
+                    id: \.0) { activity, ids in
+                if !ids.isEmpty {
+                    CountChip(activity: activity, count: ids.count) { model.jump(to: ids) }
+                        .transition(.scale(scale: 0.8).combined(with: .opacity))
                 }
             }
         }
-        .buttonStyle(.plain)
-        .animation(.spring(duration: 0.3), value: value)
+        .animation(Style.Motion.standard, value: state)
     }
 }
 
-/// Every watched machine as a chip, then the clock. Falls back to compact chips when space is short.
+struct CountChip: View {
+    let activity: TileActivity
+    let count: Int
+    let action: () -> Void
+
+    var body: some View {
+        let color = Style.state(activity)
+        Button(action: action) {
+            HStack(alignment: .firstTextBaseline, spacing: Style.Space.xs) {
+                Text("\(count)").font(Style.mono(.label, .bold)).contentTransition(.numericText())
+                Text(activity.label).font(Style.label)
+            }
+            .foregroundStyle(color)
+            .padding(.horizontal, Style.Space.gutter)
+            .frame(height: Style.Metrics.control)
+            .background {
+                // A question waiting breathes; the rest hold still.
+                if activity == .needsInput {
+                    Ambient(.pulse(color, low: Style.Tint.fill, high: Style.Tint.strong))
+                } else {
+                    Capsule().fill(color.opacity(Style.Tint.fill))
+                }
+            }
+            .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+/// Every watched machine as a chip, then the clock. When space is short the chips go compact, and
+/// when there is none they go: a chip is whole or not there.
 struct MachineStrip: View {
     @Environment(\.openSettings) private var openSettings
     @Environment(AppModel.self) private var model
 
     var body: some View {
         let monitor = model.workspace.machines
-        HStack(spacing: 6) {
+        HStack(spacing: Style.Space.s) {
             ViewThatFits(in: .horizontal) {
                 chips(monitor, compact: false)
                 chips(monitor, compact: true)
+                Color.clear.frame(width: 0)
             }
             Menu {
-                let known = Set(monitor.remotes.compactMap(\.sshHost))
-                let hosts = monitor.suggestedHosts().filter { !known.contains($0) }
+                let hosts = monitor.unwatchedHosts
                 ForEach(hosts, id: \.self) { host in
                     Button(host) { monitor.add(host: host, name: nil) }
                 }
@@ -270,27 +267,29 @@ struct MachineStrip: View {
                     openSettings()
                 }
             } label: {
-                Image(systemName: "plus").font(.system(size: 9, weight: .bold)).foregroundStyle(Style.dim)
+                Image(systemName: "plus").font(Style.label).foregroundStyle(Style.dim)
             }
             .menuStyle(.borderlessButton)
             .menuIndicator(.hidden)
+            .tint(Style.dim)
             .fixedSize()
             .help("Watch another machine over SSH")
             TimelineView(.everyMinute) { ctx in
                 Text(ctx.date, format: .dateTime.hour().minute())
-                    .font(Style.mono(13, .semibold))
+                    .font(Style.mono(.body, .semibold))
                     .foregroundStyle(Style.ink)
-                    .padding(.leading, 4)
+                    .padding(.leading, Style.Space.xs)
             }
         }
     }
 
     private func chips(_ monitor: MachineMonitor, compact: Bool) -> some View {
-        HStack(spacing: 5) {
+        HStack(spacing: Style.Space.s) {
             ForEach(monitor.ordered) { vitals in
                 let host = monitor.config(vitals.id)?.sshHost
                 let connect = { model.create { $0.launch(command: host.map { "ssh \($0)" }, title: vitals.name) } }
                 MachineChip(vitals: vitals, compact: compact)
+                    .fixedSize()
                     .onTapGesture { if host != nil { connect() } }
                     .contextMenu {
                         if host != nil {
@@ -303,8 +302,8 @@ struct MachineStrip: View {
     }
 }
 
-
-/// All · Needs you · the user's own tabs · +. Tiles can be dropped onto a tab to file them.
+/// All · Needs you · the user's own tabs · +, in a strip over the board. Tiles can be dropped onto
+/// a tab to file them.
 struct TabStrip: View {
     @Environment(AppModel.self) private var model
     @State private var naming = false
@@ -315,13 +314,13 @@ struct TabStrip: View {
         let workspace = model.workspace
         let state = workspace.state
         ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 2) {
+            HStack(spacing: Style.Space.xxs) {
                 TabChip(title: "All", count: workspace.order.count,
                         selected: workspace.filter == .all, dropTile: { file($0, into: nil) }) { model.onBoard { $0.filter = .all } }
-                TabChip(title: "Needs you", count: state.queue.count,
-                        selected: workspace.filter == .attention, tint: Style.amber) { model.onBoard { $0.filter = .attention } }
+                TabChip(title: TileActivity.needsInput.label, count: state.queue.count, waiting: state.waiting(in: state.needsUser),
+                        selected: workspace.filter == .attention) { model.onBoard { $0.filter = .attention } }
                 if !workspace.groups.list.isEmpty {
-                    Rectangle().fill(Style.hairline).frame(width: 1, height: 14).padding(.horizontal, 4)
+                    Hairline(.vertical).frame(height: Style.Space.xl).padding(.horizontal, Style.Space.xs)
                 }
                 ForEach(workspace.groups.list) { group in
                     let members = workspace.groups.members(of: group.id)
@@ -336,7 +335,7 @@ struct TabStrip: View {
                                 renaming = group.id
                             }
                             Button("Delete Tab", role: .destructive) {
-                                withAnimation(.spring(duration: 0.3)) { workspace.deleteGroup(group.id) }
+                                withAnimation(Style.Motion.standard) { workspace.deleteGroup(group.id) }
                             }
                         }
                         .popover(isPresented: Binding(get: { renaming == group.id }, set: { if !$0 { renaming = nil } })) {
@@ -349,8 +348,8 @@ struct TabStrip: View {
                     naming = true
                 } label: {
                     Image(systemName: "plus")
-                        .font(.system(size: 10, weight: .bold))
-                        .frame(width: 24, height: 22)
+                        .font(Style.label)
+                        .frame(width: Style.Metrics.control, height: Style.Metrics.control)
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
@@ -360,24 +359,22 @@ struct TabStrip: View {
                     nameField("New tab") { name in model.onBoard { _ = $0.createGroup(named: name) } }
                 }
             }
-            .padding(3)
+            .padding(.horizontal, Style.Space.l)
         }
-        .frame(maxWidth: 640)
-        .fixedSize(horizontal: true, vertical: false)
-        .background(Style.glass.opacity(0.7), in: Capsule())
-        .overlay(Capsule().strokeBorder(Style.hairline))
-        .animation(.spring(duration: 0.3), value: workspace.groups)
+        .frame(height: Style.Metrics.strip)
+        .chromeSurface(rule: .bottom)
+        .animation(Style.Motion.standard, value: workspace.groups)
     }
 
     private func file(_ tileId: String, into groupId: String?) {
-        withAnimation(.spring(duration: 0.4)) { model.workspace.move(tile: tileId, toGroup: groupId) }
+        withAnimation(Style.Motion.standard) { model.workspace.move(tile: tileId, toGroup: groupId) }
     }
 
     private func nameField(_ prompt: String, commit: @escaping (String) -> Void) -> some View {
         TextField(prompt, text: $draft)
             .textFieldStyle(.roundedBorder)
             .frame(width: 200)
-            .padding(10)
+            .padding(Style.Space.gutter)
             .onSubmit {
                 commit(draft)
                 naming = false
@@ -392,7 +389,6 @@ struct TabChip: View {
     /// The most pressing state waiting on the user among the tab's tiles: its dot takes that colour.
     var waiting: TileActivity?
     let selected: Bool
-    var tint: Color = Style.cyan
     /// Accepts a tile dragged onto the tab.
     var dropTile: ((String) -> Void)?
     let action: () -> Void
@@ -400,32 +396,28 @@ struct TabChip: View {
 
     var body: some View {
         Button(action: action) {
-            HStack(spacing: 5) {
-                if let waiting {
-                    Circle().fill(Style.state(waiting)).frame(width: 5, height: 5).shadow(color: Style.state(waiting), radius: 3)
-                }
-                Text(title).font(Style.ui(12, selected ? .semibold : .medium)).lineLimit(1)
-                if count > 0 {
-                    Text("\(count)").font(Style.mono(9.5, .semibold))
-                        .foregroundStyle(selected ? tint : Style.faint)
-                        .contentTransition(.numericText())
+            HStack(spacing: Style.Space.s) {
+                if let waiting { Circle().fill(Style.state(waiting)).frame(width: 5, height: 5) }
+                HStack(alignment: .firstTextBaseline, spacing: Style.Space.s) {
+                    Text(title).font(Style.ui(.label, selected ? .semibold : .medium)).lineLimit(1)
+                    if count > 0 {
+                        Text("\(count)").font(Style.caption)
+                            .foregroundStyle(selected ? Style.dim : Style.muted)
+                            .contentTransition(.numericText())
+                    }
                 }
             }
             .foregroundStyle(selected ? Style.ink : Style.dim)
-            .padding(.horizontal, 11)
-            .frame(height: 24)
-            .background(selected ? Style.ink.opacity(0.1) : .clear, in: Capsule())
-            .overlay(Capsule().strokeBorder(targeted ? Style.cyan : .clear, lineWidth: 1.5))
+            .padding(.horizontal, Style.Space.gutter)
+            .frame(height: Style.Metrics.control)
+            .background(selected ? Style.Neutral.selected : .clear, in: Capsule())
+            .overlay(Capsule().strokeBorder(targeted ? Style.Neutral.focus : .clear, lineWidth: 1.5))
             .contentShape(Capsule())
         }
         .buttonStyle(.plain)
         .onDrop(of: [.text], isTargeted: dropTile == nil ? nil : $targeted) { providers in
-            guard let dropTile, let provider = providers.first else { return false }
-            provider.loadObject(ofClass: NSString.self) { obj, _ in
-                guard let id = obj as? String else { return }
-                DispatchQueue.main.async { dropTile(id) }
-            }
-            return true
+            guard let dropTile else { return false }
+            return providers.loadTileId { dropTile($0) }
         }
     }
 }

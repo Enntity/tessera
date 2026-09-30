@@ -14,20 +14,24 @@ struct AccountsSidebar: View {
         let usage = model.workspace.usage
         let server = model.server
         VStack(alignment: .leading, spacing: 0) {
-            HStack {
-                Text("ACCOUNTS").font(.system(size: 10, weight: .heavy, design: .rounded)).tracking(2).foregroundStyle(Style.dim)
+            // As tall as the tab strip beside it, so the first card lines up with the first row of tiles.
+            HStack(spacing: Style.Space.gutter) {
+                Text("Accounts").micro()
                 Spacer()
                 Button { usage.refreshAll() } label: { Image(systemName: "arrow.clockwise") }
-                    .buttonStyle(.plain).foregroundStyle(Style.dim).help("Refresh balances")
+                    .help("Refresh balances")
                 Button { addAccount() } label: { Image(systemName: "plus") }
-                    .buttonStyle(.plain).foregroundStyle(Style.dim).help("Connect a provider")
+                    .help("Connect a provider")
             }
-            .padding(.horizontal, 14)
-            .padding(.top, 14)
-            .padding(.bottom, 10)
+            .buttonStyle(.plain)
+            .font(Style.label)
+            .foregroundStyle(Style.dim)
+            .padding(.horizontal, Style.Space.l)
+            .frame(height: Style.Metrics.strip)
+            .overlay(alignment: .bottom) { Hairline() }
 
             ScrollView {
-                VStack(spacing: 8) {
+                VStack(spacing: Style.Space.m) {
                     ForEach(usage.orderedReadings) { reading in
                         UsageRow(reading: reading) { NSWorkspace.shared.open($0) }
                             .help("Drag to reorder")
@@ -45,48 +49,56 @@ struct AccountsSidebar: View {
                     }
                     if usage.configs.count <= 1 {
                         Button { addAccount() } label: {
-                            VStack(spacing: 6) {
-                                Image(systemName: "link.badge.plus").font(.system(size: 18))
-                                Text("Connect OpenAI, Anthropic, OpenRouter, DeepSeek…").font(Style.ui(11)).multilineTextAlignment(.center)
+                            VStack(spacing: Style.Space.s) {
+                                Image(systemName: "link.badge.plus").font(Style.title)
+                                Text("Connect OpenAI, Anthropic, OpenRouter, DeepSeek…").font(Style.ui(.label)).multilineTextAlignment(.center)
                             }
                             .foregroundStyle(Style.dim)
                             .frame(maxWidth: .infinity)
-                            .padding(16)
-                            .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Style.hairline, style: StrokeStyle(lineWidth: 1, dash: [4])))
+                            .padding(Style.Space.xl)
+                            .overlay(Style.shape(Style.Radius.m).strokeBorder(Style.hairline, style: StrokeStyle(lineWidth: 1, dash: [4])))
+                            .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
                     }
                 }
-                .padding(.horizontal, 12)
+                .padding(Style.Space.l)
             }
 
-            Spacer(minLength: 0)
             RemoteStatus(server: server)
-                .padding(12)
+                .padding(Style.Space.l)
         }
-        .background(Style.deck.opacity(0.7))
-        .overlay(alignment: .leading) { Rectangle().fill(Style.hairline).frame(width: 1) }
+        .chromeSurface(rule: .leading)
     }
 }
 
+/// The iPhone link: who is connected, or that it is off; a second line only when it says more
+/// (where it listens, why it failed).
 struct RemoteStatus: View {
     let server: HostServer
     @Environment(\.openSettings) private var openSettings
 
     var body: some View {
         Button { openSettings() } label: {
-            HStack(spacing: 10) {
+            HStack(spacing: Style.Space.gutter) {
                 Image(systemName: "iphone.radiowaves.left.and.right")
-                    .foregroundStyle(server.isRunning ? Style.mint : Style.faint)
-                VStack(alignment: .leading, spacing: 1) {
+                    .font(Style.body)
+                    .foregroundStyle(server.isRunning ? Style.ink : Style.muted)
+                VStack(alignment: .leading, spacing: 0) {
                     Text(server.isRunning ? (server.clientNames.isEmpty ? "Ready for iPhone" : server.clientNames.joined(separator: ", ")) : "iPhone link off")
-                        .font(Style.ui(11, .semibold)).foregroundStyle(Style.ink)
-                    Text(server.status).font(Style.mono(9)).foregroundStyle(Style.dim)
+                        .font(Style.label).foregroundStyle(Style.ink)
+                    if server.isRunning {
+                        Text(server.status).foregroundStyle(Style.muted)
+                    } else if let failure = server.failure {
+                        Text(failure).foregroundStyle(Style.coral).lineLimit(2)
+                    }
                 }
+                .font(Style.caption)
                 Spacer()
             }
-            .padding(10)
-            .background(Style.glass.opacity(0.6), in: RoundedRectangle(cornerRadius: 10))
+            .padding(Style.Space.gutter)
+            .cardSurface()
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
     }
@@ -106,7 +118,7 @@ struct AccountDropDelegate: DropDelegate {
 
     func dropEntered(info: DropInfo) {
         guard let drag = dragging, Date().timeIntervalSince(drag.at) < 20, drag.id != target else { return }
-        withAnimation(.spring(duration: 0.3)) { usage.move(drag.id, onto: target) }
+        withAnimation(Style.Motion.standard) { usage.move(drag.id, onto: target) }
     }
 
     func dropUpdated(info: DropInfo) -> DropProposal? { DropProposal(operation: .move) }

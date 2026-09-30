@@ -12,12 +12,12 @@ struct BoardScreen: View {
     var body: some View {
         NavigationStack {
             ScrollView {
-                VStack(alignment: .leading, spacing: 18) {
+                VStack(alignment: .leading, spacing: Style.Space.xl) {
                     ConnectionBanner()
                     if !session.attentionTiles.isEmpty {
-                        SectionLabel(text: "NEEDS YOU", color: Style.amber, count: session.attentionTiles.count)
+                        SectionLabel(text: TileActivity.needsInput.label, color: Style.amber, count: session.attentionTiles.count)
                         ScrollView(.horizontal, showsIndicators: false) {
-                            HStack(spacing: 12) {
+                            HStack(spacing: Style.Space.l) {
                                 ForEach(session.attentionTiles) { tile in
                                     NavigationLink(value: tile.id) {
                                         LiveTile(info: tile, compact: false).frame(width: 300, height: 210)
@@ -25,9 +25,9 @@ struct BoardScreen: View {
                                     .buttonStyle(.plain)
                                 }
                             }
-                            .padding(.horizontal, 16)
+                            .padding(.horizontal, Style.Space.xl)
                         }
-                        .padding(.horizontal, -16)
+                        .padding(.horizontal, -Style.Space.xl)
                     }
                     Picker("Show", selection: $filter) {
                         Text("All").tag(TileKind?.none)
@@ -36,7 +36,7 @@ struct BoardScreen: View {
                         Text("Web").tag(TileKind?.some(.browser))
                     }
                     .pickerStyle(.segmented)
-                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 165), spacing: 10)], spacing: 10) {
+                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 165), spacing: Style.Space.gutter)], spacing: Style.Space.gutter) {
                         ForEach(session.tiles.filter { filter == nil || $0.kind == filter }) { tile in
                             NavigationLink(value: tile.id) {
                                 LiveTile(info: tile, compact: true).frame(height: 150)
@@ -45,9 +45,9 @@ struct BoardScreen: View {
                         }
                     }
                 }
-                .padding(16)
-                .animation(.spring(duration: 0.35), value: session.tiles.map(\.id))
-                .animation(.spring(duration: 0.35), value: session.attentionTiles.map(\.id))
+                .padding(Style.Space.xl)
+                .animation(Style.Motion.standard, value: session.tiles.map(\.id))
+                .animation(Style.Motion.standard, value: session.attentionTiles.map(\.id))
             }
             .background(Style.void)
             .refreshable { session.send(.refreshUsage) }
@@ -74,8 +74,8 @@ struct SectionLabel: View {
     var count: Int?
 
     var body: some View {
-        HStack(spacing: 6) {
-            Text(text).font(.system(size: 11, weight: .heavy, design: .rounded)).tracking(2)
+        HStack(spacing: Style.Space.s) {
+            Text(text).font(Style.ui(11, .heavy)).tracking(2).textCase(.uppercase)
             if let count { Text("\(count)").font(Style.mono(11, .bold)) }
         }
         .foregroundStyle(color)
@@ -93,14 +93,14 @@ struct ConnectionBanner: View {
                 Label(notice, systemImage: "arrow.down.app").font(Style.ui(12)).foregroundStyle(Style.amber)
             }
         case .connecting, .idle:
-            HStack(spacing: 8) {
+            HStack(spacing: Style.Space.m) {
                 ProgressView()
                 Text("Connecting to \(store.host?.name ?? "your Mac")…").font(Style.ui(13)).foregroundStyle(Style.dim)
             }
         case .failed(let why):
-            HStack(spacing: 10) {
+            HStack(spacing: Style.Space.gutter) {
                 Image(systemName: "wifi.exclamationmark").foregroundStyle(Style.coral)
-                VStack(alignment: .leading, spacing: 2) {
+                VStack(alignment: .leading, spacing: Style.Space.xxs) {
                     Text("Can't reach \(store.host?.name ?? "your Mac")").font(Style.ui(13, .semibold))
                     Text(why).font(Style.mono(11)).foregroundStyle(Style.dim)
                 }
@@ -110,8 +110,8 @@ struct ConnectionBanner: View {
                     Button("Forget this Mac", role: .destructive) { store.forget() }
                 } label: { Image(systemName: "ellipsis.circle") }
             }
-            .padding(12)
-            .background(Style.coral.opacity(0.12), in: RoundedRectangle(cornerRadius: 12))
+            .padding(Style.Space.l)
+            .background(Style.coral.opacity(Style.Tint.fill), in: Style.shape(Style.Radius.m))
         }
     }
 }
@@ -127,7 +127,7 @@ struct LiveTile: View {
             switch info.kind {
             case .terminal:
                 if let mirror = session.mirrors[info.id] {
-                    TerminalThumbnail(terminal: mirror.terminal, revision: mirror.revision).equatable()
+                    TerminalThumbnail(terminal: mirror.terminal, revision: mirror.revision).equatable().terminalTileInset()
                 } else {
                     Style.terminalBackground
                 }
@@ -135,8 +135,8 @@ struct LiveTile: View {
                 ConversationThumbnail(snapshot: session.conversations[info.id], flavor: info.flavor,
                                       maxItems: compact ? 4 : 6, fontScale: compact ? 0.85 : 1)
             case .browser:
-                VStack(spacing: 6) {
-                    Image(systemName: "globe").font(.system(size: 22)).foregroundStyle(Style.violet)
+                VStack(spacing: Style.Space.s) {
+                    Image(systemName: "globe").font(Style.ui(22)).foregroundStyle(Style.accent(.web))
                     Text(info.subtitle).font(Style.mono(10)).foregroundStyle(Style.dim)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -158,11 +158,11 @@ struct TileDetail: View {
             switch info?.kind {
             case .terminal: TerminalScreen(id: id)
             case .agentSession:
-                ConversationDetail(snapshot: session.conversations[id], flavor: info?.flavor ?? .claudeDesktop)
+                ConversationDetail(snapshot: session.conversations[id])
                     .background(Style.deck)
             case .browser:
-                VStack(spacing: 14) {
-                    Image(systemName: "globe").font(.system(size: 40)).foregroundStyle(Style.violet)
+                VStack(spacing: Style.Space.l) {
+                    Image(systemName: "globe").font(Style.ui(40)).foregroundStyle(Style.accent(.web))
                     Text(info?.url ?? "").font(Style.mono(12)).foregroundStyle(Style.dim).multilineTextAlignment(.center)
                     if let url = info?.url.flatMap(URL.init(string:)) {
                         Button("Open in Safari") { openURL(url) }.buttonStyle(.borderedProminent)

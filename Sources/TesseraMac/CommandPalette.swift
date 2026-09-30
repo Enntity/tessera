@@ -13,24 +13,24 @@ struct CommandPalette: View {
     var body: some View {
         let items = model.paletteItems(query)
         ZStack(alignment: .top) {
-            Color.black.opacity(0.35)
+            Style.scrim
                 .onTapGesture { dismiss() }
             VStack(spacing: 0) {
-                HStack(spacing: 10) {
-                    Image(systemName: model.paletteMode == .url ? "globe" : "command").foregroundStyle(Style.cyan)
+                HStack(alignment: .firstTextBaseline, spacing: Style.Space.gutter) {
+                    Image(systemName: model.paletteMode == .url ? "globe" : "command").foregroundStyle(Style.dim)
                     TextField(model.paletteMode == .url ? "URL or search" : "Find a tile, launch, run, or open a URL…", text: $query)
                         .textFieldStyle(.plain)
-                        .font(Style.ui(17))
+                        .font(Style.title)
                         .focused($focused)
                         .onSubmit { run(items) }
                     Text(model.contextDirectory.abbreviatingHome)
-                        .font(Style.mono(10)).foregroundStyle(Style.faint).lineLimit(1)
+                        .font(Style.caption).foregroundStyle(Style.muted).lineLimit(1)
                 }
-                .padding(16)
-                Divider().overlay(Style.hairline)
+                .padding(Style.Space.xl)
+                Hairline()
                 ScrollViewReader { proxy in
                     ScrollView {
-                        VStack(spacing: 2) {
+                        VStack(spacing: Style.Space.xxs) {
                             ForEach(Array(items.enumerated()), id: \.element.id) { i, item in
                                 row(item, selected: i == selection)
                                     .id(i)
@@ -40,18 +40,14 @@ struct CommandPalette: View {
                                     }
                             }
                         }
-                        .padding(6)
+                        .padding(Style.Space.s)
                     }
                     .frame(maxHeight: 380)
                     .onChange(of: selection) { _, s in proxy.scrollTo(s) }
                 }
             }
             .frame(width: 640)
-            .background(.ultraThinMaterial)
-            .background(Style.deck.opacity(0.85))
-            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).strokeBorder(Style.ink.opacity(0.15)))
-            .shadow(color: .black.opacity(0.6), radius: 50, y: 20)
+            .overlaySurface()
             .padding(.top, 120)
         }
         .onAppear { focused = true }
@@ -62,22 +58,22 @@ struct CommandPalette: View {
     }
 
     private func row(_ item: PaletteItem, selected: Bool) -> some View {
-        HStack(spacing: 12) {
+        HStack(spacing: Style.Space.l) {
             Image(systemName: item.symbol)
-                .font(.system(size: 13, weight: .semibold))
+                .font(Style.ui(.body, .semibold))
                 .foregroundStyle(item.color)
-                .frame(width: 28, height: 28)
-                .background(item.color.opacity(0.14), in: RoundedRectangle(cornerRadius: 7))
-            VStack(alignment: .leading, spacing: 1) {
-                Text(item.title).font(Style.ui(13, .medium)).foregroundStyle(Style.ink)
-                Text(item.subtitle).font(Style.mono(10)).foregroundStyle(Style.dim).lineLimit(1)
+                .frame(width: Style.Metrics.control, height: Style.Metrics.control)
+                .background(Style.Neutral.hover, in: Style.shape(Style.Radius.s))
+            VStack(alignment: .leading, spacing: 0) {
+                Text(item.title).font(Style.ui(.body, .medium)).foregroundStyle(Style.ink)
+                Text(item.subtitle).font(Style.caption).foregroundStyle(Style.muted).lineLimit(1)
             }
             Spacer()
-            if selected { Text("↩").font(Style.mono(12)).foregroundStyle(Style.dim) }
+            if selected { Text("↩").font(Style.caption).foregroundStyle(Style.dim) }
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 6)
-        .background(selected ? Style.ink.opacity(0.08) : .clear, in: RoundedRectangle(cornerRadius: 9))
+        .padding(.horizontal, Style.Space.gutter)
+        .padding(.vertical, Style.Space.s)
+        .background(selected ? Style.Neutral.selected : .clear, in: Style.shape(Style.Radius.m))
         .contentShape(Rectangle())
     }
 
@@ -112,7 +108,7 @@ extension AppModel {
         let folder = cwd.abbreviatingHome
         func matches(_ text: String) -> Bool { q.isEmpty || TileSearch.match(q, in: text) != nil }
 
-        let openURL = PaletteItem(id: "url", symbol: "globe", color: Style.violet, title: "Open \(q)", subtitle: "New web tile") {
+        let openURL = PaletteItem(id: "url", symbol: "globe", color: Style.dim, title: "Open \(q)", subtitle: "New web tile") {
             self.create { $0.openBrowser(q) }
         }
         if paletteMode == .url { return q.isEmpty ? [] : [openURL] }
@@ -152,7 +148,7 @@ extension AppModel {
         // A command is offered when its name is typed, or, with nothing typed, when it has something to do.
         let tab: String? = switch workspace.filter {
         case .all: nil
-        case .attention: "Needs you"
+        case .attention: TileActivity.needsInput.label
         case .group(let id): groups.list.first { $0.id == id }?.name
         }
         let commands = BoardCommand.allCases.compactMap { command -> PaletteItem? in
@@ -174,7 +170,7 @@ extension AppModel {
         }
 
         if q.isEmpty {
-            let urlMode = PaletteItem(id: "url-mode", symbol: "globe", color: Style.violet, title: "Open Web Tile…", subtitle: "⌘L") {
+            let urlMode = PaletteItem(id: "url-mode", symbol: "globe", color: Style.dim, title: "Open Web Tile…", subtitle: "⌘L") {
                 DispatchQueue.main.async {
                     self.paletteMode = .url
                     self.showPalette = true
@@ -183,10 +179,10 @@ extension AppModel {
             return apps + presets + [urlMode] + tiles + commands + reopen
         }
         let looksLikeURL = WebAddress.looksLikeAddress(q)
-        let run = PaletteItem(id: "run", symbol: "play.fill", color: Style.cyan, title: "Run \(q)", subtitle: "New terminal tile in " + folder) {
+        let run = PaletteItem(id: "run", symbol: "play.fill", color: Style.dim, title: "Run \(q)", subtitle: "New terminal tile in " + folder) {
             self.create { $0.launch(command: q, cwd: cwd) }
         }
-        let search = PaletteItem(id: "search", symbol: "magnifyingglass", color: Style.violet, title: "Search the web for “\(q)”", subtitle: "New web tile") {
+        let search = PaletteItem(id: "search", symbol: "magnifyingglass", color: Style.dim, title: "Search the web for “\(q)”", subtitle: "New web tile") {
             self.create { $0.openBrowser(q) }
         }
         return tiles + (looksLikeURL ? [openURL] : []) + presets + commands + reopen + [run] + apps + (looksLikeURL ? [] : [search])

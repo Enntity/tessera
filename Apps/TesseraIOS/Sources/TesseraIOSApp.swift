@@ -13,7 +13,7 @@ struct TesseraIOSApp: App {
                 .environment(store)
                 .environment(store.session)
                 .preferredColorScheme(.dark)
-                .tint(Style.cyan)
+                .tint(Style.control)
                 .onOpenURL { store.handlePairingURL($0) }
                 .onChange(of: phase) { _, p in if p == .active { store.session.resume() } }
         }

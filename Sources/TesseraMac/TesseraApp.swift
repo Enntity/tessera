@@ -116,13 +116,11 @@ final class AppModel {
         restoreFocus()
     }
 
-    private static let zoom = Animation.spring(duration: 0.38, bounce: 0.12)
-
     /// Opens a tile: in place on the board, or for a Claude or Codex conversation, straight in its
     /// app, landing where the opened tile would have. `inApp: false` shows such a conversation's
     /// transcript in Tessera instead.
     func open(_ id: String, inApp: Bool = true) {
-        act(Self.zoom) { workspace.open(id, inApp: inApp, nativeAt: appRect(for: id)) }
+        act(Style.Motion.zoom) { workspace.open(id, inApp: inApp, nativeAt: appRect(for: id)) }
     }
 
     /// Where the app's window goes when tile `id` opens in its app (AppKit screen coordinates).
@@ -132,18 +130,18 @@ final class AppModel {
 
     /// Every way of starting a tile ends here: `make` starts it, and it opens at once.
     func create(_ make: (Workspace) -> String?) {
-        act(Self.zoom) { if let id = make(workspace) { workspace.open(id) } }
+        act(Style.Motion.zoom) { if let id = make(workspace) { workspace.open(id) } }
     }
 
     /// Back to the board; the tile stays selected.
     func collapse() {
-        act(.spring(duration: 0.3, bounce: 0.05)) { workspace.collapse() }
+        act(Style.Motion.zoom) { workspace.collapse() }
     }
 
     /// Closes tiles (an app conversation: hides it), and offers the way back: a toast, and Undo on
     /// the Edit menu (⌘Z). Every close comes through here.
     func close(_ ids: [String]) {
-        act(.spring(duration: 0.3)) {
+        act(Style.Motion.standard) {
             let closed = ids.compactMap(workspace.close)
             guard let first = closed.first else { return }
             let many = first.kind == .agentSession ? "conversations" : "tiles"
@@ -169,7 +167,7 @@ final class AppModel {
     /// Brings closed tiles and hidden conversations back to their places (Undo, the toast, ⌘K's
     /// "Reopen …", which also opens the tile).
     func reopen(_ ids: [String], open: Bool = false) {
-        act(Self.zoom) {
+        act(Style.Motion.zoom) {
             let back = ids.filter(workspace.reopen)
             if open, let id = back.first { workspace.open(id, nativeAt: appRect(for: id)) }
             if let toast = closedToast, !toast.ids.contains(where: isClosed) { closedToast = nil }
@@ -207,7 +205,7 @@ final class AppModel {
 
     /// The toast goes after a few seconds; Undo stays on the Edit menu.
     func dismiss(_ toast: ClosedToast) {
-        if closedToast == toast { withAnimation(.spring(duration: 0.3)) { closedToast = nil } }
+        if closedToast == toast { withAnimation(Style.Motion.standard) { closedToast = nil } }
     }
 
     /// A command on many tiles at once, from ⌘K or the Board menu.
@@ -225,10 +223,20 @@ final class AppModel {
 
     /// Tab clicks, ⌘1…9 and new tabs change the board itself, so an open panel closes first.
     func onBoard(_ change: (Workspace) -> Void) {
-        act(.spring(duration: 0.35)) {
+        act(Style.Motion.standard) {
             workspace.collapse()
             change(workspace)
         }
+    }
+
+    /// ⇧⌘P and the eye in the top bar.
+    func togglePrivacy() {
+        act(Style.Motion.standard) { privacyMode.toggle() }
+    }
+
+    /// ⌘\ and its button in the top bar.
+    func toggleSidebar() {
+        act(Style.Motion.standard) { showSidebar.toggle() }
     }
 
     /// Puts the keyboard where the user is, after anything that took it away (the palette, a

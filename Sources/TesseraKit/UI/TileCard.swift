@@ -3,128 +3,184 @@ import SwiftUI
 /// One phase for every tile's age clock, so their updates land together.
 private let ageClockStart = Date()
 
-/// The chrome around every tile: identity, state, and an attention signal you can catch in
-/// peripheral vision across a large screen.
+/// The chrome around every tile: what it is (glyph, title), where it lives and how long ago it
+/// last did anything (the footer), and its state, which reads the same at every size:
+/// - idle: nothing;
+/// - working: a pill, and a highlight sweeping the rule under the header (or the progress the
+///   program reports);
+/// - needs you: a pill, an amber edge with a glow, and the question called out over the content;
+/// - done, not yet seen: a dot after the title and a faint edge;
+/// - failed: a pill, a coral edge (fainter once seen), and why in the footer;
+/// - selected: a ring outside the edge, whatever the state.
 public struct TileCard<Content: View>: View {
     @Environment(\.tesseraPrivacy) private var privacy
     let info: TileInfo
     let isSelected: Bool
+    let isHovered: Bool
     let compact: Bool
     let content: Content
 
-    public init(info: TileInfo, isSelected: Bool = false, compact: Bool = false, @ViewBuilder content: () -> Content) {
+    public init(info: TileInfo, isSelected: Bool = false, isHovered: Bool = false, compact: Bool = false,
+                @ViewBuilder content: () -> Content) {
         self.info = info
         self.isSelected = isSelected
+        self.isHovered = isHovered
         self.compact = compact
         self.content = content()
     }
 
+    public static func headerHeight(compact: Bool) -> CGFloat { compact ? 22 : 26 }
+    static func footerHeight(compact: Bool) -> CGFloat { compact ? 18 : 20 }
+
     public var body: some View {
-        let halo = info.isUnseen ? info.activity : nil
+        let shape = Style.shape(Style.Radius.m)
+        let edge = self.edge
         VStack(spacing: 0) {
             header
             content
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .clipped()
-            if !compact { footer }
+                .overlay(alignment: .bottom) { question }
+            footer
         }
-        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .clipShape(shape)
+        .overlay { shape.strokeBorder(edge.color, lineWidth: edge.width) }
         .overlay {
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .strokeBorder(isSelected ? Style.ink.opacity(0.55) : Style.hairline, lineWidth: isSelected ? 1.5 : 1)
-        }
-        .overlay { if let halo { AttentionHalo(activity: halo) } }
-        .overlay(alignment: .top) {
-            if info.activity == .working {
-                Ambient(.sweep(Style.accent(info.flavor))).frame(height: 1.5).padding(.top, compact ? 21 : 25)
+            if isSelected {
+                let ring = Style.Metrics.ring
+                Style.shape(Style.Radius.m + 2 * ring).strokeBorder(Style.ink, lineWidth: ring).padding(-2 * ring)
             }
         }
-        // The glow sits on a still shape behind the card, so the effects above never re-render it.
+        // The shadow sits on a still shape behind the card, so nothing above ever re-renders it.
         .background {
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(Style.terminalBackground)
-                .shadow(color: halo.map { Style.state($0).opacity(0.35) } ?? .black.opacity(0.4), radius: halo != nil ? 14 : 6, y: 3)
+            shape.fill(Style.terminalBackground)
+                .elevation(info.activity == .needsInput ? .attention(Style.amber) : .tile)
         }
         .contentShape(Rectangle())
+        // The whole title, which a narrow tile cuts short, and what the tile last said (not in
+        // privacy mode, where that is kept off the screen).
+        .help([info.title, privacy ? nil : info.detail].compactMap { $0 }.joined(separator: "\n"))
+    }
+
+    /// The tile's outline: a state that waits on the user lights it, otherwise it is a quiet
+    /// border that lifts under the pointer.
+    private var edge: (color: Color, width: CGFloat) {
+        let color = Style.state(info.activity)
+        switch info.activity {
+        case .needsInput: return (color, 1.5)
+        case .failed where info.attention: return (color, 1.5)
+        case .failed: return (color.opacity(Style.Tint.stroke), 1)
+        case .done where info.attention: return (color.opacity(Style.Tint.stroke), 1)
+        default: return (isHovered ? Style.Neutral.borderHover : Style.Neutral.border, 1)
+        }
     }
 
     private var header: some View {
-        HStack(spacing: 6) {
+        HStack(spacing: Style.Space.xs) {
+            // One width for every glyph, so titles start on one line down a column of tiles.
             Image(systemName: info.flavor.symbol)
-                .font(.system(size: compact ? 9 : 10, weight: .semibold))
+                .font(Style.ui(.caption, .semibold))
                 .foregroundStyle(Style.accent(info.flavor))
+                .frame(width: Style.Space.xl)
             Text(info.title)
-                .font(Style.ui(compact ? 10.5 : 11.5, .semibold))
+                .font(Style.label)
                 .foregroundStyle(Style.ink)
                 .lineLimit(1)
-            Spacer(minLength: 4)
-            if let p = info.progress {
-                ProgressView(value: p).progressViewStyle(.linear).frame(width: 36).tint(Style.cyan)
+            if info.activity == .done, info.attention {
+                Circle().fill(Style.mint).frame(width: 5, height: 5).padding(.leading, Style.Space.xxs)
             }
-            StatePill(activity: info.activity, compact: compact)
+            Spacer(minLength: Style.Space.xs)
+            StatePill(activity: info.activity)
         }
-        .padding(.horizontal, 8)
-        .frame(height: compact ? 22 : 26)
-        .background(Style.glass.opacity(0.92))
-        .overlay(alignment: .bottom) { Rectangle().fill(Style.hairline).frame(height: 1) }
+        .padding(.leading, Style.Space.s)
+        .padding(.trailing, Style.Space.m)
+        .frame(height: Self.headerHeight(compact: compact))
+        .overlay(alignment: .bottom) { rule }
+    }
+
+    /// The rule under the header. While the tile works it carries the sweep, or, when the program
+    /// says how far along it is, that.
+    private var rule: some View {
+        Hairline().overlay {
+            if let progress = info.progress {
+                Style.cyan.opacity(Style.Tint.stroke)
+                Style.cyan.scaleEffect(x: progress, anchor: .leading).animation(Style.Motion.data, value: progress)
+            } else if info.activity == .working {
+                Style.cyan.opacity(Style.Tint.stroke)
+                Ambient(.sweep(Style.cyan))
+            }
+        }
+    }
+
+    /// What a waiting tile is asking, over the bottom of its content.
+    @ViewBuilder
+    private var question: some View {
+        if info.activity == .needsInput, let detail = info.detail {
+            let box = Style.shape(Style.Radius.s)
+            HStack(alignment: .firstTextBaseline, spacing: Style.Space.s) {
+                Image(systemName: "questionmark.circle")
+                Text(privacy ? AttributedString(detail.obscured(true)) : detail.markdownPreview(160))
+                    .lineLimit(2)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .font(Style.caption)
+            .foregroundStyle(Style.amber)
+            .padding(.horizontal, Style.Space.m)
+            .padding(.vertical, Style.Space.s)
+            .background { box.fill(Style.terminalBackground).overlay(box.fill(Style.amber.opacity(Style.Tint.fill))) }
+            .overlay(box.strokeBorder(Style.amber.opacity(Style.Tint.stroke)))
+            .padding(Style.Space.s)
+        }
     }
 
     private var footer: some View {
-        HStack(spacing: 6) {
-            Text(info.detail.map { privacy ? AttributedString($0.obscured(true)) : $0.markdownPreview(160) } ?? AttributedString(info.subtitle))
-                .font(Style.mono(9.5))
-                .foregroundStyle(info.detail != nil && info.activity.isAttention ? Style.state(info.activity) : Style.dim)
-                .lineLimit(1)
-            Spacer(minLength: 4)
+        HStack(alignment: .firstTextBaseline, spacing: Style.Space.s) {
+            // A long path keeps its end: the folder itself.
+            Text(info.subtitle).lineLimit(1).truncationMode(.head)
+            Spacer(minLength: Style.Space.xs)
+            if info.activity == .failed, let detail = info.detail {
+                Text(detail).foregroundStyle(Style.coral).lineLimit(1)
+            }
             TimelineView(.periodic(from: ageClockStart, by: 15)) { ctx in
                 Text(info.lastActivityAt.shortAge(now: ctx.date))
-                    .font(Style.mono(9))
-                    .foregroundStyle(Style.faint)
             }
         }
-        .padding(.horizontal, 8)
-        .frame(height: 20)
-        .background(Style.glass.opacity(0.92))
+        .font(Style.caption)
+        .foregroundStyle(Style.muted)
+        .padding(.horizontal, Style.Space.m)
+        .frame(height: Self.footerHeight(compact: compact))
+        .overlay(alignment: .top) { Hairline() }
     }
 }
 
+public extension View {
+    /// The margin a terminal's thumbnail keeps on its tile, so text never touches the edge or the
+    /// corner. Applied where the tile is built, not in the thumbnail: privacy mode lays the same
+    /// thumbnail over a live terminal, edge to edge.
+    func terminalTileInset() -> some View {
+        padding(.horizontal, Style.Space.m).padding(.vertical, Style.Space.xs)
+    }
+}
+
+/// A tile's state in words, for the states worth a word: idle tiles, and results (which get a
+/// dot), go without.
 public struct StatePill: View {
     let activity: TileActivity
-    var compact = false
 
-    public init(activity: TileActivity, compact: Bool = false) {
-        self.activity = activity
-        self.compact = compact
-    }
+    public init(activity: TileActivity) { self.activity = activity }
 
     public var body: some View {
-        let color = Style.state(activity)
-        HStack(spacing: 4) {
-            Circle().fill(color).frame(width: 5, height: 5)
-                .shadow(color: color, radius: activity == .working ? 3 : 0)
-            if !compact || activity.isAttention {
-                Text(activity.label.uppercased())
-                    .font(.system(size: 8.5, weight: .bold, design: .rounded))
-                    .tracking(0.6)
-                    .foregroundStyle(color)
-            }
-        }
-        .padding(.horizontal, 6)
-        .padding(.vertical, 2.5)
-        .background(color.opacity(0.12), in: Capsule())
-    }
-}
-
-/// A slow breathing ring for unseen results; a rotating comet for "needs you".
-struct AttentionHalo: View {
-    let activity: TileActivity
-
-    var body: some View {
-        let color = Style.state(activity)
-        if activity == .needsInput {
-            Ambient(.comet(color, cornerRadius: 10, lineWidth: 2.5, period: 2.2))
-        } else {
-            Ambient(.pulse(color, cornerRadius: 10, lineWidth: 2, low: 0.35, high: 0.95, period: 1.6))
+        switch activity {
+        case .working, .needsInput, .failed, .exited:
+            let color = Style.state(activity)
+            Text(activity.label).micro()
+                .foregroundStyle(color)
+                .padding(.horizontal, Style.Space.s)
+                .padding(.vertical, Style.Space.xxs)
+                .background(color.opacity(Style.Tint.fill), in: Capsule())
+                .fixedSize()
+        case .starting, .idle, .done:
+            EmptyView()
         }
     }
 }

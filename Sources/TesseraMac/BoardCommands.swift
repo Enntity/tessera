@@ -51,14 +51,10 @@ struct BoardCommands: Commands {
             Button("Last Opened Tile") { model.openPrevious() }
                 .keyboardShortcut(.tab, modifiers: .control)
             Divider()
-            Button(model.privacyMode ? "Turn Off Privacy Mode" : "Privacy Mode") {
-                withAnimation(.easeInOut(duration: 0.25)) { model.privacyMode.toggle() }
-            }
-            .keyboardShortcut("p", modifiers: [.command, .shift])
-            Button(model.showSidebar ? "Hide Accounts" : "Show Accounts") {
-                withAnimation(.spring(duration: 0.3)) { model.showSidebar.toggle() }
-            }
-            .keyboardShortcut("\\")
+            Button(model.privacyMode ? "Turn Off Privacy Mode" : "Privacy Mode") { model.togglePrivacy() }
+                .keyboardShortcut("p", modifiers: [.command, .shift])
+            Button(model.showSidebar ? "Hide Accounts" : "Show Accounts") { model.toggleSidebar() }
+                .keyboardShortcut("\\")
             Divider()
             // These act on the tab being viewed; the two below them on every terminal.
             ForEach(BoardCommand.allCases.filter { !$0.everyTab }) { command in

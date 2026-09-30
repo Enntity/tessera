@@ -13,13 +13,10 @@ typealias PlatformView = UIView
 /// (`tesseraMotion`) or the window is hidden.
 public struct Ambient: View {
     public enum Effect: Equatable {
-        /// A soft highlight sweeping left to right.
+        /// A highlight sweeping left to right.
         case sweep(Color)
-        /// A rounded shape (an outline when `lineWidth` > 0, a capsule when `cornerRadius` is nil)
-        /// breathing between two opacities.
-        case pulse(Color, cornerRadius: CGFloat?, lineWidth: CGFloat = 0, low: Float, high: Float, period: Double)
-        /// A highlight circling a rounded outline.
-        case comet(Color, cornerRadius: CGFloat, lineWidth: CGFloat, period: Double)
+        /// A capsule breathing between two opacities.
+        case pulse(Color, low: Double, high: Double)
         /// Three dots fading in turn.
         case dots(Color, size: CGFloat, spacing: CGFloat)
     }
@@ -127,7 +124,6 @@ final class AmbientView: PlatformView {
         let made: CALayer
         let target: CALayer
         let animation: CABasicAnimation
-        var timing = CAMediaTimingFunctionName.easeInEaseOut
         switch effect {
         case .sweep(let color):
             let gradient = CAGradientLayer()
@@ -135,53 +131,26 @@ final class AmbientView: PlatformView {
             gradient.colors = [0, 0.9, 0].compactMap { c.copy(alpha: $0) }
             gradient.startPoint = CGPoint(x: 0, y: 0.5)
             gradient.endPoint = CGPoint(x: 1, y: 0.5)
-            gradient.locations = [-0.3, -0.15, 0]
-            // A highlight 30% of the width wide, travelling from just off the left edge to past the right.
+            // A highlight a fifth of the width wide, travelling from just off the left edge to past the right.
+            let start = [-0.2, -0.1, 0]
+            gradient.locations = start.map { NSNumber(value: $0) }
             animation = CABasicAnimation(keyPath: "locations")
-            animation.fromValue = [-0.3, -0.15, 0]
-            animation.toValue = [1.0, 1.15, 1.3]
+            animation.fromValue = start
+            animation.toValue = start.map { $0 + 1.2 }
             animation.duration = 1.4
             made = gradient
             target = gradient
-        case .pulse(let color, _, let lineWidth, let low, let high, let period):
+        case .pulse(let color, let low, let high):
             let shape = CALayer()
-            shape.cornerCurve = .continuous
-            if lineWidth > 0 {
-                shape.borderColor = Self.cg(color)
-                shape.borderWidth = lineWidth
-            } else {
-                shape.backgroundColor = Self.cg(color)
-            }
-            shape.opacity = high
+            shape.backgroundColor = Self.cg(color)
+            shape.opacity = Float(high)
             animation = CABasicAnimation(keyPath: "opacity")
             animation.fromValue = low
             animation.toValue = high
-            animation.duration = period
+            animation.duration = 1.6
             animation.autoreverses = true
             made = shape
             target = shape
-        case .comet(let color, _, let lineWidth, let period):
-            let c = Self.cg(color)
-            let gradient = CAGradientLayer()
-            gradient.type = .conic
-            gradient.colors = [0.05, 1, 0.05, 0.05].compactMap { c.copy(alpha: $0) }
-            gradient.startPoint = CGPoint(x: 0.5, y: 0.5)
-            gradient.endPoint = CGPoint(x: 1, y: 0.5)
-            // The gradient turns behind an outline-shaped mask, so only the outline shows it.
-            let outline = CALayer()
-            outline.cornerCurve = .continuous
-            outline.borderWidth = lineWidth
-            outline.borderColor = CGColor(gray: 0, alpha: 1)
-            let ring = CALayer()
-            ring.mask = outline
-            ring.addSublayer(gradient)
-            animation = CABasicAnimation(keyPath: "transform.rotation.z")
-            animation.fromValue = 0
-            animation.toValue = Self.clockwise * 2 * Double.pi
-            animation.duration = period
-            timing = .linear
-            made = ring
-            target = gradient
         case .dots(let color, let size, let spacing):
             let dot = CALayer()
             dot.backgroundColor = Self.cg(color)
@@ -199,7 +168,7 @@ final class AmbientView: PlatformView {
             made = row
             target = dot
         }
-        animation.timingFunction = CAMediaTimingFunction(name: timing)
+        animation.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
         animation.repeatCount = .infinity
         animation.isRemovedOnCompletion = false
         animated = (target, animation)
@@ -217,15 +186,8 @@ final class AmbientView: PlatformView {
         switch effect {
         case .sweep:
             break
-        case .pulse(_, let radius, _, _, _, _):
-            content.cornerRadius = min(radius ?? .infinity, min(bounds.width, bounds.height) / 2)
-        case .comet(_, let radius, _, _):
-            content.mask?.frame = bounds
-            content.mask?.cornerRadius = radius
-            // A square that covers the outline at every angle.
-            let side = hypot(bounds.width, bounds.height)
-            content.sublayers?.first?.bounds = CGRect(x: 0, y: 0, width: side, height: side)
-            content.sublayers?.first?.position = CGPoint(x: bounds.midX, y: bounds.midY)
+        case .pulse:
+            content.cornerRadius = min(bounds.width, bounds.height) / 2
         case .dots(_, let size, _):
             content.sublayers?.first?.frame = CGRect(x: 0, y: (bounds.height - size) / 2, width: size, height: size)
         }
@@ -244,10 +206,7 @@ final class AmbientView: PlatformView {
 
     #if os(macOS)
     private static func cg(_ color: Color) -> CGColor { NSColor(color).cgColor }
-    /// AppKit layers count angles counter-clockwise (y points up); UIKit's count clockwise.
-    private static let clockwise = -1.0
     #else
     private static func cg(_ color: Color) -> CGColor { UIColor(color).cgColor }
-    private static let clockwise = 1.0
     #endif
 }

@@ -1,49 +1,91 @@
 import SwiftUI
 
 /// The visual language: a dark glass control room where color means state, never decoration.
+/// Every size, radius, tint, shadow and spring the chrome uses is named here.
 public enum Style {
+    // MARK: Surfaces
+
     public static let void = Color(red: 0.020, green: 0.027, blue: 0.043)
     public static let deck = Color(red: 0.035, green: 0.047, blue: 0.071)
     public static let glass = Color(red: 0.063, green: 0.078, blue: 0.110)
     public static let hairline = Color.white.opacity(0.08)
+    /// The one dimming layer: behind an open panel or the palette, over a terminal that has ended.
+    public static let scrim = Color.black.opacity(0.5)
+    /// Over a web tile, so a white page doesn't outshine the board.
+    public static let pageDim = Color.black.opacity(0.2)
+    public static let terminalBackground = Color(cgColor: TerminalTheme.midnight.background.cgColor)
+
+    // MARK: Text
+
     public static let ink = Color(red: 0.86, green: 0.89, blue: 0.94)
     public static let dim = Color(red: 0.52, green: 0.57, blue: 0.66)
+    /// The quietest text that still reads (4.5:1 on every surface).
+    public static let muted = Color(red: 0.45, green: 0.50, blue: 0.58)
+    /// Not for text: tracks, idle marks.
     public static let faint = Color(red: 0.32, green: 0.36, blue: 0.44)
+
+    // MARK: State — the only saturated colors that move, glow or fill
 
     public static let cyan = Color(red: 0.30, green: 0.93, blue: 0.86)
     public static let amber = Color(red: 1.00, green: 0.74, blue: 0.24)
     public static let mint = Color(red: 0.36, green: 0.92, blue: 0.56)
     public static let coral = Color(red: 1.00, green: 0.38, blue: 0.43)
-    public static let violet = Color(red: 0.70, green: 0.52, blue: 1.00)
-    public static let sky = Color(red: 0.40, green: 0.66, blue: 1.00)
 
-    public static let terminalBackground = Color(red: 10 / 255, green: 13 / 255, blue: 20 / 255)
+    public static func state(_ activity: TileActivity) -> Color {
+        switch activity {
+        case .working: cyan
+        case .done: mint
+        case .needsInput: amber
+        case .failed: coral
+        case .starting, .idle, .exited: muted
+        }
+    }
 
+    /// What native controls (switches, default buttons, focus rings) take in place of the system accent.
+    public static let control = Color(red: 0.45, green: 0.62, blue: 0.95)
+
+    /// A tool's own color: on its glyph and as a faint wash, never moving or glowing. Plain tools
+    /// (a shell, a command, a page) have none.
     public static func accent(_ flavor: AgentFlavor) -> Color {
         switch flavor {
         case .claude, .claudeDesktop: Color(red: 0.85, green: 0.47, blue: 0.34)
         case .codex, .codexDesktop: Color(red: 0.62, green: 0.78, blue: 1.00)
         case .grok: Color(red: 0.80, green: 0.82, blue: 0.86)
-        case .gemini: sky
+        case .gemini: Color(red: 0.40, green: 0.66, blue: 1.00)
         case .dsh: Color(red: 0.36, green: 0.49, blue: 1.00)
-        case .omp: violet
-        case .opencode, .aider, .custom: Color(red: 0.95, green: 0.60, blue: 0.85)
-        case .shell: cyan
-        case .web: violet
+        case .omp: Color(red: 0.70, green: 0.52, blue: 1.00)
+        case .opencode, .aider: Color(red: 0.95, green: 0.60, blue: 0.85)
+        case .shell, .custom, .web: dim
         }
     }
 
-    public static func state(_ activity: TileActivity) -> Color {
-        switch activity {
-        case .starting: dim
-        case .working: cyan
-        case .idle: faint
-        case .done: mint
-        case .needsInput: amber
-        case .exited: faint
-        case .failed: coral
-        }
+    // MARK: Type
+
+    /// The chrome's type ramp. (Tile content keeps its own, smaller sizes.)
+    public enum TextSize: CGFloat, Sendable {
+        /// Pills and section headers, in capitals.
+        case micro = 8.5
+        /// Ages, paths, counts, machine numbers.
+        case caption = 10
+        /// Tile titles, chips, tabs, rows, buttons.
+        case label = 11.5
+        case body = 13
+        /// The palette's field.
+        case title = 17
+        /// The empty board.
+        case display = 20
     }
+
+    public static let micro = ui(.micro, .bold)
+    public static let microTracking: CGFloat = 0.6
+    public static let caption = mono(.caption)
+    public static let label = ui(.label, .semibold)
+    public static let body = ui(.body)
+    public static let title = ui(.title)
+    public static let display = ui(.display, .semibold)
+
+    public static func ui(_ size: TextSize, _ weight: Font.Weight = .regular) -> Font { ui(size.rawValue, weight) }
+    public static func mono(_ size: TextSize, _ weight: Font.Weight = .regular) -> Font { mono(size.rawValue, weight) }
 
     public static func mono(_ size: CGFloat, _ weight: Font.Weight = .regular) -> Font {
         .system(size: size, weight: weight, design: .monospaced)
@@ -51,6 +93,109 @@ public enum Style {
 
     public static func ui(_ size: CGFloat, _ weight: Font.Weight = .regular) -> Font {
         .system(size: size, weight: weight, design: .rounded)
+    }
+
+    // MARK: Space, shape, tint
+
+    public enum Space {
+        public static let xxs: CGFloat = 2
+        public static let xs: CGFloat = 4
+        public static let s: CGFloat = 6
+        public static let m: CGFloat = 8
+        /// Between tiles, and inside a card.
+        public static let gutter: CGFloat = 10
+        /// Every chrome inset: the board, the bars, the sidebar, a panel's content.
+        public static let l: CGFloat = 12
+        public static let xl: CGFloat = 16
+        public static let xxl: CGFloat = 24
+    }
+
+    public enum Radius {
+        /// Bubbles inside a thumbnail.
+        public static let xs: CGFloat = 4
+        /// Fields and icon wells.
+        public static let s: CGFloat = 6
+        /// Tiles, cards, chips, rows.
+        public static let m: CGFloat = 10
+        /// What floats: the open panel, the palette.
+        public static let l: CGFloat = 16
+    }
+
+    /// Every rounded corner is continuous.
+    public static func shape(_ radius: CGFloat) -> RoundedRectangle {
+        RoundedRectangle(cornerRadius: radius, style: .continuous)
+    }
+
+    /// How strongly a state or tool color tints what it fills or outlines.
+    public enum Tint {
+        public static let wash = 0.06
+        public static let fill = 0.14
+        public static let strong = 0.24
+        public static let stroke = 0.35
+    }
+
+    public enum Neutral {
+        public static let hover = ink.opacity(0.06)
+        public static let selected = ink.opacity(0.10)
+        public static let border = ink.opacity(0.16)
+        /// A border under the pointer.
+        public static let borderHover = ink.opacity(0.28)
+        public static let focus = ink.opacity(0.6)
+    }
+
+    // MARK: Motion
+
+    public enum Motion {
+        /// Hover, the palette.
+        public static let quick = Animation.spring(duration: 0.2)
+        /// Tabs, the sidebar, tiles coming, going and moving, privacy.
+        public static let standard = Animation.spring(duration: 0.3)
+        /// A panel opening out of its tile, and going back into it.
+        public static let zoom = Animation.spring(duration: 0.38, bounce: 0.1)
+        /// Meters, rings, numbers.
+        public static let data = Animation.smooth(duration: 0.5)
+    }
+
+    // MARK: Metrics
+
+    public enum Metrics {
+        public static let hud: CGFloat = 44
+        /// The row under the top bar: tabs over the board, a heading over the sidebar.
+        public static let strip: CGFloat = 36
+        /// Every control in the bars, and every button.
+        public static let control: CGFloat = 28
+        public static let panelHeader: CGFloat = 40
+        public static let sidebar: CGFloat = 290
+        /// A selected tile's ring, and the gap between it and the tile's edge.
+        public static let ring: CGFloat = 2
+    }
+
+    /// The shadows there are.
+    public enum Elevation {
+        /// A tile on the board.
+        case tile
+        /// What floats over the board.
+        case overlay
+        /// A lit mark: a dot, a meter.
+        case glow(Color)
+        /// A tile that needs the user.
+        case attention(Color)
+
+        var shadow: (color: Color, radius: CGFloat, y: CGFloat) {
+            switch self {
+            case .tile: (.black.opacity(0.4), 6, 3)
+            case .overlay: (.black.opacity(0.6), 44, 18)
+            case .glow(let color): (color.opacity(0.6), 3, 0)
+            case .attention(let color): (color.opacity(Tint.stroke), 14, 0)
+            }
+        }
+    }
+}
+
+public extension View {
+    func elevation(_ elevation: Style.Elevation) -> some View {
+        let shadow = elevation.shadow
+        return self.shadow(color: shadow.color, radius: shadow.radius, y: shadow.y)
     }
 }
 

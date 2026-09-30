@@ -13,45 +13,58 @@ struct BoardView: View {
         let workspace = model.workspace
         GeometryReader { geo in
             let ids = workspace.visibleIds
-            let layout = Self.grid(count: ids.count, in: geo.size)
-            let board = geo.frame(in: .named("window"))
+            // The grid keeps the chrome's inset from every edge of its area (a selected tile's ring
+            // needs the room), and when it scrolls the inset scrolls with it.
+            let inset = Style.Space.l
+            let area = geo.frame(in: .named("window"))
+            let board = area.insetBy(dx: inset, dy: inset)
+            let layout = Self.grid(count: ids.count, in: board.size)
             ZStack(alignment: .topLeading) {
                 if ids.isEmpty {
-                    EmptyBoard(filter: workspace.filter).frame(width: geo.size.width, height: geo.size.height)
+                    EmptyBoard(filter: workspace.filter).frame(width: area.width, height: area.height)
                 }
                 ScrollViewReader { proxy in
                     ScrollView(layout.scrolls ? .vertical : [], showsIndicators: layout.scrolls) {
                         ZStack(alignment: .topLeading) {
                             ForEach(Array(ids.enumerated()), id: \.element) { index, id in
-                                let origin = layout.origin(of: index, in: geo.size)
+                                let origin = layout.origin(of: index, in: board.size)
                                 BoardTile(id: id, size: layout.tileSize)
                                     .frame(width: layout.tileSize.width, height: layout.tileSize.height)
                                     .offset(x: origin.x, y: origin.y)
                                     .transition(.scale(scale: 0.85).combined(with: .opacity))
                             }
                         }
-                        .frame(width: geo.size.width, height: max(geo.size.height, layout.contentHeight), alignment: .topLeading)
+                        .frame(width: board.width, height: max(board.height, layout.contentHeight), alignment: .topLeading)
+                        .padding(inset)
                         .id(Self.gridId)
                         .onGeometryChange(for: CGFloat.self) { -$0.frame(in: .scrollView).minY } action: { model.boardScroll = $0 }
-                        .animation(.spring(duration: 0.45, bounce: 0.15), value: ids)
-                        .animation(.spring(duration: 0.45, bounce: 0.15), value: layout)
+                        .animation(Style.Motion.standard, value: ids)
+                        .animation(Style.Motion.standard, value: layout)
                     }
                     .scrollDisabled(!layout.scrolls)
                     // A scrolling board follows the selection, moving only as far as it takes to show it.
                     .onChange(of: workspace.selectedId) { _, selected in
                         guard layout.scrolls, let index = selected.flatMap(ids.firstIndex(of:)) else { return }
-                        let offset = layout.scrollOffset(showing: index, height: geo.size.height, current: model.boardScroll)
-                        let range = layout.contentHeight - geo.size.height
+                        let offset = layout.scrollOffset(showing: index, height: board.height, current: model.boardScroll)
+                        let range = layout.contentHeight - board.height
                         guard offset != model.boardScroll, range > 0 else { return }
                         // Aligning the same fraction of the grid and of the view puts it at exactly `offset`.
-                        withAnimation(.spring(duration: 0.3)) { proxy.scrollTo(Self.gridId, anchor: UnitPoint(x: 0, y: offset / range)) }
+                        withAnimation(Style.Motion.standard) { proxy.scrollTo(Self.gridId, anchor: UnitPoint(x: 0, y: offset / range)) }
                     }
                 }
 
                 if let id = workspace.expandedId, workspace.exists(id) {
-                    ExpandedPanel(id: id, board: board, source: model.tileFrame(id))
+                    Style.scrim
+                        .contentShape(Rectangle())
+                        .onTapGesture { model.collapse() }
                         .transition(.opacity)
                         .zIndex(10)
+                    // A panel per tile: going from one open tile to the next, each zooms to its own.
+                    PanelContent(id: id)
+                        .transition(ExpandedPanel.zoom(from: model.tileFrame(id), board: board, in: area))
+                        .id(id)
+                        .zIndex(11)
+                    DoubleClickShield().zIndex(12)
                 }
             }
             .onChange(of: board, initial: true) { _, frame in model.boardFrame = frame }
@@ -86,7 +99,7 @@ struct BoardView: View {
 
     /// The board's one layout: what is drawn, where a tile opens from, and what the arrow keys walk.
     static func grid(count: Int, in size: CGSize) -> TesseraKit.GridLayout {
-        GridLayout.fit(count: count, in: size, spacing: 10, aspect: 16.0 / 10.5, minTileWidth: 230)
+        GridLayout.fit(count: count, in: size, spacing: Style.Space.gutter, aspect: 16.0 / 10.5, minTileWidth: 230)
     }
 }
 
@@ -103,40 +116,33 @@ struct EmptyBoard: View {
     }
 
     var body: some View {
-        VStack(spacing: 18) {
-            TesseraGlyph().frame(width: 44, height: 44).opacity(0.8)
-            Text(title).font(Style.ui(20, .semibold)).foregroundStyle(Style.ink)
+        VStack(spacing: Style.Space.xl) {
+            TesseraGlyph().frame(width: 44, height: 44)
+            Text(title).font(Style.display).foregroundStyle(Style.ink)
             if case .group = filter {
-                Text("Drag tiles onto this tab, or start one here with ⌘K.").font(Style.ui(13)).foregroundStyle(Style.dim)
+                Text("Drag tiles onto this tab, or start one here with ⌘K.").font(Style.body).foregroundStyle(Style.dim)
             }
             if filter == .all {
-                HStack(spacing: 10) {
+                HStack(spacing: Style.Space.gutter) {
                     ForEach(model.workspace.installedApps, id: \.self) { app in
-                        Button { model.newAppConversation(app) } label: {
-                            Label(app.name, systemImage: app.flavor.symbol)
-                                .font(Style.ui(12, .semibold))
-                                .padding(.horizontal, 12).padding(.vertical, 7)
-                                .background(Style.accent(app.flavor).opacity(0.14), in: Capsule())
-                                .foregroundStyle(Style.accent(app.flavor))
-                        }
-                        .buttonStyle(.plain)
+                        start(app.name, app.flavor) { model.newAppConversation(app) }
                     }
                     ForEach(model.workspace.presets.prefix(4)) { preset in
-                        Button {
+                        start(preset.name, preset.flavor) {
                             model.create { $0.launch(command: preset.command, cwd: model.contextDirectory) }
-                        } label: {
-                            Label(preset.name, systemImage: preset.flavor.symbol)
-                                .font(Style.ui(12, .semibold))
-                                .padding(.horizontal, 12).padding(.vertical, 7)
-                                .background(Style.accent(preset.flavor).opacity(0.14), in: Capsule())
-                                .foregroundStyle(Style.accent(preset.flavor))
                         }
-                        .buttonStyle(.plain)
                     }
                 }
-                Text("⌘K for everything · ⌘T shell · ⌘L web tile").font(Style.mono(11)).foregroundStyle(Style.faint)
+                Text("⌘K for everything · ⌘T shell · ⌘L web tile").font(Style.caption).foregroundStyle(Style.muted)
             }
         }
+    }
+
+    private func start(_ name: String, _ flavor: AgentFlavor, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Label { Text(name) } icon: { Image(systemName: flavor.symbol).foregroundStyle(Style.accent(flavor)) }
+        }
+        .buttonStyle(.capsule)
     }
 }
 
@@ -165,7 +171,7 @@ struct TileView: View {
     var body: some View {
         let workspace = model.workspace
         let compact = size.width < 280
-        TileCard(info: info, isSelected: workspace.selectedId == info.id, compact: compact) {
+        TileCard(info: info, isSelected: workspace.selectedId == info.id, isHovered: hovering, compact: compact) {
             content
         }
         .environment(\.tesseraMotion, onScreen)
@@ -175,13 +181,12 @@ struct TileView: View {
         .overlay(alignment: .topTrailing) {
             if hovering {
                 TileHoverControls(info: info)
-                    .padding(.trailing, 4)
-                    .padding(.top, compact ? 24 : 28)
+                    .padding(.trailing, Style.Space.xs)
+                    .padding(.top, TileCard<EmptyView>.headerHeight(compact: compact) + Style.Space.xs)
                     .transition(.opacity)
             }
         }
-        .scaleEffect(hovering ? 1.012 : 1)
-        .animation(.spring(duration: 0.25), value: hovering)
+        .animation(Style.Motion.quick, value: hovering)
         .onHover { hovering = $0 }
         .onTapGesture(count: 1) { model.open(info.id) }
         .onDrag {
@@ -199,6 +204,7 @@ struct TileView: View {
         case .terminal:
             if let session = workspace.terminals[info.id] {
                 TerminalTileContent(session: session)
+                    .terminalTileInset()
                     .overlay { EndedOverlay(info: info) }
             }
         case .browser:
@@ -220,7 +226,7 @@ struct TileHoverControls: View {
     let info: TileInfo
 
     var body: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: Style.Space.gutter) {
             if info.kind == .terminal, let action = model.actions(for: info).first { button(action) }
             button(model.closeAction(for: info))
         }
@@ -229,9 +235,9 @@ struct TileHoverControls: View {
     private func button(_ action: TileAction) -> some View {
         Button(action: action.run) {
             Image(systemName: action.symbol)
-                .font(.system(size: 9, weight: .bold))
+                .font(Style.ui(.caption, .bold))
                 .frame(width: 20, height: 20)
-                .background(.black.opacity(0.55), in: Circle())
+                .background(Style.scrim, in: Circle())
                 .foregroundStyle(Style.ink)
         }
         .buttonStyle(.plain)
@@ -244,14 +250,19 @@ struct TileDropDelegate: DropDelegate {
     let workspace: Workspace
 
     func performDrop(info: DropInfo) -> Bool {
-        guard let provider = info.itemProviders(for: [.text]).first else { return false }
-        provider.loadObject(ofClass: NSString.self) { obj, _ in
-            guard let id = obj as? String else { return }
-            DispatchQueue.main.async {
-                MainActor.assumeIsolated {
-                    withAnimation(.spring(duration: 0.4)) { workspace.move(id, before: target) }
-                }
-            }
+        info.itemProviders(for: [.text]).loadTileId { id in
+            withAnimation(Style.Motion.standard) { workspace.move(id, before: target) }
+        }
+    }
+}
+
+extension [NSItemProvider] {
+    /// The id a dragged tile carries, handed to `drop` on the main actor. False when nothing was dropped.
+    func loadTileId(_ drop: @escaping @MainActor (String) -> Void) -> Bool {
+        guard let provider = first else { return false }
+        _ = provider.loadObject(ofClass: NSString.self) { object, _ in
+            guard let id = object as? String else { return }
+            DispatchQueue.main.async { MainActor.assumeIsolated { drop(id) } }
         }
         return true
     }
@@ -276,19 +287,28 @@ struct BrowserTileContent: View {
 
     var body: some View {
         if isExpanded {
-            if let image = browser.snapshot {
-                Image(nsImage: image).resizable().aspectRatio(contentMode: .fill)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top).clipped()
-                    .overlay { if privacy { PrivateWebCover(browser: browser) } }
-            } else {
-                Color.black
-            }
+            PageStill(browser: browser)
+                .overlay { if privacy { PrivateWebCover(browser: browser) } else { Style.pageDim } }
         } else if onScreen {
             ScaledWebHost(webView: browser.webView)
-                .overlay { if privacy { PrivateWebCover(browser: browser) } }
+                .overlay { if privacy { PrivateWebCover(browser: browser) } else { Style.pageDim.allowsHitTesting(false) } }
         } else {
             // Scrolled out of view, the page leaves the window too, so WebKit throttles it.
             Style.terminalBackground
+        }
+    }
+}
+
+/// The page as last captured, standing in where the live view isn't.
+struct PageStill: View {
+    let browser: BrowserSession
+
+    var body: some View {
+        if let image = browser.snapshot {
+            Image(nsImage: image).resizable().aspectRatio(contentMode: .fill)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top).clipped()
+        } else {
+            Color.black
         }
     }
 }
@@ -317,9 +337,10 @@ struct PrivateWebCover: View {
     }
 }
 
-/// Over a terminal that isn't running, on its tile and in its open panel alike: what happened, and
-/// the way back (Resume after a shut-down, Restart after an exit). In the panel ⏎ presses it and
-/// Esc goes back to the board; typing has nowhere to go.
+/// Over a terminal that isn't running, on its tile and in its open panel alike: the way back
+/// (Resume after a shut-down, Restart after an exit). On the tile that is all, its pill and footer
+/// saying how it ended; the panel has room for the whole story. There ⏎ presses the button and Esc
+/// goes back to the board; typing has nowhere to go.
 struct EndedOverlay: View {
     @Environment(AppModel.self) private var model
     let info: TileInfo
@@ -329,21 +350,21 @@ struct EndedOverlay: View {
         if info.activity.hasEnded, let action = model.actions(for: info).first {
             let suspended = model.workspace.isSuspended(info.id)
             ZStack {
-                Color.black.opacity(0.6)
-                VStack(spacing: 6) {
-                    if suspended {
-                        Label("Shut down", systemImage: "power").font(Style.ui(12, .semibold)).foregroundStyle(Style.ink)
+                Style.scrim
+                VStack(spacing: Style.Space.m) {
+                    if inPanel {
+                        if suspended {
+                            Label("Shut down", systemImage: "power").font(Style.label).foregroundStyle(Style.ink)
+                        }
+                        Text(info.detail ?? "Exited")
+                            .font(Style.caption)
+                            .foregroundStyle(suspended ? Style.dim : Style.state(info.activity))
+                            .multilineTextAlignment(.center)
+                            .lineLimit(2)
+                            .padding(.horizontal, Style.Space.gutter)
                     }
-                    Text(info.detail ?? "Exited")
-                        .font(Style.mono(9.5))
-                        .foregroundStyle(suspended ? Style.dim : Style.state(info.activity))
-                        .multilineTextAlignment(.center)
-                        .lineLimit(2)
-                        .padding(.horizontal, 10)
                     Button(action.title, action: action.run)
-                        .buttonStyle(.borderedProminent)
-                        .tint(Style.cyan.opacity(0.6))
-                        .controlSize(.small)
+                        .buttonStyle(inPanel ? .capsulePrimary : .capsule)
                         .keyboardShortcut(inPanel ? .defaultAction : nil)
                 }
                 if inPanel { EscToBoard() }

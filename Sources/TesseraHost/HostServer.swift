@@ -11,6 +11,8 @@ import TesseraKit
 public final class HostServer {
     public private(set) var isRunning = false
     public private(set) var status = "Off"
+    /// Why the listener last failed; stays on show until the next start.
+    public private(set) var failure: String?
     public private(set) var clientNames: [String] = []
     public private(set) var pairingCode: String
     public let port: UInt16 = WireProtocol.defaultPort
@@ -27,8 +29,6 @@ public final class HostServer {
     @ObservationIgnored private var flushes = 0
     @ObservationIgnored private var lastTiles: [TileInfo] = []
     @ObservationIgnored private var lastUsage: [UsageReading] = []
-    /// Why the listener last failed; stays on show until the next start.
-    @ObservationIgnored private var failure: String?
     @ObservationIgnored private let hostId: String
 
     public init(workspace: Workspace, open: @escaping (String) -> Void, close: @escaping (String) -> Void) {
@@ -85,7 +85,9 @@ public final class HostServer {
             l.start(queue: .main)
             listener = l
         } catch {
-            status = "Failed: \(error.localizedDescription)"
+            let why = "Failed: \(error.localizedDescription)"
+            failure = why
+            status = why
         }
     }
 

@@ -64,8 +64,14 @@ public final class MachineMonitor {
 
     public func config(_ id: String) -> MachineConfig? { remotes.first { $0.id == id } }
 
-    /// Named hosts from ~/.ssh/config, offered for one-click adding; re-read only when the file changes.
-    public func suggestedHosts() -> [String] {
+    /// Named hosts from ~/.ssh/config that aren't watched yet, offered for one-click adding.
+    public var unwatchedHosts: [String] {
+        let known = Set(remotes.compactMap(\.sshHost))
+        return suggestedHosts().filter { !known.contains($0) }
+    }
+
+    /// Named hosts from ~/.ssh/config; re-read only when the file changes.
+    private func suggestedHosts() -> [String] {
         let path = NSHomeDirectory() + "/.ssh/config"
         let modified = FileStat(path)?.modified
         if let hostsCache, hostsCache.modified == modified { return hostsCache.hosts }
