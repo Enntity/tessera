@@ -49,6 +49,20 @@ final class TerminalSessionTests: XCTestCase {
         XCTAssertTrue(waitUntil { session.terminal.screenTail(40).contains { $0.contains("tessera-resume-check") } })
     }
 
+    func testATileOnAnotherMachineIsNamedAfterItAndSaysSo() {
+        let remote = TerminalSession(command: "ssh -p 2222 me@gpu-box-1", cwd: NSTemporaryDirectory(), startSuspended: true)
+        XCTAssertEqual(remote.info.title, "gpu-box-1")
+        XCTAssertEqual(remote.info.subtitle, "gpu-box-1")
+        // As it is when restored, and a name of the user's own still wins.
+        let restored = TerminalSession(command: "ssh gpu-box-1", cwd: NSTemporaryDirectory(), title: "Training", label: "ssh gpu-box-1",
+                                       resuming: true, startSuspended: true)
+        XCTAssertEqual(restored.info.title, "Training")
+        XCTAssertEqual(restored.info.subtitle, "gpu-box-1")
+        let local = TerminalSession(command: "make", cwd: "/", startSuspended: true)
+        XCTAssertEqual(local.info.title, "make")
+        XCTAssertEqual(local.info.subtitle, "/")
+    }
+
     func testRestoredAgentTileResumesItsSession() {
         let session = TerminalSession(command: "claude --model opus", cwd: NSTemporaryDirectory(),
                                       sessionId: "11111111-2222-3333-4444-555555555555", resuming: true, startSuspended: true)

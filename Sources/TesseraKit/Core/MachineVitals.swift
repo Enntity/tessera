@@ -19,6 +19,30 @@ public struct MachineConfig: Codable, Identifiable, Hashable, Sendable {
         !host.isEmpty && !host.hasPrefix("-") && host.count <= 255
             && host.allSatisfy { $0.isASCII && ($0.isLetter || $0.isNumber || "._@-:[]".contains($0)) }
     }
+
+    /// The machine an `ssh …` command line connects to (`ssh -p 2222 me@gpu-box` → `gpu-box`), so a
+    /// tile running one can say where it is. Nil for any other command.
+    public static func sshHost(in command: String) -> String? {
+        guard let invocation = SessionResume.Invocation(command), invocation.name == "ssh" else { return nil }
+        // Options that take a value: the rest of their word, or when they end it, the next word.
+        let valued = Set("BbcDEeFIiJLlmOopQRSWw")
+        var words = invocation.words.dropFirst()
+        while let word = words.first, word.hasPrefix("-"), word != "--" {
+            words.removeFirst()
+            if let option = word.dropFirst().firstIndex(where: valued.contains), word.index(after: option) == word.endIndex {
+                words = words.dropFirst()
+            }
+        }
+        if words.first == "--" { words.removeFirst() }
+        guard var host = words.first else { return nil }
+        if host.hasPrefix("ssh://") {
+            host = String(host.dropFirst(6).prefix { $0 != "/" })
+            // (A bracketed IPv6 address keeps its colons.)
+            if !host.hasSuffix("]"), let port = host.lastIndex(of: ":") { host = String(host[..<port]) }
+        }
+        if let at = host.lastIndex(of: "@") { host = String(host[host.index(after: at)...]) }
+        return isValidHost(host) ? host : nil
+    }
 }
 
 /// A machine's recent CPU and GPU load, oldest first: what its chip draws as sparklines.

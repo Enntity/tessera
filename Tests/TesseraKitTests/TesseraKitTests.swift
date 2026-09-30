@@ -703,6 +703,20 @@ final class RemoteVitalsTests: XCTestCase {
         XCTAssertTrue(MachineConfig.isValidHost("me@10.0.0.4"))
     }
 
+    func testAnSSHCommandSaysWhichMachine() {
+        XCTAssertEqual(MachineConfig.sshHost(in: "ssh gpu-box-1"), "gpu-box-1")
+        XCTAssertEqual(MachineConfig.sshHost(in: "ssh -p 2222 -o BatchMode=yes me@gpu-box-1 nvidia-smi"), "gpu-box-1")
+        // A value may be written onto its option, and an option's value is never the host.
+        XCTAssertEqual(MachineConfig.sshHost(in: "/usr/bin/ssh -tt -p2222 -oStrictHostKeyChecking=no -vi key -J jump -- box"), "box")
+        XCTAssertEqual(MachineConfig.sshHost(in: "TERM=xterm exec ssh ssh://me@gpu-box-1:2222"), "gpu-box-1")
+        XCTAssertEqual(MachineConfig.sshHost(in: "ssh ssh://[fe80::1]"), "[fe80::1]")
+        XCTAssertNil(MachineConfig.sshHost(in: "ssh -p 22"))
+        XCTAssertNil(MachineConfig.sshHost(in: "ssh 'box; rm -rf /'"))
+        XCTAssertNil(MachineConfig.sshHost(in: "sshfs box:/ /mnt"))
+        XCTAssertNil(MachineConfig.sshHost(in: "git push ssh"))
+        XCTAssertNil(MachineConfig.sshHost(in: "ssh box | tee log"))
+    }
+
     func testATrendKeepsTheLatestSamplesAndHoldsStillUnderASteadyLoad() {
         var trend = MachineTrend()
         for i in 0..<(MachineTrend.length + 5) { trend.record(cpu: Double(i) / 100, gpu: nil) }

@@ -31,6 +31,8 @@ public final class TerminalSession: NSObject {
     /// The user's login shell (overridable for tests).
     @ObservationIgnored private let shell: String
     @ObservationIgnored private var hasStarted = false
+    /// The machine an `ssh` typed at this tile's prompt is on, until the prompt is back.
+    @ObservationIgnored private var typedHost: String?
     public private(set) var flavor: AgentFlavor
     public private(set) var title: String
     public var customTitle: String?
@@ -81,11 +83,12 @@ public final class TerminalSession: NSObject {
         self.mayContinueLatest = mayContinueLatest
         let flavor = AgentFlavor.infer(fromCommand: command)
         self.flavor = flavor
-        let initial = title ?? label ?? command ?? "Shell"
+        // A tile on another machine is named after it, until the program there sets a title.
+        let initial = title ?? (label ?? command).map { MachineConfig.sshHost(in: $0) ?? $0 } ?? "Shell"
         self.title = initial
         self.customTitle = title
         self.view = TerminalView(frame: CGRect(origin: .zero, size: initialSize), font: Self.defaultFont)
-        self.info = TileInfo(id: id, kind: .terminal, flavor: flavor, title: initial, subtitle: cwd.abbreviatingHome)
+        self.info = TileInfo(id: id, kind: .terminal, flavor: flavor, title: initial)
         super.init()
         configureView()
         if startSuspended {
@@ -365,7 +368,8 @@ public final class TerminalSession: NSObject {
         next.cols = terminal.cols
         next.rows = terminal.rows
         next.progress = progress
-        next.subtitle = cwd.abbreviatingHome
+        // Where the tile is: on another machine while it runs `ssh` there, else its folder.
+        next.subtitle = command.flatMap(MachineConfig.sshHost) ?? typedHost ?? cwd.abbreviatingHome
         // While working, "last activity" follows along only every few seconds (ages read "now" under 5 s).
         if next.activity != info.activity || next.activity == .working && Date().timeIntervalSince(info.lastActivityAt) > 4 {
             next.lastActivityAt = Date()
@@ -377,9 +381,12 @@ public final class TerminalSession: NSObject {
     private func handle(_ event: ShellEvent) {
         switch event {
         case .command(let typed, let expanded):
+            typedHost = [typed, expanded].compactMap { $0 }.compactMap(MachineConfig.sshHost).first
             // Only agent CLIs are worth bringing back; `ls` or `make` are not. Prefer the line as
             // typed; an alias is recognised through its expansion.
-            guard let line = [typed, expanded].compactMap({ $0 }).first(where: { SessionResume.tool(for: $0) != nil }) else { return }
+            guard let line = [typed, expanded].compactMap({ $0 }).first(where: { SessionResume.tool(for: $0) != nil }) else {
+                return refreshInfo()
+            }
             command = line
             sessionId = SessionResume.sessionId(in: line)
             // A typed agent without a known id resumes only once its conversation is found;
@@ -403,7 +410,8 @@ public final class TerminalSession: NSObject {
             guard command.flatMap(SessionResume.tool(for:)) != nil else { return }
             shutDown(because: "Not found")
         case .prompt:
-            guard command != nil, !isSuspended else { return }
+            typedHost = nil
+            guard command != nil, !isSuspended else { return refreshInfo() }
             command = nil
             sessionId = nil
             flavor = .shell
