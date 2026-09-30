@@ -264,3 +264,101 @@ final class BoardCommandTests: XCTestCase {
         XCTAssertEqual(BoardCommand.allCases.filter(\.everyTab), [.shutDownAll, .resumeAll])
     }
 }
+
+final class WatchDockTests: XCTestCase {
+    func testHoldsTwoAndTheOldestMakesRoom() {
+        var dock = WatchDock()
+        XCTAssertNil(dock.add("a"))
+        XCTAssertNil(dock.add("b"))
+        // Docked again, a tile stays where it is.
+        XCTAssertNil(dock.add("a"))
+        XCTAssertEqual(dock.ids, ["a", "b"])
+        XCTAssertEqual(dock.add("c"), "a")
+        XCTAssertEqual(dock.ids, ["b", "c"])
+        XCTAssertTrue(dock.remove("b"))
+        XCTAssertFalse(dock.remove("b"))
+        XCTAssertEqual(dock.ids, ["c"])
+    }
+
+    func testASavedDockIsReadWithinItsLimits() {
+        XCTAssertEqual(WatchDock(["a", "a", "b", "c"]).ids, ["a", "b"])
+        XCTAssertEqual(WatchDock().ids, [])
+    }
+
+    private func columns(_ width: CGFloat, dock: CGFloat? = 460, lane: Bool = true, accounts: Bool = true) -> BoardColumns {
+        BoardColumns(width: width, lane: lane ? 220 : nil, accounts: accounts ? 290 : nil, dock: dock, dockMin: 320, boardMin: 300)
+    }
+
+    func testTheDockKeepsTheBoardItsRoom() {
+        let wide = columns(1680)
+        XCTAssertEqual([wide.lane, wide.accounts], [true, true])
+        XCTAssertEqual(wide.dock, 460)
+        XCTAssertEqual(wide.dockMax, 870)
+        // No narrower than it reads, no wider than leaves the board its room.
+        XCTAssertEqual(columns(1680, dock: 100).dock, 320)
+        XCTAssertEqual(columns(1680, dock: 2000).dock, 870)
+        XCTAssertEqual(columns(1270).dock, 460)
+        XCTAssertEqual(columns(1200).dock, 390)
+        // Nothing docked: no dock, and the columns are the user's.
+        XCTAssertEqual(columns(900, dock: nil), columns(5000, dock: nil))
+        XCTAssertNil(columns(900, dock: nil).dock)
+    }
+
+    func testInASmallWindowTheOtherColumnsMakeWay() {
+        // The accounts first, then the lane.
+        let small = columns(1100)
+        XCTAssertEqual([small.lane, small.accounts], [true, false])
+        XCTAssertEqual(small.dock, 460)
+        let smaller = columns(800)
+        XCTAssertEqual([smaller.lane, smaller.accounts], [false, false])
+        XCTAssertEqual(smaller.dock, 460)
+        // Columns the user has closed have nothing to give.
+        XCTAssertEqual(columns(900, lane: false).dock, 460)
+        XCTAssertEqual(columns(900, lane: false).accounts, false)
+        // Smaller than both need, dock and board share.
+        XCTAssertEqual(columns(500, lane: false, accounts: false).dock, 250)
+        XCTAssertEqual(columns(0, lane: false, accounts: false).dock, 0)
+    }
+}
+
+final class BoardDensityTests: XCTestCase {
+    func testStepsStopAtTheEnds() {
+        let standard = BoardDensity.standard
+        XCTAssertEqual(standard.minTileWidth, 230)
+        XCTAssertGreaterThan(try XCTUnwrap(standard.stepped(by: 1)).minTileWidth, 230)
+        XCTAssertLessThan(try XCTUnwrap(standard.stepped(by: -1)).minTileWidth, 230)
+        XCTAssertNil(BoardDensity(rawValue: 0).stepped(by: -1))
+        XCTAssertNil(BoardDensity(rawValue: BoardDensity.widths.count - 1).stepped(by: 1))
+        // A step saved by another build is read as the nearest there is.
+        XCTAssertEqual(BoardDensity(rawValue: 99).minTileWidth, BoardDensity.widths.last)
+        XCTAssertEqual(BoardDensity(rawValue: -3).minTileWidth, BoardDensity.widths.first)
+    }
+
+    /// A step down shows at least as many tiles at once, and a step up never more.
+    func testSmallerTilesShowMoreOfTheBoard() {
+        let board = CGSize(width: 1100, height: 850)
+        let shown = BoardDensity.widths.indices.map { step -> Int in
+            let grid = GridLayout.fit(count: 40, in: board, minTileWidth: BoardDensity(rawValue: step).minTileWidth)
+            let rows = Int((board.height + grid.spacing) / (grid.tileSize.height + grid.spacing))
+            return min(40, grid.columns * rows)
+        }
+        XCTAssertEqual(shown, shown.sorted(by: >))
+        XCTAssertGreaterThan(shown[0], shown[shown.count - 1])
+    }
+}
+
+final class KeyHintTests: XCTestCase {
+    private func keys(_ hints: [KeyHint]) -> [String] { hints.map(\.keys) }
+
+    func testHintsSayHowToLeaveFirst() {
+        // A live terminal or page gets Esc itself.
+        XCTAssertEqual(keys(KeyHint.panel(tile("t", .working))), ["⌘⏎", "⌘D", "⌘[ ⌘]", "⌘J", "⌘K"])
+        XCTAssertEqual(keys(KeyHint.panel(tile("w", kind: .browser))).prefix(2), ["⌘⏎", "⌘L"])
+        XCTAssertEqual(keys(KeyHint.panel(tile("d", kind: .agentSession), live: true)).first, "⌘⏎")
+        // An ended terminal and a transcript have no use for Esc or ⏎ of their own.
+        XCTAssertEqual(KeyHint.panel(tile("t", .failed)).prefix(2), [KeyHint("⏎", "restart"), KeyHint("esc", "board")])
+        XCTAssertEqual(KeyHint.panel(tile("t", .exited), suspended: true).first, KeyHint("⏎", "resume"))
+        XCTAssertEqual(KeyHint.panel(tile("c", kind: .agentSession), app: "Claude").prefix(2), [KeyHint("esc", "board"), KeyHint("⌘O", "open in Claude")])
+        XCTAssertEqual(keys(KeyHint.panel(tile("c", kind: .agentSession))), ["esc", "⌘D", "⌘[ ⌘]", "⌘J", "⌘K"])
+    }
+}
