@@ -724,6 +724,25 @@ final class RemoteVitalsTests: XCTestCase {
         XCTAssertNil(MachineConfig.sshHost(in: "ssh box | tee log"))
     }
 
+    func testAChipsWordsHoldStillWhileOnlyItsLoadMoves() {
+        var a = MachineVitals(id: "m", name: "Box", isLocal: false, status: .ok)
+        (a.cpu, a.gpu, a.load, a.memory, a.memoryTotalGB, a.temperature, a.gpuPowerW) = (0.12, 0.40, 1.5, 0.700, 96, 58, 41)
+        var b = a
+        (b.cpu, b.gpu, b.load, b.memory) = (0.93, 0.02, 7.1, 0.703)
+        XCTAssertNotEqual(a, b)
+        XCTAssertEqual(a.face, b.face)
+        // What the words say is all still there: 67 of 96 GB, 58°, 41 W.
+        XCTAssertEqual((a.face.memory! * 96).rounded(), 67)
+        XCTAssertEqual(a.face.temperature, 58)
+        XCTAssertEqual(a.face.gpuPowerW, 41)
+        b.memory = 0.72
+        XCTAssertNotEqual(a.face, b.face)
+        b = a
+        b.status = .unreachable
+        XCTAssertNotEqual(a.face, b.face)
+        XCTAssertTrue(a.details.contains("CPU 12%") && a.details.contains("load 1.5"))
+    }
+
     func testATrendKeepsTheLatestSamplesAndHoldsStillUnderASteadyLoad() {
         var trend = MachineTrend()
         for i in 0..<(MachineTrend.length + 5) { trend.record(cpu: Double(i) / 100, gpu: nil) }

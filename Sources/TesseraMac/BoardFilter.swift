@@ -183,6 +183,10 @@ struct HUDLayout: Layout {
         proposal.replacingUnspecifiedDimensions()
     }
 
+    // (Left to the protocol, an alignment guide is found by placing everything, on every question.)
+    func explicitAlignment(of guide: HorizontalAlignment, in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGFloat? { nil }
+    func explicitAlignment(of guide: VerticalAlignment, in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGFloat? { nil }
+
     func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
         guard subviews.count == 3 else { return }
         let gap = Style.Space.l
@@ -191,13 +195,18 @@ struct HUDLayout: Layout {
         func fit(_ subview: LayoutSubview, width: CGFloat) -> CGSize {
             subview.sizeThatFits(ProposedViewSize(width: max(width, 0), height: bounds.height))
         }
-        let bare = fit(subviews[2], width: 0).width
-        var leading = fit(subviews[0], width: room - bare)
-        if fit(subviews[2], width: room - leading.width).width == bare {
-            let short = fit(subviews[0], width: 0)
-            if fit(subviews[2], width: room - short.width).width > bare { leading = short }
+        var leading = fit(subviews[0], width: room)
+        var trailing = fit(subviews[2], width: room - leading.width)
+        // Only when they don't both fit whole is there anything to weigh.
+        if leading.width + fit(subviews[2], width: room).width > room {
+            let bare = fit(subviews[2], width: 0).width
+            leading = fit(subviews[0], width: room - bare)
+            if fit(subviews[2], width: room - leading.width).width == bare {
+                let short = fit(subviews[0], width: 0)
+                if fit(subviews[2], width: room - short.width).width > bare { leading = short }
+            }
+            trailing = fit(subviews[2], width: room - leading.width)
         }
-        let trailing = fit(subviews[2], width: room - leading.width)
         let width = min(Style.Metrics.filter, max(bounds.width - leading.width - trailing.width - 2 * gap, 0))
         let x = min(max(bounds.midX - width / 2, bounds.minX + leading.width + gap), bounds.maxX - trailing.width - gap - width)
         subviews[0].place(at: CGPoint(x: bounds.minX, y: bounds.midY), anchor: .leading, proposal: ProposedViewSize(leading))

@@ -307,8 +307,9 @@ struct MachineStrip: View {
     }
 }
 
-/// One machine's chip. It alone reads the machine's readings and its trend, so a sample redraws
-/// the chip and nothing around it. A click on a remote opens a terminal there.
+/// One machine's chip. Its words are read apart from its loads, which alone change with every
+/// sample: those redraw in place, and the top bar is laid out again only when the words change. A
+/// click on a remote opens a terminal there.
 struct WatchedMachine: View {
     @Environment(AppModel.self) private var model
     let id: String
@@ -316,18 +317,39 @@ struct WatchedMachine: View {
 
     var body: some View {
         let monitor = model.workspace.machines
-        if let vitals = monitor.vitals[id] {
+        if let face = monitor.faces[id] {
             let host = monitor.config(id)?.sshHost
             // The tile is named after the machine (see `TerminalSession`), not by the user.
             let connect = { model.create { $0.launch(command: host.map { "ssh \($0)" }) } }
-            MachineChip(vitals: vitals, trend: monitor.trends[id] ?? MachineTrend(), compact: compact)
+            MachineChip(vitals: face, compact: compact) { Loads(monitor: monitor, id: id, compact: compact) }
+                .overlay { Details(monitor: monitor, id: id) }
                 .onTapGesture { if host != nil { connect() } }
                 .contextMenu {
                     if host != nil {
-                        Button("Open Terminal on \(vitals.name)", action: connect)
+                        Button("Open Terminal on \(face.name)", action: connect)
                         Button("Stop Watching", role: .destructive) { monitor.remove(id: id) }
                     }
                 }
+        }
+    }
+
+    private struct Loads: View {
+        let monitor: MachineMonitor
+        let id: String
+        let compact: Bool
+
+        var body: some View {
+            if let vitals = monitor.vitals[id] { MachineLoads(vitals: vitals, trend: monitor.trends[id] ?? MachineTrend(), compact: compact) }
+        }
+    }
+
+    /// The full numbers as the chip's tooltip, kept current without the chip being redrawn.
+    private struct Details: View {
+        let monitor: MachineMonitor
+        let id: String
+
+        var body: some View {
+            Color.clear.contentShape(Rectangle()).help(monitor.vitals[id]?.details ?? "")
         }
     }
 }
