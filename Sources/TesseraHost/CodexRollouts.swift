@@ -44,7 +44,7 @@ enum CodexRollouts {
 
         func head(_ path: String) -> CodexRolloutHead? {
             if let hit = lock.withLock({ heads[path] }) { return hit }
-            guard let head = readHead(path) else { return nil }
+            guard let head = autoreleasepool(invoking: { readHead(path) }) else { return nil }
             lock.withLock { heads[path] = head }
             return head
         }

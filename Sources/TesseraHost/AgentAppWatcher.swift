@@ -184,7 +184,7 @@ final class TranscriptScanner: @unchecked Sendable {
 
             let tail = tails[path] ?? Tail(parser: .claude(ClaudeTranscriptParser()))
             tails[path] = tail
-            advance(tail, path: path)
+            autoreleasepool { advance(tail, path: path) }
             guard case .claude(let parser) = tail.parser else { continue }
 
             var snapshot = parser.snapshot(now: now, subagentActivity: subagentActivity(path))
@@ -289,7 +289,10 @@ final class TranscriptScanner: @unchecked Sendable {
                 seen.insert(path)
                 let tail = dshTails[path] ?? DshTail()
                 dshTails[path] = tail
-                if let decoded = tail.zstd.readAppended(path: path) {
+                // Piece by piece, each freed before the next: a long log's first read would otherwise
+                // hold everything it decoded until the whole scan ends.
+                while autoreleasepool(invoking: {
+                    guard let decoded = tail.zstd.readAppended(path: path) else { return false }
                     let text = tail.remainder + String(decoding: decoded, as: UTF8.self)
                     if let last = text.lastIndex(of: "\n") {
                         tail.parser.ingest(text: String(text[..<last]))
@@ -297,7 +300,8 @@ final class TranscriptScanner: @unchecked Sendable {
                     } else {
                         tail.remainder = text
                     }
-                }
+                    return true
+                }) {}
                 let parser = tail.parser
                 guard let id = parser.sessionId, !parser.isDelegated, Self.isSafeId(id) else { continue }
                 let snapshot = parser.snapshot(now: now)
@@ -348,7 +352,7 @@ final class TranscriptScanner: @unchecked Sendable {
                   Self.isSafeId(head.id) else { continue }
             let tail = tails[path] ?? Tail(parser: .codex(CodexTranscriptParser()))
             tails[path] = tail
-            advance(tail, path: path)
+            autoreleasepool { advance(tail, path: path) }
             guard case .codex(let parser) = tail.parser else { continue }
             let snapshot = parser.snapshot(now: now)
             out.append(AgentAppSession(

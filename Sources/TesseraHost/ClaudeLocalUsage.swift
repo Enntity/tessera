@@ -64,7 +64,9 @@ final class ClaudeLocalUsage: @unchecked Sendable {
         guard size > state.offset, let handle = FileHandle(forReadingAtPath: path) else { return }
         defer { try? handle.close() }
         try? handle.seek(toOffset: state.offset)
-        while let chunk = try? handle.read(upToCount: chunkSize), !chunk.isEmpty {
+        // Chunk by chunk, each freed before the next.
+        while autoreleasepool(invoking: {
+            guard let chunk = try? handle.read(upToCount: chunkSize), !chunk.isEmpty else { return false }
             var data = state.remainder
             data.append(chunk)
             state.offset += UInt64(chunk.count)
@@ -78,7 +80,8 @@ final class ClaudeLocalUsage: @unchecked Sendable {
             } else {
                 state.remainder = data
             }
-        }
+            return true
+        }) {}
         if state.seen.count > 20_000 { state.seen.removeAll() }
         files[path] = state
     }

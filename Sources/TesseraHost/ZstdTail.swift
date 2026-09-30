@@ -7,14 +7,21 @@ final class ZstdTail {
     private(set) var offset: UInt64 = 0
 
     /// Newly decoded bytes, or nil if nothing complete was added. A file that shrank restarts.
-    func readAppended(path: String) -> Data? {
+    /// Reads at most about `limit` compressed bytes, so a long log's first read comes in pieces
+    /// instead of all at once (decoded, it's many times larger); call again for the rest.
+    func readAppended(path: String, limit: Int = 1 << 20) -> Data? {
         guard let size = FileStat(path)?.size else { return nil }
         if size < offset { offset = 0 }
         guard size > offset, let handle = FileHandle(forReadingAtPath: path) else { return nil }
         defer { try? handle.close() }
         try? handle.seek(toOffset: offset)
-        let data = handle.readDataToEndOfFile()
-        let (decoded, consumed) = Self.decodeCompleteFrames(data)
+        var data = handle.readData(ofLength: limit)
+        var (decoded, consumed) = Self.decodeCompleteFrames(data)
+        // A frame bigger than what was read: read on until it completes (or the file ends).
+        while consumed == 0, !data.isEmpty, UInt64(data.count) < size - offset {
+            data.append(handle.readData(ofLength: data.count))
+            (decoded, consumed) = Self.decodeCompleteFrames(data)
+        }
         offset += UInt64(consumed)
         return decoded.isEmpty ? nil : decoded
     }
