@@ -2,9 +2,10 @@ import XCTest
 @testable import TesseraKit
 
 private func tile(_ id: String, _ activity: TileActivity = .idle, attention: Bool = false, age: TimeInterval = 0,
-                  kind: TileKind = .terminal, title: String? = nil, folder: String = "") -> TileInfo {
-    TileInfo(id: id, kind: kind, flavor: .shell, title: title ?? id, subtitle: folder, activity: activity, attention: attention,
-             lastActivityAt: Date(timeIntervalSince1970: age))
+                  kind: TileKind = .terminal, flavor: AgentFlavor = .shell, title: String? = nil, folder: String = "",
+                  detail: String? = nil) -> TileInfo {
+    TileInfo(id: id, kind: kind, flavor: flavor, title: title ?? id, subtitle: folder, activity: activity, attention: attention,
+             lastActivityAt: Date(timeIntervalSince1970: age), detail: detail)
 }
 
 /// ⌘J, the HUD counters, the palette and the phone all visit waiting tiles in one order.
@@ -93,6 +94,33 @@ final class TileSearchTests: XCTestCase {
         XCTAssertEqual(found("  ", candidates), [])
     }
 
+    func testATileIsFoundByWhatItAsksAndWhatItShows() {
+        let candidates = [
+            TileSearch.Candidate(tile: tile("screen", title: "shell"), text: "$ npm test\n PASS tests/auth.test.ts"),
+            TileSearch.Candidate(tile: tile("asks", .needsInput, title: "deploy", detail: "Allow command: rm -rf build/ ?")),
+            TileSearch.Candidate(tile: tile("title", title: "auth flow")),
+            TileSearch.Candidate(tile: tile("other", title: "notes"))
+        ]
+        // The title leads, then the folder, what it asks, its tab, its state, and last what is on it.
+        XCTAssertEqual(found("auth", candidates), ["title", "screen"])
+        XCTAssertEqual(found("allow", candidates), ["asks"])
+        XCTAssertEqual(found("deploy build", candidates), ["asks"])
+        XCTAssertEqual(found("shell pass", candidates), ["screen"])
+        XCTAssertNil(TileSearch.score(" ", candidates[0]))
+        XCTAssertEqual(TileSearch.score("needs", candidates[1]), 6)
+    }
+
+    func testWhereTheWordsAreInATitle() {
+        func lit(_ query: String, _ title: String) -> [String] { TileSearch.ranges(of: query, in: title).map { String(title[$0]) } }
+        XCTAssertEqual(lit("auth", "Refactor auth flow"), ["auth"])
+        XCTAssertEqual(lit("AUTH", "Auth: reauthorise"), ["Auth", "auth"])
+        XCTAssertEqual(lit("flow auth", "Refactor auth flow"), ["auth", "flow"])
+        // Words that run into each other light up as one.
+        XCTAssertEqual(lit("refac actor", "Refactor auth flow"), ["Refactor"])
+        XCTAssertEqual(lit("api", "Refactor auth flow"), [])
+        XCTAssertEqual(lit("", "Refactor auth flow"), [])
+    }
+
     func testEqualMatchesPutTheBoardBeforeHiddenAndTheLatestFirst() {
         let candidates = [
             TileSearch.Candidate(tile: tile("hidden", age: 90, title: "deploy notes"), hidden: true),
@@ -100,6 +128,76 @@ final class TileSearchTests: XCTestCase {
             TileSearch.Candidate(tile: tile("new", age: 50, title: "deploy prod"))
         ]
         XCTAssertEqual(found("deploy", candidates), ["new", "old", "hidden"])
+    }
+}
+
+/// The filter field and its chips narrow the board in place, within the tab being viewed.
+final class BoardQueryTests: XCTestCase {
+    private let tiles = [
+        tile("shell"),
+        tile("claude-asks", .needsInput, flavor: .claude, title: "auth flow"),
+        tile("claude-app", .working, kind: .agentSession, flavor: .claudeDesktop, title: "auth docs"),
+        tile("codex", .working, flavor: .codex),
+        tile("codex-done", .done, attention: true, kind: .agentSession, flavor: .codexDesktop),
+        tile("dsh", kind: .agentSession, flavor: .dsh),
+        tile("page", kind: .browser, flavor: .web, title: "auth provider docs")
+    ]
+    private var ids: [String] { tiles.map(\.id) }
+    private var holdings: BoardQuery.Holdings { BoardQuery.holdings(of: tiles) }
+
+    private func shown(_ query: BoardQuery) -> [String] {
+        query.narrow(ids, found: query.find(in: tiles.map { TileSearch.Candidate(tile: $0) }), holdings: holdings)
+    }
+
+    func testEachChipHoldsItsOwnTiles() {
+        XCTAssertEqual(holdings[.needsYou], ["claude-asks", "codex-done"])
+        XCTAssertEqual(holdings[.working], ["claude-app", "codex"])
+        XCTAssertEqual(holdings[.terminals], ["shell", "claude-asks", "codex"])
+        XCTAssertEqual(holdings[.claude], ["claude-asks", "claude-app"])
+        XCTAssertEqual(holdings[.codex], ["codex", "codex-done"])
+        XCTAssertEqual(holdings[.dsh], ["dsh"])
+        XCTAssertEqual(holdings[.web], ["page"])
+        XCTAssertEqual(BoardQuery.Chip.allCases.map(\.label), ["Needs you", "Working", "Terminals", "Claude", "Codex", "dsh", "Web"])
+    }
+
+    func testAnEmptyQueryShowsEverythingInOrder() {
+        XCTAssertTrue(BoardQuery().isEmpty)
+        XCTAssertTrue(BoardQuery(text: "  ").isEmpty)
+        XCTAssertNil(BoardQuery(text: "  ").find(in: []))
+        XCTAssertEqual(shown(BoardQuery()), ids)
+    }
+
+    func testChipsOfOneSortWidenAndTheTwoSortsNarrow() {
+        XCTAssertEqual(shown(BoardQuery(chips: [.claude, .codex])), ["claude-asks", "claude-app", "codex", "codex-done"])
+        XCTAssertEqual(shown(BoardQuery(chips: [.needsYou, .working])), ["claude-asks", "claude-app", "codex", "codex-done"])
+        XCTAssertEqual(shown(BoardQuery(chips: [.claude, .working])), ["claude-app"])
+        XCTAssertEqual(shown(BoardQuery(chips: [.terminals, .web, .needsYou])), ["claude-asks"])
+        // A chip that holds nothing shows nothing, but for the tile that is open.
+        XCTAssertEqual(BoardQuery(chips: [.dsh]).narrow(ids, found: nil, holdings: [:]), [])
+        XCTAssertEqual(BoardQuery(chips: [.dsh]).narrow(ids, found: nil, holdings: [:], keeping: "page"), ["page"])
+    }
+
+    func testTextNarrowsWithTheChipsAndKeepsTheBoardsOrder() {
+        XCTAssertEqual(shown(BoardQuery(text: "auth")), ["claude-asks", "claude-app", "page"])
+        XCTAssertEqual(shown(BoardQuery(text: "auth docs", chips: [.claude])), ["claude-app"])
+        XCTAssertEqual(shown(BoardQuery(text: "nothing like it")), [])
+        // The tab being viewed narrows first: only its tiles are there to find.
+        let query = BoardQuery(text: "auth")
+        XCTAssertEqual(query.narrow(["page", "shell"], found: query.find(in: tiles.map { TileSearch.Candidate(tile: $0) }), holdings: holdings), ["page"])
+    }
+
+    func testAChipCountsWhatItWouldShowAmongTheOtherSortAndTheText() {
+        func count(_ chip: BoardQuery.Chip, _ query: BoardQuery) -> Int {
+            query.count(chip, in: ids, found: query.find(in: tiles.map { TileSearch.Candidate(tile: $0) }), holdings: holdings)
+        }
+        XCTAssertEqual(count(.claude, BoardQuery()), 2)
+        XCTAssertEqual(count(.working, BoardQuery()), 2)
+        // Its own sort doesn't change a chip's number; the other sort and the text do.
+        XCTAssertEqual(count(.claude, BoardQuery(chips: [.codex])), 2)
+        XCTAssertEqual(count(.claude, BoardQuery(chips: [.working])), 1)
+        XCTAssertEqual(count(.working, BoardQuery(chips: [.claude, .codex])), 2)
+        XCTAssertEqual(count(.web, BoardQuery(text: "auth")), 1)
+        XCTAssertEqual(count(.codex, BoardQuery(text: "auth")), 0)
     }
 }
 
