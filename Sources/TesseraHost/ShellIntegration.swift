@@ -146,7 +146,10 @@ enum LoginShell {
         p.standardError = FileHandle.nullDevice
         p.standardInput = FileHandle.nullDevice
         do { try p.run() } catch { return nil }
-        let killer = DispatchWorkItem { if p.isRunning { p.terminate() } }
+        // Interactive shells ignore SIGTERM, and whatever a startup file started holds the output
+        // open too: stop the whole process group.
+        let pid = p.processIdentifier
+        let killer = DispatchWorkItem { kill(-pid, SIGKILL); kill(pid, SIGKILL) }
         DispatchQueue.global().asyncAfter(deadline: .now() + timeout, execute: killer)
         let data = out.fileHandleForReading.readDataToEndOfFile()
         p.waitUntilExit()

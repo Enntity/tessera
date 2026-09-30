@@ -119,6 +119,15 @@ final class DshWebServerTests: XCTestCase {
         XCTAssertNil(DshWebServer.launcher(fromProbe: "@dsh /opt/bin/dsh\n"))
     }
 
+    /// A startup file that hangs can't hang the probe: interactive shells ignore SIGTERM, and what
+    /// the shell started still holds its output open.
+    func testLoginShellProbeGivesUpOnAHang() {
+        XCTAssertEqual(LoginShell.run("echo '@probe ok'").map { LoginShell.tagged("probe", in: $0) }, ["ok"])
+        let start = Date()
+        XCTAssertNil(LoginShell.run("sleep 30", timeout: 1))
+        XCTAssertLessThan(Date().timeIntervalSince(start), 5)
+    }
+
     func testSessionSelectionScriptQuotesTitles() {
         let js = Workspace.selectDshSessionScript(title: #"Fix "quotes" & </script>"#, folder: "enn'tity")
         XCTAssertTrue(js.contains(#"Fix \"quotes\""#))
