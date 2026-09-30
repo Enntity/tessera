@@ -12,15 +12,16 @@ extension AppModel {
         }
         if let path = ProcessInfo.processInfo.environment["TESSERA_SNAPSHOT"] {
             Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
-                MainActor.assumeIsolated { self?.writeSnapshot(to: path) }
+                MainActor.assumeIsolated { self?.writeSnapshot(of: self?.window, to: path) }
             }
         }
     }
 
     /// Actions, separated by `;`:
-    /// - set-up, straight into the workspace: `launch=<cmd>`, `url=<url>`, `tab=<name>` (a tab holding
-    ///   the first two tiles), `shutdown`, `rename=<title>` (the selected tile), `machine=<ssh host>`,
-    ///   `remote`, `pairurl=<file>`, `privacy`, `size=<w>x<h>`, `wait=<s>`;
+    /// - set-up, straight into the workspace: `cwd=<dir>` (where the next tiles start), `launch=<cmd>`,
+    ///   `url=<url>`, `tab=<name>` (a tab holding the first two tiles), `shutdown`, `rename=<title>` (the
+    ///   selected tile), `machine=<ssh host>`, `remote`, `pairurl=<file>`, `privacy[=off]`, `size=<w>x<h>`,
+    ///   `wait=<s>`, `pace=<s>` (the gap between the actions that follow; 1 s unless set);
     /// - what a user does: `select=<title>`, `open[=terminal|web|<title>|<id>]` (never an app conversation),
     ///   `click=<title>` or `click=<x>,<y>` (a tile, or a point in the window) and `dblclick=…`,
     ///   `key=up,down,left,right,return,esc`, `type=<text>`, `cmd=[shift+][option+]<key>` and `ctrl=<key>`
@@ -28,14 +29,18 @@ extension AppModel {
     ///   with the board's window in front), `run=<BoardCommand>`, `closefront=<window title>`,
     ///   `filter=all|attention|<tab>`;
     /// - `dump=<file>[?<query>]`: what is selected, open, on show, waiting and closed, each tile's state,
-    ///   who has the keyboard, and the palette's rows for `<query>`, as JSON.
-    private func runDebugActions(_ actions: [String], after delay: Double = 2) {
+    ///   who has the keyboard, and the palette's rows for `<query>`, as JSON;
+    /// - `shot=<file>[?<window title>]`: a capture of the board's window (or the window so titled) as it
+    ///   is at that moment.
+    private func runDebugActions(_ actions: [String], after delay: Double = 2, pace: Double = 1) {
         guard let first = actions.first else { return }
         DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [self] in
             let parts = first.split(separator: "=", maxSplits: 1).map(String.init)
             let arg = parts.count > 1 ? parts[1] : ""
-            var next = 1.0
+            var pace = pace
+            var next = pace
             switch parts[0] {
+            case "cwd": workspace.defaultDirectory = arg
             case "launch": workspace.launch(command: arg.isEmpty ? nil : arg)
             case "url": workspace.openBrowser(arg)
             case "tab":
@@ -46,12 +51,15 @@ extension AppModel {
             case "machine": workspace.machines.add(host: arg, name: nil)
             case "remote": server.start() // not persisted: normal launches keep the user's setting
             case "pairurl": try? server.pairingURL?.absoluteString.write(toFile: arg, atomically: true, encoding: .utf8)
-            case "privacy": privacyMode = true
+            case "privacy": privacyMode = arg != "off"
             case "size":
                 let side = arg.split(separator: "x").compactMap { Double($0) }
                 if side.count == 2, let window { window.setContentSize(CGSize(width: side[0], height: side[1])) }
             case "closefront": closeFront(key: NSApp.windows.first { $0.title == arg }) // ⌘W as if that window were key
             case "wait": next = Double(arg) ?? 1
+            case "pace":
+                pace = Double(arg) ?? 1
+                next = pace
             case "select": if let id = debugTile(arg) { workspace.select(id) }
             case "open":
                 // Opening an app conversation would drive the real Claude or Codex app.
@@ -84,9 +92,12 @@ extension AppModel {
             case "filter":
                 onBoard { $0.filter = arg == "attention" ? .attention : $0.groups.list.first { $0.name == arg }.map { .group($0.id) } ?? .all }
             case "dump": debugDump(to: arg)
+            case "shot":
+                let target = arg.split(separator: "?", maxSplits: 1).map(String.init)
+                writeSnapshot(of: target.count > 1 ? NSApp.windows.first { $0.title == target[1] } : window, to: target[0])
             default: break
             }
-            runDebugActions(Array(actions.dropFirst()), after: next)
+            runDebugActions(Array(actions.dropFirst()), after: next, pace: pace)
         }
     }
 
@@ -164,9 +175,9 @@ extension AppModel {
         try? JSONSerialization.data(withJSONObject: state, options: [.prettyPrinted, .sortedKeys]).write(to: URL(fileURLWithPath: path))
     }
 
-    /// Captures the board window to a PNG so layout can be checked without screen capture rights.
+    /// Captures a window to a PNG so layout can be checked without screen capture rights.
     /// Apps may always capture their own windows; the symbol is looked up dynamically because the SDK hides it.
-    private func writeSnapshot(to path: String) {
+    private func writeSnapshot(of window: NSWindow?, to path: String) {
         typealias Capture = @convention(c) (CGRect, UInt32, UInt32, UInt32) -> Unmanaged<CGImage>?
         guard let window, let sym = dlsym(UnsafeMutableRawPointer(bitPattern: -2), "CGWindowListCreateImage") else { return }
         let capture = unsafeBitCast(sym, to: Capture.self)
