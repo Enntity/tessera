@@ -53,6 +53,10 @@ final class AppModel {
     var showLane = Preferences.store.object(forKey: "tessera.lane") as? Bool ?? true {
         didSet { Preferences.store.set(showLane, forKey: "tessera.lane") }
     }
+    /// How small tiles get before the board scrolls, as the user left it (⌘= ⌘- ⌘0).
+    private(set) var density = BoardDensity(rawValue: Preferences.store.object(forKey: "tessera.density") as? Int ?? BoardDensity.standard.rawValue) {
+        didSet { Preferences.store.set(density.rawValue, forKey: "tessera.density") }
+    }
     /// Screenshot-safe: terminals, conversations and pages stay lively but unreadable.
     var privacyMode = Preferences.store.bool(forKey: "tessera.privacy") {
         didSet { Preferences.store.set(privacyMode, forKey: "tessera.privacy") }
@@ -243,6 +247,17 @@ final class AppModel {
         }
     }
 
+    /// ⌘= and ⌘-: larger tiles, or more of them on show (nil: the standard size again, ⌘0).
+    func stepDensity(by steps: Int?) {
+        guard let next = steps.map(density.stepped) ?? .standard, next != density else { return }
+        act(Style.Motion.standard) { density = next }
+    }
+
+    /// The board's one layout: what is drawn, where a tile opens from, and what the arrow keys walk.
+    func grid(count: Int, in size: CGSize) -> TesseraKit.GridLayout {
+        GridLayout.fit(count: count, in: size, spacing: Style.Space.gutter, aspect: 16.0 / 10.5, minTileWidth: density.minTileWidth)
+    }
+
     /// ⇧⌘P and the eye in the top bar.
     func togglePrivacy() {
         act(Style.Motion.standard) { privacyMode.toggle() }
@@ -334,7 +349,7 @@ final class AppModel {
     /// changes in place and never leaves Tessera (a Claude or Codex conversation shows its transcript).
     func move(_ step: GridMove) {
         let ids = workspace.visibleIds
-        let layout = BoardView.grid(count: ids.count, in: boardFrame?.size ?? .zero)
+        let layout = grid(count: ids.count, in: boardFrame?.size ?? .zero)
         guard let i = layout.index(moving: step, from: workspace.selectedId.flatMap(ids.firstIndex(of:)), count: ids.count) else { return }
         if workspace.expandedId != nil { open(ids[i], inApp: false) } else { workspace.select(ids[i]) }
     }
@@ -381,7 +396,7 @@ final class AppModel {
     func tileFrame(_ id: String) -> CGRect? {
         let ids = workspace.visibleIds
         guard let board = boardFrame, let index = ids.firstIndex(of: id) else { return nil }
-        let layout = BoardView.grid(count: ids.count, in: board.size)
+        let layout = grid(count: ids.count, in: board.size)
         let origin = layout.origin(of: index, in: board.size)
         return CGRect(x: board.minX + origin.x, y: board.minY + origin.y - boardScroll,
                       width: layout.tileSize.width, height: layout.tileSize.height)

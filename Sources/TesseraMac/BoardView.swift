@@ -20,7 +20,7 @@ struct BoardView: View {
             // (`insetBy` would answer an area smaller than the inset with a rectangle at infinity.)
             let board = CGRect(x: area.minX + inset, y: area.minY + inset,
                                width: max(area.width - 2 * inset, 0), height: max(area.height - 2 * inset, 0))
-            let layout = Self.grid(count: ids.count, in: board.size)
+            let layout = model.grid(count: ids.count, in: board.size)
             ZStack(alignment: .topLeading) {
                 if ids.isEmpty {
                     EmptyBoard(filter: workspace.filter, query: workspace.query).frame(width: area.width, height: area.height)
@@ -45,11 +45,12 @@ struct BoardView: View {
                         .animation(Style.Motion.standard, value: layout)
                     }
                     .scrollDisabled(!layout.scrolls)
-                    // A scrolling board follows the selection, moving only as far as it takes to show it.
-                    .onChange(of: workspace.selectedId) { _, selected in
-                        guard layout.scrolls, let index = selected.flatMap(ids.firstIndex(of:)) else { return }
-                        let offset = layout.scrollOffset(showing: index, height: board.height, current: model.boardScroll)
-                        let range = layout.contentHeight - board.height
+                    // A scrolling board follows the selection, moving only as far as it takes to show
+                    // it: as the selection moves, and as the tiles change size under it.
+                    .onChange(of: Following(selected: workspace.selectedId, layout: layout)) { _, now in
+                        guard now.layout.scrolls, let index = now.selected.flatMap(ids.firstIndex(of:)) else { return }
+                        let offset = now.layout.scrollOffset(showing: index, height: board.height, current: model.boardScroll)
+                        let range = now.layout.contentHeight - board.height
                         guard offset != model.boardScroll, range > 0 else { return }
                         // Aligning the same fraction of the grid and of the view puts it at exactly `offset`.
                         withAnimation(Style.Motion.standard) { proxy.scrollTo(Self.gridId, anchor: UnitPoint(x: 0, y: offset / range)) }
@@ -125,9 +126,10 @@ struct BoardView: View {
 
     private static let gridId = "grid"
 
-    /// The board's one layout: what is drawn, where a tile opens from, and what the arrow keys walk.
-    static func grid(count: Int, in size: CGSize) -> TesseraKit.GridLayout {
-        GridLayout.fit(count: count, in: size, spacing: Style.Space.gutter, aspect: 16.0 / 10.5, minTileWidth: 230)
+    /// What a scrolling board keeps in view.
+    private struct Following: Equatable {
+        let selected: String?
+        let layout: TesseraKit.GridLayout
     }
 }
 

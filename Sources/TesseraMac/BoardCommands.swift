@@ -37,6 +37,14 @@ struct BoardCommands: Commands {
                 .keyboardShortcut("\\", modifiers: [.command, .option])
             Button(model.showSidebar ? "Hide Accounts" : "Show Accounts") { model.toggleSidebar() }
                 .keyboardShortcut("\\")
+            Divider()
+            // How small tiles get before the board scrolls.
+            Button("Larger Tiles") { model.stepDensity(by: 1) }
+                .keyboardShortcut("=")
+            Button("Smaller Tiles") { model.stepDensity(by: -1) }
+                .keyboardShortcut("-")
+            Button("Standard Tile Size") { model.stepDensity(by: nil) }
+                .keyboardShortcut("0")
         }
         CommandMenu("Board") {
             Button("Command Palette") {

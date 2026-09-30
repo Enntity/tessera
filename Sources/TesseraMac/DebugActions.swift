@@ -187,6 +187,7 @@ extension AppModel {
             "query": workspace.query.text, "chips": Dictionary(uniqueKeysWithValues: BoardQuery.Chip.allCases.map {
                 ($0.rawValue + (workspace.query.chips.contains($0) ? " on" : ""), workspace.count($0))
             }),
+            "density": density.minTileWidth, "columns": grid(count: workspace.visibleIds.count, in: boardFrame?.size ?? .zero).columns,
             "lane": showLane, "places": workspace.allTiles.map { "\($0.title): \($0.subtitle)" },
             "palette": showPalette ? "\(paletteMode)" : "",
             "firstResponder": window?.firstResponder.map { String(describing: type(of: $0)) } ?? "",
