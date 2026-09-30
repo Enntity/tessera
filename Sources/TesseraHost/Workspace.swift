@@ -37,16 +37,14 @@ public final class Workspace {
     public var defaultDirectory: String = NSHomeDirectory()
     /// Another Tessera already runs this board (its pid, 0 if unknown): this copy must not start.
     public let boardHolder: pid_t?
+    /// Kept current as tiles change (see `BoardState`).
+    public private(set) var state = BoardState()
 
-    /// Emits whenever tile membership, order, or any tile's metadata changes (for remote clients).
-    @ObservationIgnored public var onTilesChanged: (() -> Void)?
-
-    @ObservationIgnored private var agentAcknowledged: [String: Date] = [:]
+    /// Observed: acknowledging an agent session changes how its tile looks.
+    private var agentAcknowledged: [String: Date] = [:]
     @ObservationIgnored private var hiddenAgents: [String: Date] = [:]
     /// The order last saved, app sessions included: they take their places again as they reappear.
     @ObservationIgnored private var savedOrder: [String] = []
-    @ObservationIgnored private var clock: Timer?
-    @ObservationIgnored private var lastPublished: [TileInfo] = []
     @ObservationIgnored private var firstAgentScan = true
     @ObservationIgnored private let directory: URL
 
@@ -65,6 +63,10 @@ public final class Workspace {
 
     public func start() {
         restore()
+        observe({ [weak self] in BoardState(self?.allTiles ?? []) }) { [weak self] state in
+            if self?.state != state { self?.state = state }
+        }
+        agents.onChange = { [weak self] in self?.agentsChanged() }
         agents.start()
         usage.start()
         machines.start()
@@ -72,12 +74,11 @@ public final class Workspace {
             let found = LaunchCatalog.detectInstalled()
             DispatchQueue.main.async { MainActor.assumeIsolated { self.presets = found } }
         }
-        // Common mode keeps tiles live while a menu is open or the window is being resized.
-        let clock = Timer(timeInterval: 0.1, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated { self?.tick() }
+        let binder = Timer(timeInterval: 5, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.bindAgentSessions() }
         }
-        RunLoop.main.add(clock, forMode: .common)
-        self.clock = clock
+        binder.tolerance = 1
+        RunLoop.main.add(binder, forMode: .common)
         if order.isEmpty { launch(command: nil) }
     }
 
@@ -86,28 +87,25 @@ public final class Workspace {
     public func info(_ id: String) -> TileInfo? {
         if let t = terminals[id] { return t.info }
         if let b = browsers[id] { return b.info }
-        if let a = agents.sessions[id] { return agentInfo(a) }
+        if let a = agents.session(id) { return agentInfo(a) }
         return nil
     }
 
+    /// Whether `id` is on the board (a closed app session is still known, but not on it). Unlike
+    /// `info`, this doesn't read (or observe) the tile's data.
+    public func exists(_ id: String) -> Bool { order.contains(id) }
+
     public var allTiles: [TileInfo] { order.compactMap(info) }
 
-    public var visibleTiles: [TileInfo] {
-        let members: Set<String>? = if case .group(let g) = filter { groups.members(of: g) } else { nil }
-        return allTiles.filter { tile in
-            switch filter {
-            case .all: true
-            case .attention: tile.attention || tile.activity == .needsInput || tile.id == expandedId
-            case .group: members?.contains(tile.id) == true || tile.id == expandedId
-            }
+    /// The tiles the board shows, in order. Reads membership and `state`, not every tile's data.
+    public var visibleIds: [String] {
+        switch filter {
+        case .all: return order
+        case .attention: return order.filter { state.needsUser.contains($0) || $0 == expandedId }
+        case .group(let g):
+            let members = groups.members(of: g)
+            return order.filter { members.contains($0) || $0 == expandedId }
         }
-    }
-
-    public var counts: (working: Int, needsInput: Int, done: Int) {
-        let tiles = allTiles
-        return (tiles.filter { $0.activity == .working }.count,
-                tiles.filter { $0.activity == .needsInput }.count,
-                tiles.filter { $0.attention && $0.activity != .needsInput }.count)
     }
 
     @discardableResult
@@ -154,12 +152,6 @@ public final class Workspace {
         guard info(tileId) != nil else { return }  // e.g. an account row dropped on a tab
         groups.assign(tileId, to: groupId)
         save()
-    }
-
-    /// Tiles in a tab, for its count and attention dot.
-    public func tiles(inGroup id: String) -> [TileInfo] {
-        let members = groups.members(of: id)
-        return allTiles.filter { members.contains($0.id) }
     }
 
     private func insert(_ id: String) {
@@ -261,7 +253,7 @@ public final class Workspace {
 
     /// Jump to the next tile that is waiting on the user, oldest first.
     public func nextAttention() -> String? {
-        let waiting = allTiles.filter { $0.attention || $0.activity == .needsInput }
+        let waiting = allTiles.filter(\.needsUser)
         guard !waiting.isEmpty else { return nil }
         let sorted = waiting.sorted { $0.lastActivityAt < $1.lastActivityAt }
         if let current = expandedId, let i = sorted.firstIndex(where: { $0.id == current }) {
@@ -273,13 +265,13 @@ public final class Workspace {
     /// Claude and Codex conversations open straight in their app; Tessera's transcript panel is only
     /// for when that app isn't installed, or when asked for. (dsh's live page lives in the panel.)
     public func opensInApp(_ id: String) -> Bool {
-        guard let flavor = agents.sessions[id]?.flavor else { return false }
+        guard let flavor = agents.session(id)?.flavor else { return false }
         return installedApps.contains { $0.flavor == flavor }
     }
 
     /// Open a desktop-app conversation in its own app, snapped to `rect` (AppKit screen coordinates).
     public func openNative(_ id: String, at rect: CGRect?) {
-        guard let a = agents.sessions[id] else { return }
+        guard let a = agents.session(id) else { return }
         agentAcknowledged[id] = Date()
         if a.flavor == .dsh { return openDsh(a) }
         WindowPlacer.open(a.openURL, bundleID: a.bundleID, placeAt: placeNativeWindows ? rect : nil)
@@ -393,7 +385,7 @@ public final class Workspace {
             let now = Date()
             for id in live.keys { agentAcknowledged[id] = now }
         }
-        let newest = live.values.sorted { $0.lastActivityAt > $1.lastActivityAt }
+        let newest = live.values.map(\.session).sorted { $0.lastActivityAt > $1.lastActivityAt }
         var added: [AgentAppSession] = []
         for a in newest where !order.contains(a.id) {
             if let hidden = hiddenAgents[a.id], a.lastActivityAt <= hidden { continue }
@@ -403,29 +395,16 @@ public final class Workspace {
             added.append(a)
         }
         openPendingAppConversation(newlyAdded: added)
-        let before = order.count
-        order.removeAll { id in id.contains(":") && live[id] == nil && terminals[id] == nil && browsers[id] == nil }
-        if order.count != before, let e = expandedId, !order.contains(e) { expandedId = nil }
+        // Write only a real change: even an empty removal would re-render everything reading `order`.
+        let kept = order.filter { id in !(id.contains(":") && live[id] == nil && terminals[id] == nil && browsers[id] == nil) }
+        guard kept.count != order.count else { return }
+        order = kept
+        if let e = expandedId, !order.contains(e) { expandedId = nil }
     }
 
-    // MARK: Clock
-
-    private var tickCount = 0
-
-    private func tick() {
-        tickCount &+= 1
-        let now = Date()
-        for t in terminals.values { t.tick(now: now) }
-        if tickCount % 50 == 0 { bindAgentSessions(now: now) }
-        if tickCount % 5 == 0 {
-            syncAgents()
-            if usage.codexRateLimits != agents.codexRateLimits { usage.codexRateLimits = agents.codexRateLimits }
-            let tiles = allTiles
-            if tiles != lastPublished {
-                lastPublished = tiles
-                onTilesChanged?()
-            }
-        }
+    private func agentsChanged() {
+        syncAgents()
+        if usage.codexRateLimits != agents.codexRateLimits { usage.codexRateLimits = agents.codexRateLimits }
     }
 
     private func adopt(_ session: TerminalSession) {
@@ -443,16 +422,22 @@ public final class Workspace {
     // MARK: Session binding
 
     @ObservationIgnored private var binding = false
+    @ObservationIgnored private var bindPasses = 0
 
-    /// Agents whose conversation id isn't known yet are matched to the session file their tool writes.
-    private func bindAgentSessions(now: Date) {
+    /// Agents whose conversation id isn't known yet (Codex, or anything typed into a shell or started
+    /// through a launcher) are matched to the session file their tool writes.
+    private func bindAgentSessions() {
         guard !binding else { return }
+        bindPasses &+= 1
+        let now = Date()
         // Keep looking for as long as the agent runs: a conversation may start long after launch.
         let waiting = terminals.values.filter { $0.isRunning && !$0.isSuspended && $0.sessionId == nil }
         func candidates(_ tool: SessionResume.Tool) -> [SessionBinding.Candidate] {
             SessionBinding.unambiguous(waiting.filter { $0.command.flatMap(SessionResume.tool(for:)) == tool }
                 .map { SessionBinding.Candidate(tileId: $0.id, cwd: $0.cwd, launchedAt: $0.launchedAt,
                                                 continuing: $0.command.map(SessionResume.continuesLatest) ?? false) })
+                // After ten minutes unbound it rarely happens, so those are looked for once a minute.
+                .filter { now.timeIntervalSince($0.launchedAt) < 600 || bindPasses % 12 == 0 }
         }
         let codex = candidates(.codex), claude = candidates(.claude)
         guard !codex.isEmpty || !claude.isEmpty else { return }

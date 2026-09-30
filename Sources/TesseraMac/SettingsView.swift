@@ -271,7 +271,7 @@ struct MachinesSettings: View {
 
     private func addSheet(_ monitor: MachineMonitor) -> some View {
         let known = Set(monitor.remotes.compactMap(\.sshHost))
-        let suggestions = MachineMonitor.suggestedHosts().filter { !known.contains($0) }
+        let suggestions = monitor.suggestedHosts().filter { !known.contains($0) }
         return VStack(alignment: .leading, spacing: 14) {
             Text("Watch a Machine").font(.title3.weight(.semibold))
             if !suggestions.isEmpty {

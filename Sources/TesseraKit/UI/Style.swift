@@ -81,17 +81,27 @@ private struct PrivacyKey: EnvironmentKey {
     static let defaultValue = false
 }
 
+private struct MotionKey: EnvironmentKey {
+    static let defaultValue = true
+}
+
 public extension EnvironmentValues {
     /// Privacy mode: content keeps its shape and motion but can't be read (for screenshots and video).
     var tesseraPrivacy: Bool {
         get { self[PrivacyKey.self] }
         set { self[PrivacyKey.self] = newValue }
     }
+
+    /// Off for tiles out of view: their continuous effects (sweep, pulse, typing dots) stop.
+    var tesseraMotion: Bool {
+        get { self[MotionKey.self] }
+        set { self[MotionKey.self] = newValue }
+    }
 }
 
 public extension String {
     /// Privacy mode: every word becomes a solid bar of the same length, keeping the shape and color
-    /// of the text but none of its content — the same look as a terminal minimap.
+    /// of the text but none of its content — the same word blocks as an obscured terminal.
     func obscured(_ on: Bool) -> String {
         guard on else { return self }
         return String(map { $0.isWhitespace ? $0 : "▆" })

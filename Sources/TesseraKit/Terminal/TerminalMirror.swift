@@ -1,13 +1,14 @@
 import Foundation
+import Observation
 import SwiftTerm
 
 /// A display-only terminal fed from somewhere else (the host's PTY stream). It never answers the
 /// program — the host's own terminal does that — it just keeps a screen to draw.
+@Observable
 public final class TerminalMirror: TerminalDelegate {
-    public private(set) var terminal: Terminal!
-    /// Bumped on every change so views know to redraw.
+    @ObservationIgnored public private(set) var terminal: Terminal!
+    /// Bumped on every change; the views showing this terminal (and only those) redraw.
     public private(set) var revision = 0
-    public var onChange: (() -> Void)?
 
     public init(cols: Int = 120, rows: Int = 36) {
         terminal = Terminal(delegate: self, options: TerminalOptions(cols: cols, rows: rows, scrollback: 2000))
@@ -16,7 +17,7 @@ public final class TerminalMirror: TerminalDelegate {
     public func reset(cols: Int, rows: Int, bytes: [UInt8]) {
         terminal = Terminal(delegate: self, options: TerminalOptions(cols: cols, rows: rows, scrollback: 2000))
         terminal.feed(byteArray: bytes)
-        changed()
+        revision &+= 1
     }
 
     public func feed(_ bytes: [UInt8], cols: Int? = nil, rows: Int? = nil) {
@@ -24,12 +25,7 @@ public final class TerminalMirror: TerminalDelegate {
             terminal.resize(cols: cols, rows: rows)
         }
         terminal.feed(byteArray: bytes)
-        changed()
-    }
-
-    private func changed() {
         revision &+= 1
-        onChange?()
     }
 
     public func send(source: Terminal, data: ArraySlice<UInt8>) {}

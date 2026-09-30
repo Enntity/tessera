@@ -131,6 +131,11 @@ public struct TileInfo: Codable, Identifiable, Hashable, Sendable {
     /// 0...1 when the program reports progress (OSC 9;4).
     public var progress: Double?
 
+    /// Attention in a state that still wants the user; a tile that went back to work has moved on.
+    public var isUnseen: Bool { attention && activity.isAttention }
+    /// Waiting on the user: an open question or an unseen result.
+    public var needsUser: Bool { isUnseen || activity == .needsInput }
+
     public init(id: String, kind: TileKind, flavor: AgentFlavor, title: String, subtitle: String = "",
                 activity: TileActivity = .starting, attention: Bool = false, lastActivityAt: Date = Date(),
                 detail: String? = nil, cols: Int? = nil, rows: Int? = nil, url: String? = nil, progress: Double? = nil) {
@@ -148,6 +153,28 @@ public struct TileInfo: Codable, Identifiable, Hashable, Sendable {
         self.url = url
         self.progress = progress
     }
+}
+
+/// Which tiles are working, waiting on the user, or holding an unseen result. The Mac keeps this
+/// current as tiles change, so the HUD and tabs don't depend on every tile's data.
+public struct BoardState: Equatable, Sendable {
+    public var working: Set<String> = []
+    public var needsInput: Set<String> = []
+    /// Unseen results and questions (`TileInfo.isUnseen`).
+    public var unseen: Set<String> = []
+
+    public init(_ tiles: [TileInfo] = []) {
+        for tile in tiles {
+            if tile.activity == .working { working.insert(tile.id) }
+            if tile.activity == .needsInput { needsInput.insert(tile.id) }
+            if tile.isUnseen { unseen.insert(tile.id) }
+        }
+    }
+
+    /// Everything waiting on the user (`TileInfo.needsUser`).
+    public var needsUser: Set<String> { needsInput.union(unseen) }
+    /// Unseen results that aren't questions.
+    public var done: Int { unseen.subtracting(needsInput).count }
 }
 
 public struct ConversationItem: Codable, Hashable, Sendable, Identifiable {
@@ -219,7 +246,8 @@ public extension String {
 
     /// `/Users/me/src/app` → `~/src/app`.
     var abbreviatingHome: String {
-        let home = NSHomeDirectory()
-        return hasPrefix(home) ? "~" + dropFirst(home.count) : self
+        hasPrefix(homeDirectory) ? "~" + dropFirst(homeDirectory.count) : self
     }
 }
+
+private let homeDirectory = NSHomeDirectory()

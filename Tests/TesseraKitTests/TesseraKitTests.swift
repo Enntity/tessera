@@ -1,3 +1,4 @@
+import Observation
 import SwiftTerm
 import XCTest
 @testable import TesseraHost
@@ -64,6 +65,55 @@ final class TerminalActivityTrackerTests: XCTestCase {
         t.acknowledge()
         XCTAssertEqual(t.activity, .idle)
         XCTAssertFalse(t.attention)
+    }
+
+    func testUnseenResultOutlastsABlipOfOutput() {
+        var t = TerminalActivityTracker()
+        for i in 0..<30 { t.noteOutput(bytes: 400, at: t0.addingTimeInterval(Double(i) * 0.1)) }
+        t.tick(now: t0.addingTimeInterval(3.0), screenTail: [])
+        t.tick(now: t0.addingTimeInterval(5.0), screenTail: ["$ "])
+        XCTAssertEqual(t.activity, .done)
+        t.noteOutput(bytes: 80, at: t0.addingTimeInterval(8))
+        t.tick(now: t0.addingTimeInterval(8.1), screenTail: ["$ "])
+        XCTAssertEqual(t.activity, .working)
+        XCTAssertTrue(t.attention)
+        t.tick(now: t0.addingTimeInterval(10), screenTail: ["$ "])
+        XCTAssertEqual(t.activity, .done)
+        XCTAssertTrue(t.attention)
+    }
+
+    func testClearedPromptLeavesNothingWaiting() {
+        var t = TerminalActivityTracker()
+        t.noteOutput(bytes: 100, at: t0)
+        t.tick(now: t0.addingTimeInterval(2), screenTail: ["Do you want to proceed? (y/n)"])
+        XCTAssertTrue(t.attention)
+        t.tick(now: t0.addingTimeInterval(3), screenTail: ["$ "])
+        XCTAssertEqual(t.activity, .idle)
+        XCTAssertFalse(t.attention)
+    }
+
+    func testOnlyAttentionStatesNeedTheUser() {
+        var tile = TileInfo(id: "t", kind: .terminal, flavor: .shell, title: "t", activity: .working, attention: true)
+        XCTAssertFalse(tile.isUnseen)
+        XCTAssertFalse(tile.needsUser)
+        tile.activity = .done
+        XCTAssertTrue(tile.needsUser)
+        tile.attention = false
+        XCTAssertFalse(tile.needsUser)
+        tile.activity = .needsInput
+        XCTAssertTrue(tile.needsUser)
+    }
+
+    func testBoardStateCountsWhatNeedsTheUser() {
+        func tile(_ id: String, _ activity: TileActivity, attention: Bool = false) -> TileInfo {
+            TileInfo(id: id, kind: .terminal, flavor: .shell, title: id, activity: activity, attention: attention)
+        }
+        let state = BoardState([tile("w", .working, attention: true), tile("q", .needsInput, attention: true),
+                                tile("seen", .needsInput), tile("d", .done, attention: true), tile("i", .idle)])
+        XCTAssertEqual(state.working, ["w"])
+        XCTAssertEqual(state.needsInput, ["q", "seen"])
+        XCTAssertEqual(state.done, 1)
+        XCTAssertEqual(state.needsUser, ["q", "seen", "d"])
     }
 
     func testShortBurstIsQuietlyIdle() {
@@ -210,11 +260,27 @@ final class TranscriptParserTests: XCTestCase {
 
     func testRunningToolAndStaleTurns() {
         let now = Date(timeIntervalSince1970: 1_000_000)
-        XCTAssertEqual(TranscriptSupport.running("Bash", since: now.addingTimeInterval(-42), now: now), "Running Bash · 42s")
-        XCTAssertEqual(TranscriptSupport.running("Bash", since: now.addingTimeInterval(-65), now: now), "Running Bash · 1m 5s")
+        XCTAssertEqual(TranscriptSupport.running("Bash"), "Running Bash")
         XCTAssertEqual(TranscriptSupport.openTurnActivity(lastEventAt: now.addingTimeInterval(-60), now: now, staleAfter: 600), .working)
         XCTAssertEqual(TranscriptSupport.openTurnActivity(lastEventAt: now.addingTimeInterval(-601), now: now, staleAfter: 600), .idle)
         XCTAssertEqual(TranscriptSupport.openTurnActivity(lastEventAt: nil, now: now, staleAfter: 600), .idle)
+    }
+
+    func testRunningToolSnapshotsHoldStillBetweenScans() {
+        let now = ISO8601DateFormatter().date(from: "2026-09-28T10:00:10Z")!
+        var claude = ClaudeTranscriptParser()
+        claude.ingest(text: """
+        {"type":"assistant","uuid":"a1","timestamp":"2026-09-28T10:00:05.000Z","message":{"stop_reason":"tool_use","content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"make"}}]}}
+        """)
+        XCTAssertEqual(claude.snapshot(now: now).detail, "Running Bash")
+        XCTAssertEqual(claude.snapshot(now: now), claude.snapshot(now: now.addingTimeInterval(7)))
+        var codex = CodexTranscriptParser()
+        codex.ingest(text: """
+        {"timestamp":"2026-09-28T10:00:01.000Z","type":"event_msg","payload":{"type":"task_started","turn_id":"t"}}
+        {"timestamp":"2026-09-28T10:00:02.000Z","type":"response_item","payload":{"type":"function_call","name":"exec_command","arguments":"{}","call_id":"c1"}}
+        """)
+        XCTAssertEqual(codex.snapshot(now: now).detail, "Running exec_command")
+        XCTAssertEqual(codex.snapshot(now: now), codex.snapshot(now: now.addingTimeInterval(7)))
     }
 
     func testClaudeStalledEditIsNeedsInput() {
@@ -367,6 +433,14 @@ final class TerminalSnapshotTests: XCTestCase {
         XCTAssertEqual(red, .ansi256(code: 1))
     }
 
+    func testMirrorRedrawsOnItsOwnRevision() {
+        let mirror = TerminalMirror(cols: 20, rows: 4)
+        let redraw = expectation(description: "revision observed")
+        withObservationTracking { _ = mirror.revision } onChange: { redraw.fulfill() }
+        mirror.feed(Array("hi".utf8))
+        wait(for: [redraw], timeout: 1)
+    }
+
     func testSmartPunctuationIsUndone() {
         XCTAssertEqual(RemoteSession.undoSmartPunctuation("echo “hi” — it’s…"), "echo \"hi\" -- it's...")
     }
@@ -380,8 +454,9 @@ final class TerminalSnapshotTests: XCTestCase {
     func testScreenTailFollowsContentNotBottomRows() {
         let m = TerminalMirror(cols: 40, rows: 30)
         m.feed(Array("tick 1\r\ntick 2\r\nDo you want to proceed? (y/n) ".utf8))
+        XCTAssertEqual(m.terminal.liveEdgeRow, 2)
         let tail = m.terminal.screenTail(14)
-        XCTAssertEqual(tail.last, "Do you want to proceed? (y/n)")
+        XCTAssertEqual(tail, ["tick 1", "tick 2", "Do you want to proceed? (y/n)"])
         XCTAssertNotNil(TerminalActivityTracker.promptLine(in: tail))
     }
 
@@ -443,6 +518,26 @@ final class TileGroupsTests: XCTestCase {
 }
 
 final class RemoteVitalsTests: XCTestCase {
+    func testQuantizedReadingsDifferOnlyWhenTheChipWould() {
+        var a = MachineVitals(id: "m", name: "m", isLocal: true)
+        a.cpu = 0.4213
+        a.memory = 0.6671
+        a.temperature = 58.3
+        a.gpuPowerW = 41.8
+        a.load = 0.52
+        var b = a
+        b.cpu = 0.4189
+        b.temperature = 57.8
+        b.gpuPowerW = 42.3
+        b.load = 0.47
+        a.quantize()
+        b.quantize()
+        XCTAssertEqual(a, b)
+        b.cpu = 0.436
+        b.quantize()
+        XCTAssertNotEqual(a, b)
+    }
+
     let sample = """
     @stat cpu  13388591 4655 4582035 301064634 1058763 0 17213 0 0 0
     @memtotal 127600812

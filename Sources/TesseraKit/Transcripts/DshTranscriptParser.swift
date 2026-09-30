@@ -102,7 +102,7 @@ public struct DshTranscriptParser: TranscriptParser {
         } else if turnOpen {
             activity = TranscriptSupport.openTurnActivity(lastEventAt: lastEventAt, now: now, staleAfter: Self.openTurnStaleAfter)
             if let tool = pendingTools.values.min(by: { $0.at < $1.at }) {
-                detail = TranscriptSupport.running(tool.name, since: tool.at, now: now)
+                detail = TranscriptSupport.running(tool.name)
             }
         } else if let end = lastTurnEnd {
             activity = end == "completed" ? .done : .idle

@@ -49,6 +49,9 @@ public final class TerminalSession: NSObject {
     /// When output last arrived; screens that have been still for a while need no rescanning.
     @ObservationIgnored private var lastOutputAt: Date = .distantPast
     @ObservationIgnored private var settledScanDone = false
+    /// Runs only while there is something to redraw or learn; a quiet terminal costs nothing.
+    @ObservationIgnored private(set) var clock: Timer?
+    @ObservationIgnored private var nextScanAt: Date = .distantPast
     @ObservationIgnored private var progress: Double?
     @ObservationIgnored public private(set) var isRunning = false
     /// Opens web links clicked in this terminal (the workspace makes them web tiles).
@@ -162,7 +165,7 @@ public final class TerminalSession: NSObject {
         }
         // Claude only saves a conversation once a message is sent; an assigned id with no transcript
         // can't be resumed, so start it fresh under the same id.
-        if SessionResume.tool(for: command) == .claude, !ClaudeSessions.transcriptExists(id),
+        if SessionResume.tool(for: command) == .claude, !ClaudeSessions.transcriptExists(id, cwd: cwd),
            let fresh = SessionResume.freshLaunch(original: command, sessionId: id) {
             return fresh
         }
@@ -193,6 +196,7 @@ public final class TerminalSession: NSObject {
         // Keep scanning through startup even if the program stays silent.
         lastOutputAt = Date()
         settledScanDone = false
+        wake()
         generation += 1
         let relay = ProcessRelay(session: self, generation: generation)
         self.relay = relay
@@ -289,6 +293,8 @@ public final class TerminalSession: NSObject {
     public func send(_ bytes: [UInt8]) {
         guard isRunning, let process else { return }
         tracker.noteInput(at: Date())
+        // Answering a question settles it at once, whatever the program prints next.
+        refreshInfo()
         process.send(data: bytes[...])
     }
 
@@ -310,8 +316,8 @@ public final class TerminalSession: NSObject {
         refreshInfo()
     }
 
-    /// Called on the workspace display clock.
-    func tick(now: Date) {
+    /// Redraws a changed screen (up to 10 fps) and re-reads its state a few times a second.
+    private func tick(now: Date) {
         if dirty {
             dirty = false
             revision &+= 1
@@ -319,11 +325,34 @@ public final class TerminalSession: NSObject {
         // Timing-based transitions all happen within a few seconds of the last output; after
         // one scan of the settled screen there is nothing new to learn until more arrives.
         let quiet = now.timeIntervalSince(lastOutputAt)
-        if quiet > 4 {
-            if settledScanDone { return }
-            settledScanDone = true
+        if quiet > 4, settledScanDone {
+            clock?.invalidate()
+            clock = nil
+            return
         }
-        if tracker.tick(now: now, screenTail: terminal.screenTail(24)) { refreshInfo() }
+        guard now >= nextScanAt else { return }
+        nextScanAt = now.addingTimeInterval(0.25)
+        settledScanDone = quiet > 4
+        // Working, it refreshes on every scan so its age keeps up (refreshInfo moves it every few seconds).
+        if tracker.tick(now: now, screenTail: terminal.screenTail(24)) || tracker.activity == .working { refreshInfo() }
+    }
+
+    /// Starts the clock after anything that changes the screen, until it settles again.
+    private func wake() {
+        guard clock == nil else { return }
+        // Every terminal's clock ticks on one shared 0.1 s grid, so busy terminals redraw together
+        // in one pass instead of each on its own.
+        let next = (Date.timeIntervalSinceReferenceDate / 0.1).rounded(.up) * 0.1
+        let clock = Timer(fire: Date(timeIntervalSinceReferenceDate: next), interval: 0.1, repeats: true) { [weak self] timer in
+            MainActor.assumeIsolated {
+                guard let self else { return timer.invalidate() }
+                self.tick(now: Date())
+            }
+        }
+        clock.tolerance = 0.02
+        // Common mode keeps tiles live while a menu is open or the window is being resized.
+        RunLoop.main.add(clock, forMode: .common)
+        self.clock = clock
     }
 
     private func refreshInfo() {
@@ -337,7 +366,10 @@ public final class TerminalSession: NSObject {
         next.rows = terminal.rows
         next.progress = progress
         next.subtitle = cwd.abbreviatingHome
-        if next.activity == .working || next.activity != info.activity { next.lastActivityAt = Date() }
+        // While working, "last activity" follows along only every few seconds (ages read "now" under 5 s).
+        if next.activity != info.activity || next.activity == .working && Date().timeIntervalSince(info.lastActivityAt) > 4 {
+            next.lastActivityAt = Date()
+        }
         if next != info { info = next }
     }
 
@@ -434,6 +466,7 @@ extension TerminalSession {
         settledScanDone = false
         tracker.noteOutput(bytes: slice.count, at: lastOutputAt)
         dirty = true
+        wake()
         if !outputObservers.isEmpty {
             let bytes = Array(slice)
             for observer in outputObservers.values { observer(bytes) }
@@ -459,21 +492,28 @@ extension TerminalSession: TerminalViewDelegate {
             var size = winsize(ws_row: UInt16(newRows), ws_col: UInt16(newCols), ws_xpixel: 0, ws_ypixel: 0)
             _ = PseudoTerminalHelpers.setWinSize(masterPtyDescriptor: process.childfd, windowSize: &size)
             dirty = true
+            wake()
             refreshInfo()
         }
     }
 
     nonisolated public func setTerminalTitle(source: TerminalView, title: String) {
         MainActor.assumeIsolated {
+            // Agents animate their titles several times a second; only a new title is news.
             let clean = Self.cleanTitle(title)
-            if !clean.isEmpty { self.title = clean }
+            guard !clean.isEmpty, clean != self.title else { return }
+            self.title = clean
             refreshInfo()
         }
     }
 
     nonisolated public func hostCurrentDirectoryUpdate(source: TerminalView, directory: String?) {
         MainActor.assumeIsolated {
-            if let directory, let url = URL(string: directory), url.isFileURL { cwd = url.path } else if let directory { cwd = directory }
+            // Shells report this at every prompt.
+            guard let directory else { return }
+            let dir = URL(string: directory).flatMap { $0.isFileURL ? $0.path : nil } ?? directory
+            guard dir != cwd else { return }
+            cwd = dir
             refreshInfo()
         }
     }

@@ -27,11 +27,27 @@ enum CodexRollouts {
             let dir = root.appendingPathComponent(String(format: "%04d/%02d/%02d", c.year!, c.month!, c.day!))
             for name in (try? fm.contentsOfDirectory(atPath: dir.path)) ?? [] where name.hasSuffix(".jsonl") {
                 let path = dir.appendingPathComponent(name).path
-                let modified = ((try? fm.attributesOfItem(atPath: path))?[.modificationDate] as? Date) ?? .distantPast
-                if now.timeIntervalSince(modified) < lookback { files.append((path, modified)) }
+                if let modified = FileStat(path)?.modified, now.timeIntervalSince(modified) < lookback { files.append((path, modified)) }
             }
         }
         return files.sorted { $0.1 > $1.1 }
+    }
+
+    /// A rollout's head, read once: it never changes.
+    static func head(_ path: String) -> CodexRolloutHead? { heads.head(path) }
+
+    private static let heads = HeadCache()
+
+    private final class HeadCache: @unchecked Sendable {
+        private let lock = NSLock()
+        private var heads: [String: CodexRolloutHead] = [:]
+
+        func head(_ path: String) -> CodexRolloutHead? {
+            if let hit = lock.withLock({ heads[path] }) { return hit }
+            guard let head = autoreleasepool(invoking: { readHead(path) }) else { return nil }
+            lock.withLock { heads[path] = head }
+            return head
+        }
     }
 
     /// Reads just the session_meta line; it can be large (it embeds instructions), so the read is capped.
@@ -52,7 +68,7 @@ enum CodexRollouts {
     static func bind(_ candidates: [SessionBinding.Candidate], claimed: Set<String>, root: URL = CodexRollouts.root) -> [String: String] {
         let earliest = candidates.map(\.launchedAt).min() ?? Date()
         let heads: [(head: CodexRolloutHead, modified: Date)] = recentFiles(lookback: max(900, Date().timeIntervalSince(earliest) + 60), root: root)
-            .compactMap { file in readHead(file.path).map { ($0, file.modified) } }
+            .compactMap { file in head(file.path).map { ($0, file.modified) } }
             .filter { !$0.head.isDesktop && !$0.head.isSubagent && SessionResume.isSafeId($0.head.id) }
         return SessionBinding.assign(candidates, claimed: claimed) { c, folder, since, taken in
             heads.filter { !taken.contains($0.head.id) && $0.head.cwd.standardizedPath == folder }

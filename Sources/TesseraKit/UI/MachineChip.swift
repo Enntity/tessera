@@ -66,11 +66,11 @@ public struct MachineChip: View {
         var lines = [vitals.name]
         var cpu = "CPU \(pct(vitals.cpu))"
         if let cores = vitals.cores { cpu += " · \(cores) cores" }
-        if let load = vitals.load { cpu += " · load \(String(format: "%.2f", load))" }
+        if let load = vitals.load { cpu += " · load \(String(format: "%.1f", load))" }
         lines.append(cpu)
         var gpu = "GPU \(pct(vitals.gpu))"
         if let name = vitals.gpuName { gpu += " · \(name)" }
-        if let w = vitals.gpuPowerW { gpu += String(format: " · %.1f W GPU power", w) }
+        if let w = vitals.gpuPowerW { gpu += String(format: " · %.0f W GPU power", w) }
         lines.append(gpu)
         if let m = vitals.memory, let total = vitals.memoryTotalGB {
             lines.append(String(format: "Memory %@ · %.1f of %.0f GB", pct(m), m * total, total))
@@ -100,6 +100,5 @@ struct LevelBar: View {
             }
             Text(label).font(Style.mono(6.5, .bold)).foregroundStyle(Style.faint)
         }
-        .animation(.spring(duration: 0.5), value: v)
     }
 }

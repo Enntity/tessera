@@ -6,10 +6,13 @@ import TesseraKit
 enum ClaudeSessions {
     static var projects: URL { URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent(".claude/projects") }
 
-    static func transcriptExists(_ id: String) -> Bool {
+    /// Looks in `cwd`'s own project folder first, then in all of them.
+    static func transcriptExists(_ id: String, cwd: String) -> Bool {
         let fm = FileManager.default
-        let dirs = (try? fm.contentsOfDirectory(atPath: projects.path)) ?? []
-        return dirs.contains { fm.fileExists(atPath: projects.appendingPathComponent($0).appendingPathComponent(id + ".jsonl").path) }
+        func exists(in folder: String) -> Bool {
+            fm.fileExists(atPath: projects.appendingPathComponent(folder).appendingPathComponent(id + ".jsonl").path)
+        }
+        return exists(in: projectFolder(for: cwd)) || ((try? fm.contentsOfDirectory(atPath: projects.path)) ?? []).contains(where: exists)
     }
 
     /// Claude Code's project folder name for a working directory (every non-alphanumeric → `-`).

@@ -162,8 +162,9 @@ public struct ClaudeTranscriptParser: TranscriptParser {
                 activity = .needsInput
                 detail = "Waiting to approve \(name)"
             } else {
+                // No elapsed time here: a detail that changed every second would make every scan a change.
                 activity = .working
-                detail = TranscriptSupport.running(name, since: since, now: now)
+                detail = TranscriptSupport.running(name)
             }
         } else if turnOpen {
             activity = TranscriptSupport.openTurnActivity(lastEventAt: lastEventAt, now: now, staleAfter: Self.openTurnStaleAfter)

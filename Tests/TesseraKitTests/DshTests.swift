@@ -52,6 +52,19 @@ final class ZstdTailTests: XCTestCase {
         try handle.close()
         XCTAssertEqual(tail.readAppended(path: path).map { String(decoding: $0, as: UTF8.self) }, "{\"b\":2}\n{\"c\":3}\n")
     }
+
+    func testReadsALongLogInPieces() throws {
+        let path = NSTemporaryDirectory() + "tessera-zstd-\(UUID().uuidString).zst"
+        defer { try? FileManager.default.removeItem(atPath: path) }
+        let lines = (0..<20).map { "{\"n\":\($0)}\n" }
+        try lines.map(frame).reduce(Data(), +).write(to: URL(fileURLWithPath: path))
+        let tail = ZstdTail()
+        var pieces: [String] = []
+        // Smaller than one frame: each call still makes progress, a frame at a time.
+        while let decoded = tail.readAppended(path: path, limit: 8) { pieces.append(String(decoding: decoded, as: UTF8.self)) }
+        XCTAssertGreaterThan(pieces.count, 1)
+        XCTAssertEqual(pieces.joined(), lines.joined())
+    }
 }
 
 final class DshTranscriptParserTests: XCTestCase {

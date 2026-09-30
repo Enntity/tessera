@@ -20,7 +20,7 @@ public struct CodexTranscriptParser: TranscriptParser {
     private var finished = false
     private var awaitingApproval: String?
     private var finalMessage: String?
-    private var toolStartedAt: (name: String, at: Date)?
+    private var runningTool: String?
 
     /// An open turn this quiet was left open, not working (see TranscriptSupport.openTurnActivity).
     static let openTurnStaleAfter: TimeInterval = 15 * 60
@@ -69,10 +69,10 @@ public struct CodexTranscriptParser: TranscriptParser {
         case "function_call", "custom_tool_call", "local_shell_call":
             let name = p["name"] as? String ?? "shell"
             let args = p["arguments"] ?? p["input"] ?? p["action"]
-            toolStartedAt = (name, ts ?? Date())
+            runningTool = name
             TranscriptSupport.append(.init(id: id, role: .tool, text: TranscriptSupport.describeToolInput(args), toolName: name, timestamp: ts), to: &items)
         case "function_call_output", "custom_tool_call_output":
-            toolStartedAt = nil
+            runningTool = nil
             var text = p["output"] as? String ?? ""
             if let data = text.data(using: .utf8), let o = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                let inner = o["output"] as? String {
@@ -94,13 +94,13 @@ public struct CodexTranscriptParser: TranscriptParser {
             turnOpen = false
             finished = true
             awaitingApproval = nil
-            toolStartedAt = nil
+            runningTool = nil
             finalMessage = (p["last_agent_message"] as? String)?.preview(160)
         case "turn_aborted":
             turnOpen = false
             finished = false
             awaitingApproval = nil
-            toolStartedAt = nil
+            runningTool = nil
         case "exec_approval_request":
             awaitingApproval = "Approve command: " + TranscriptSupport.describeToolInput(p)
         case "apply_patch_approval_request":
@@ -128,7 +128,7 @@ public struct CodexTranscriptParser: TranscriptParser {
             detail = approval
         } else if turnOpen {
             activity = TranscriptSupport.openTurnActivity(lastEventAt: lastEventAt, now: now, staleAfter: Self.openTurnStaleAfter)
-            if let tool = toolStartedAt { detail = TranscriptSupport.running(tool.name, since: tool.at, now: now) }
+            if let tool = runningTool { detail = TranscriptSupport.running(tool) }
         } else if finished {
             activity = .done
             detail = finalMessage

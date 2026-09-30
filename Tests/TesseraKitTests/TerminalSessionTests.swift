@@ -210,6 +210,45 @@ final class TerminalSessionTests: XCTestCase {
         XCTAssertEqual(line, "HIST=\(home.url.path)/.zsh_history")
     }
 
+    /// A terminal with nothing happening costs nothing: its clock stops once the screen settles,
+    /// and output starts it again.
+    func testClockRunsOnlyWhileTheScreenChanges() throws {
+        let home = try isolatedHome()
+        let session = TerminalSession(command: nil, cwd: NSTemporaryDirectory(), shell: "/bin/zsh", environmentOverrides: home.env)
+        defer { session.terminate() }
+        XCTAssertTrue(waitUntil(20) { session.terminal.screenTail(40).contains { !$0.isEmpty } })
+        XCTAssertTrue(waitUntil(10) { session.clock == nil })
+        session.send(Array("echo tessera-tick\r".utf8))
+        XCTAssertTrue(waitUntil(5) { session.clock != nil })
+        XCTAssertTrue(waitUntil(10) { session.clock == nil })
+        XCTAssertTrue(session.terminal.screenTail(40).contains("tessera-tick"))
+    }
+
+    /// A terminal that keeps working keeps its age current, a few seconds at a time, even when
+    /// nothing else about the tile changes.
+    func testWorkingTerminalKeepsItsAgeCurrent() throws {
+        let home = try isolatedHome()
+        let session = TerminalSession(command: "while :; do echo tick; sleep 0.3; done", cwd: NSTemporaryDirectory(),
+                                      shell: "/bin/zsh", environmentOverrides: home.env)
+        defer { session.terminate() }
+        XCTAssertTrue(waitUntil(20) { session.info.activity == .working })
+        let since = session.info.lastActivityAt
+        XCTAssertTrue(waitUntil(8) { session.info.lastActivityAt.timeIntervalSince(since) > 3 })
+        XCTAssertEqual(session.info.activity, .working)
+    }
+
+    /// An answered question stops asking at once, even if what follows is too brief to count as work.
+    func testAnsweringAQuestionSettlesTheTile() throws {
+        let home = try isolatedHome()
+        let session = TerminalSession(command: "printf 'Do you want to proceed? (y/n) '; read -r answer", cwd: NSTemporaryDirectory(),
+                                      shell: "/bin/zsh", environmentOverrides: home.env)
+        defer { session.terminate() }
+        XCTAssertTrue(waitUntil(20) { session.info.activity == .needsInput })
+        session.send(Array("y".utf8))
+        XCTAssertEqual(session.info.activity, .idle)
+        XCTAssertFalse(session.info.attention)
+    }
+
     /// An unbound `resume --last` that may not continue the latest starts clean, not with `--last`.
     func testUnboundContinueStartsFresh() {
         let session = TerminalSession(command: "codex-work resume --last", cwd: NSTemporaryDirectory(), resuming: true,
@@ -282,5 +321,10 @@ final class ClaudeLocalUsageTests: XCTestCase {
         try handle.close()
         totals = usage.refresh(now: now)
         XCTAssertEqual(totals.fiveHours.replies, 2)
+
+        // Read in chunks far smaller than a line, the counts come out the same.
+        let chunked = ClaudeLocalUsage(root: root, chunkSize: 37).refresh(now: now)
+        XCTAssertEqual(chunked.fiveHours, totals.fiveHours)
+        XCTAssertEqual(chunked.week, totals.week)
     }
 }

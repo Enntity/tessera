@@ -103,7 +103,7 @@ public struct TerminalActivityTracker: Sendable {
 
         let quietFor = lastOutputAt.map { now.timeIntervalSince($0) } ?? .infinity
         let tail = screenTail.suffix(24)
-        let spinnerVisible = tail.contains { $0.lowercased().contains("esc to interrupt") }
+        let spinnerVisible = tail.contains { $0.range(of: "esc to interrupt", options: .caseInsensitive) != nil }
 
         if quietFor < Self.workingWindow || spinnerVisible {
             if activity != .working { detail = nil }
@@ -116,12 +116,14 @@ public struct TerminalActivityTracker: Sendable {
             if burst >= Self.meaningfulBurst {
                 raise(needsInput: false, detail: nil)
             } else {
-                activity = .idle
+                // A blip after an unseen result (a redraw, a clock) leaves that result unseen.
+                activity = attention ? .done : .idle
             }
         } else if activity == .needsInput {
-            // Prompt disappeared without new output (e.g. cleared); fall back to idle.
+            // Prompt disappeared without new output (e.g. cleared): nothing is waiting any more.
             activity = .idle
             detail = nil
+            attention = false
         } else if activity == .starting, quietFor >= Self.settleTime, now.timeIntervalSince(startedAt ?? now) >= 1.5 {
             // Settled — including programs that never print anything.
             activity = .idle

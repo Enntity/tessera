@@ -21,10 +21,13 @@ final class ClaudeLocalUsage: @unchecked Sendable {
     private var hourly: [Int: Totals] = [:]
     private let lock = NSLock()
     private let root: URL
+    /// Transcripts are read this much at a time, so a first read of a huge one never holds it all.
+    private let chunkSize: Int
     static let window: TimeInterval = 7 * 86_400
 
-    init(root: URL = ClaudeSessions.projects) {
+    init(root: URL = ClaudeSessions.projects, chunkSize: Int = 8 << 20) {
         self.root = root
+        self.chunkSize = chunkSize
     }
 
     /// Reads whatever was appended since last time. Call off the main thread.
@@ -32,17 +35,18 @@ final class ClaudeLocalUsage: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         let fm = FileManager.default
+        var visited: Set<String> = []
         for dir in (try? fm.contentsOfDirectory(atPath: root.path)) ?? [] {
             let folder = root.appendingPathComponent(dir)
             for name in (try? fm.contentsOfDirectory(atPath: folder.path)) ?? [] where name.hasSuffix(".jsonl") {
                 let path = folder.appendingPathComponent(name).path
-                guard let attrs = try? fm.attributesOfItem(atPath: path),
-                      let modified = attrs[.modificationDate] as? Date,
-                      now.timeIntervalSince(modified) < Self.window,
-                      let size = (attrs[.size] as? NSNumber)?.uint64Value else { continue }
-                ingest(path: path, size: size, since: now.addingTimeInterval(-Self.window))
+                guard let stat = FileStat(path), now.timeIntervalSince(stat.modified) < Self.window else { continue }
+                visited.insert(path)
+                ingest(path: path, size: stat.size, since: now.addingTimeInterval(-Self.window))
             }
         }
+        // Transcripts that left the window take their read state (and seen ids) with them.
+        files = files.filter { visited.contains($0.key) }
         let hourNow = Int(now.timeIntervalSince1970 / 3600)
         hourly = hourly.filter { $0.key > hourNow - 24 * 7 - 1 }
         func sum(hours: Int) -> Totals {
@@ -60,19 +64,24 @@ final class ClaudeLocalUsage: @unchecked Sendable {
         guard size > state.offset, let handle = FileHandle(forReadingAtPath: path) else { return }
         defer { try? handle.close() }
         try? handle.seek(toOffset: state.offset)
-        var data = state.remainder
-        data.append(handle.readDataToEndOfFile())
-        state.offset = size
-        if let lastNewline = data.lastIndex(of: 0x0A) {
-            state.remainder = Data(data[(lastNewline + 1)...])
-            // Byte-level scan: most of a transcript is tool output in user lines; only decode the
-            // assistant lines that carry usage.
-            Self.forEachLine(in: data[..<lastNewline], containing: ["\"type\":\"assistant\"", "\"usage\":{"]) { line in
-                count(line, into: &state, since: since)
+        // Chunk by chunk, each freed before the next.
+        while autoreleasepool(invoking: {
+            guard let chunk = try? handle.read(upToCount: chunkSize), !chunk.isEmpty else { return false }
+            var data = state.remainder
+            data.append(chunk)
+            state.offset += UInt64(chunk.count)
+            if let lastNewline = data.lastIndex(of: 0x0A) {
+                state.remainder = Data(data[(lastNewline + 1)...])
+                // Byte-level scan: most of a transcript is tool output in user lines; only decode the
+                // assistant lines that carry usage.
+                Self.forEachLine(in: data[..<lastNewline], containing: ["\"type\":\"assistant\"", "\"usage\":{"]) { line in
+                    count(line, into: &state, since: since)
+                }
+            } else {
+                state.remainder = data
             }
-        } else {
-            state.remainder = data
-        }
+            return true
+        }) {}
         if state.seen.count > 20_000 { state.seen.removeAll() }
         files[path] = state
     }

@@ -3,14 +3,17 @@ import Observation
 import TesseraKit
 import WebKit
 
-/// A web page as a tile. The WKWebView stays alive (logged-in state, media, scroll); the grid shows
-/// periodic snapshots and the expanded panel re-parents the live view.
+/// A web page as a tile. The WKWebView stays alive (logged-in state, media, scroll): the tile shows it
+/// live and scaled down, the expanded panel re-parents it, and a snapshot stands in on the tile while
+/// the panel has it.
 @Observable
 @MainActor
 public final class BrowserSession: NSObject {
     public let id: String
     public private(set) var info: TileInfo
     public private(set) var snapshot: NSImage?
+    /// The snapshot as a coarse, unreadable mosaic, for privacy mode.
+    public private(set) var mosaic: NSImage?
     @ObservationIgnored public let webView: WKWebView
     @ObservationIgnored private var observations: [NSKeyValueObservation] = []
     @ObservationIgnored private var lastBadge = 0
@@ -94,9 +97,24 @@ public final class BrowserSession: NSObject {
         config.snapshotWidth = 640
         webView.takeSnapshot(with: config) { [weak self] image, _ in
             MainActor.assumeIsolated {
-                if let image { self?.snapshot = image }
+                guard let self, let image else { return }
+                self.snapshot = image
+                self.mosaic = Self.mosaic(image)
             }
         }
+    }
+
+    /// Downsample to wide, short cells; drawn without interpolation, lines of text become bars —
+    /// the same look as a terminal's word blocks.
+    static func mosaic(_ image: NSImage) -> NSImage? {
+        guard let cg = image.cgImage(forProposedRect: nil, context: nil, hints: nil) else { return nil }
+        let w = max(1, cg.width / 16), h = max(1, cg.height / 5)
+        guard let ctx = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: 0,
+                                  space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
+        ctx.interpolationQuality = .medium
+        ctx.draw(cg, in: CGRect(x: 0, y: 0, width: w, height: h))
+        // Keep the page's shape: stretched back to it, the pixels become the wide, short cells.
+        return ctx.makeImage().map { NSImage(cgImage: $0, size: image.size) }
     }
 
     /// Runs `script` once the page has loaded (now, if it already has).

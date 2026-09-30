@@ -19,7 +19,10 @@ public final class HostServer {
     @ObservationIgnored private weak var workspace: Workspace?
     @ObservationIgnored private var listener: NWListener?
     @ObservationIgnored private var clients: [UUID: RemoteClient] = [:]
+    /// Streams to connected devices; runs only while there are any.
     @ObservationIgnored private var pump: Timer?
+    @ObservationIgnored private var flushes = 0
+    @ObservationIgnored private var lastTiles: [TileInfo] = []
     @ObservationIgnored private var lastUsage: [UsageReading] = []
     /// Why the listener last failed; stays on show until the next start.
     @ObservationIgnored private var failure: String?
@@ -46,7 +49,6 @@ public final class HostServer {
             hostId = UUID().uuidString
             Preferences.store.set(hostId, forKey: "tessera.hostId")
         }
-        workspace.onTilesChanged = { [weak self] in self?.broadcastTiles() }
     }
 
     public var pairingURL: URL? {
@@ -77,11 +79,6 @@ public final class HostServer {
             }
             l.start(queue: .main)
             listener = l
-            let timer = Timer(timeInterval: 0.05, repeats: true) { [weak self] _ in
-                MainActor.assumeIsolated { self?.flush() }
-            }
-            RunLoop.main.add(timer, forMode: .common)
-            pump = timer
         } catch {
             status = "Failed: \(error.localizedDescription)"
         }
@@ -122,29 +119,45 @@ public final class HostServer {
         let client = RemoteClient(connection: connection, workspace: workspace, hello: HostHello(hostName: hostName, hostId: hostId))
         clients[client.id] = client
         client.onClose = { [weak self] id in
-            self?.clients[id] = nil
-            self?.refreshNames()
+            guard let self else { return }
+            clients[id] = nil
+            refreshNames()
+            if clients.isEmpty {
+                pump?.invalidate()
+                pump = nil
+            }
         }
         client.onHello = { [weak self] in self?.refreshNames() }
         client.start()
+        if pump == nil {
+            let timer = Timer(timeInterval: 0.05, repeats: true) { [weak self] _ in
+                MainActor.assumeIsolated { self?.flush() }
+            }
+            timer.tolerance = 0.01
+            RunLoop.main.add(timer, forMode: .common)
+            pump = timer
+        }
     }
 
     private func refreshNames() {
         clientNames = clients.values.compactMap(\.deviceName).sorted()
     }
 
-    private func broadcastTiles() {
-        for c in clients.values { c.sendTiles() }
-    }
-
+    /// Terminal output goes out 20 times a second; board and usage changes twice a second.
     private func flush() {
         guard let workspace else { return }
+        flushes &+= 1
+        for c in clients.values { c.flush() }
+        guard flushes % 10 == 0 else { return }
+        let tiles = workspace.allTiles
+        if tiles != lastTiles {
+            lastTiles = tiles
+            for c in clients.values { c.sendTiles() }
+        }
         let usage = workspace.usage.orderedReadings
-        let usageChanged = usage != lastUsage
-        if usageChanged { lastUsage = usage }
-        for c in clients.values {
-            c.flush()
-            if usageChanged { c.send(.usage(usage)) }
+        if usage != lastUsage {
+            lastUsage = usage
+            for c in clients.values { c.send(.usage(usage)) }
         }
     }
 
@@ -385,7 +398,7 @@ final class RemoteClient {
     private func pushConversations() {
         guard let workspace else { return }
         for id in watched {
-            guard let session = workspace.agents.sessions[id] else { continue }
+            guard let session = workspace.agents.session(id) else { continue }
             if sentConversations[id] != session.snapshot {
                 sentConversations[id] = session.snapshot
                 send(.conversation(ConversationFrame(id: id, snapshot: session.snapshot)))

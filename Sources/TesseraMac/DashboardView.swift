@@ -35,6 +35,18 @@ struct DashboardView: View {
     }
 }
 
+/// Takes whatever size it is offered without measuring its content. At the window's root this keeps
+/// AppKit's min-size checks, and any change deep in the board, from re-measuring the whole tree.
+struct FillProposal: Layout {
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        proposal.replacingUnspecifiedDimensions()
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        for subview in subviews { subview.place(at: bounds.origin, proposal: ProposedViewSize(bounds.size)) }
+    }
+}
+
 /// The void behind the board: a faint lattice with a glow, so tiles float.
 struct Backdrop: View {
     var body: some View {
@@ -86,19 +98,19 @@ struct HUDBar: View {
 
     var body: some View {
         let workspace = model.workspace
-        let counts = model.workspace.counts
+        let state = workspace.state
         HStack(spacing: 14) {
             Wordmark()
                 .padding(.leading, 78) // clear the traffic lights
             Divider().frame(height: 18).overlay(Style.hairline)
             HStack(spacing: 8) {
-                CountChip(value: counts.needsInput, label: "need you", color: Style.amber, pulse: counts.needsInput > 0) {
+                CountChip(value: state.needsInput.count, label: "need you", color: Style.amber, pulse: !state.needsInput.isEmpty) {
                     model.jumpToAttention()
                 }
-                CountChip(value: counts.done, label: "done", color: Style.mint, pulse: false) {
+                CountChip(value: state.done, label: "done", color: Style.mint, pulse: false) {
                     model.jumpToAttention()
                 }
-                CountChip(value: counts.working, label: "working", color: Style.cyan, pulse: false) {
+                CountChip(value: state.working.count, label: "working", color: Style.cyan, pulse: false) {
                     withAnimation(.spring(duration: 0.35)) { workspace.filter = .all }
                 }
             }
@@ -162,7 +174,6 @@ struct CountChip: View {
     let color: Color
     let pulse: Bool
     let action: () -> Void
-    @State private var glow = false
 
     var body: some View {
         Button(action: action) {
@@ -175,17 +186,16 @@ struct CountChip: View {
             .foregroundStyle(value > 0 ? color : Style.faint)
             .padding(.horizontal, 9)
             .padding(.vertical, 4)
-            .background((value > 0 ? color : Style.faint).opacity(glow ? 0.28 : 0.1), in: Capsule())
+            .background {
+                if pulse {
+                    Ambient(.pulse(color, cornerRadius: nil, low: 0.1, high: 0.28, period: 0.9))
+                } else {
+                    Capsule().fill((value > 0 ? color : Style.faint).opacity(0.1))
+                }
+            }
         }
         .buttonStyle(.plain)
         .animation(.spring(duration: 0.3), value: value)
-        .onChange(of: pulse, initial: true) { _, on in
-            if on {
-                withAnimation(.easeInOut(duration: 0.9).repeatForever()) { glow = true }
-            } else {
-                withAnimation(.default) { glow = false }
-            }
-        }
     }
 }
 
@@ -203,7 +213,7 @@ struct MachineStrip: View {
             }
             Menu {
                 let known = Set(monitor.remotes.compactMap(\.sshHost))
-                let hosts = MachineMonitor.suggestedHosts().filter { !known.contains($0) }
+                let hosts = monitor.suggestedHosts().filter { !known.contains($0) }
                 ForEach(hosts, id: \.self) { host in
                     Button(host) { monitor.add(host: host, name: nil) }
                 }
@@ -219,7 +229,7 @@ struct MachineStrip: View {
             .menuIndicator(.hidden)
             .fixedSize()
             .help("Watch another machine over SSH")
-            TimelineView(.periodic(from: .now, by: 1)) { ctx in
+            TimelineView(.everyMinute) { ctx in
                 Text(ctx.date, format: .dateTime.hour().minute())
                     .font(Style.mono(13, .semibold))
                     .foregroundStyle(Style.ink)
@@ -257,19 +267,20 @@ struct TabStrip: View {
 
     var body: some View {
         let workspace = model.workspace
+        let needsUser = workspace.state.needsUser
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 2) {
-                TabChip(title: "All", count: workspace.allTiles.count, attention: false,
+                TabChip(title: "All", count: workspace.order.count, attention: false,
                         selected: workspace.filter == .all, dropTile: { file($0, into: nil) }) { select(.all) }
-                TabChip(title: "Needs you", count: workspace.counts.needsInput + workspace.counts.done, attention: false,
+                TabChip(title: "Needs you", count: needsUser.count, attention: false,
                         selected: workspace.filter == .attention, tint: Style.amber) { select(.attention) }
                 if !workspace.groups.list.isEmpty {
                     Rectangle().fill(Style.hairline).frame(width: 1, height: 14).padding(.horizontal, 4)
                 }
                 ForEach(workspace.groups.list) { group in
-                    let tiles = workspace.tiles(inGroup: group.id)
-                    TabChip(title: group.name, count: tiles.count,
-                            attention: tiles.contains { $0.attention || $0.activity == .needsInput },
+                    let members = workspace.groups.members(of: group.id)
+                    TabChip(title: group.name, count: members.filter(workspace.exists).count,
+                            attention: !members.isDisjoint(with: needsUser),
                             selected: workspace.filter == .group(group.id), dropTile: { file($0, into: group.id) }) {
                         select(.group(group.id))
                     }

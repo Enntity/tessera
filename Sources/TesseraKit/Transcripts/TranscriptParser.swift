@@ -59,11 +59,9 @@ enum TranscriptSupport {
         return ""
     }
 
-    /// `Running Bash · 1m 5s`: the tool call in progress and how long it has run.
-    static func running(_ name: String, since: Date, now: Date) -> String {
-        let s = max(0, Int(now.timeIntervalSince(since)))
-        return "Running \(name) · " + (s < 60 ? "\(s)s" : "\(s / 60)m \(s % 60)s")
-    }
+    /// `Running Bash`: the tool call in progress. No elapsed time, so a snapshot changes only when
+    /// its conversation does (the tile's age shows how long it has been).
+    static func running(_ name: String) -> String { "Running \(name)" }
 
     /// An open turn is working until it has been quiet for `staleAfter`; then it was left open (a
     /// crash, a closed app) and reads as idle.

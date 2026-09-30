@@ -123,13 +123,11 @@ struct LiveTile: View {
     let compact: Bool
 
     var body: some View {
-        // Read the counter unconditionally: mirrors aren't observed, so this is how a newly arrived one gets drawn.
-        let revision = session.revisions[info.id] ?? 0
         TileCard(info: info, compact: compact) {
             switch info.kind {
             case .terminal:
                 if let mirror = session.mirrors[info.id] {
-                    TerminalThumbnail(terminal: mirror.terminal, revision: revision).equatable()
+                    TerminalThumbnail(terminal: mirror.terminal, revision: mirror.revision).equatable()
                 } else {
                     Style.terminalBackground
                 }

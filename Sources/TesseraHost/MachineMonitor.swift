@@ -19,6 +19,10 @@ public final class MachineMonitor {
     @ObservationIgnored private let store: URL
     @ObservationIgnored private var timer: Timer?
     @ObservationIgnored private let local = LocalSampler()
+    /// Sensor and IORegistry reads take tens of milliseconds, so they never run on the main thread.
+    @ObservationIgnored private let sampler = DispatchQueue(label: "tessera.vitals", qos: .utility)
+    @ObservationIgnored private var sampling = false
+    @ObservationIgnored private var hostsCache: (modified: Date?, hosts: [String])?
     @ObservationIgnored private var inFlight: Set<String> = []
     @ObservationIgnored private var lastCPU: [String: RemoteVitals.CPUSample] = [:]
     @ObservationIgnored private var tick = 0
@@ -35,6 +39,7 @@ public final class MachineMonitor {
         let t = Timer(timeInterval: 2, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.poll() }
         }
+        t.tolerance = 0.3
         RunLoop.main.add(t, forMode: .common)
         timer = t
     }
@@ -59,11 +64,14 @@ public final class MachineMonitor {
 
     public func config(_ id: String) -> MachineConfig? { remotes.first { $0.id == id } }
 
-    /// Named hosts from ~/.ssh/config, offered for one-click adding.
-    public nonisolated static func suggestedHosts() -> [String] {
+    /// Named hosts from ~/.ssh/config, offered for one-click adding; re-read only when the file changes.
+    public func suggestedHosts() -> [String] {
         let path = NSHomeDirectory() + "/.ssh/config"
-        guard let text = try? String(contentsOfFile: path, encoding: .utf8) else { return [] }
-        return RemoteVitals.configuredHosts(in: text)
+        let modified = FileStat(path)?.modified
+        if let hostsCache, hostsCache.modified == modified { return hostsCache.hosts }
+        let hosts = (try? String(contentsOfFile: path, encoding: .utf8)).map(RemoteVitals.configuredHosts) ?? []
+        hostsCache = (modified, hosts)
+        return hosts
     }
 
     private func save() {
@@ -72,26 +80,45 @@ public final class MachineMonitor {
 
     private func poll() {
         tick += 1
-        let sample = local.sample()
-        if var v = vitals[Self.localId] {
-            v.status = .ok
-            v.record(cpu: sample.cpu, gpu: sample.gpu)
-            v.memory = sample.memory
-            v.memoryTotalGB = sample.memoryTotalGB
-            v.temperature = sample.temperature
-            v.cores = ProcessInfo.processInfo.activeProcessorCount
-            v.gpuName = "Apple GPU"
-            vitals[Self.localId] = v
+        if !sampling {
+            sampling = true
+            let local = self.local
+            // The die temperature is the costliest read and moves slowly: every 10 s is plenty.
+            let withTemperature = tick % 5 == 1
+            sampler.async {
+                let sample = local.sample(temperature: withTemperature)
+                DispatchQueue.main.async { MainActor.assumeIsolated { self.apply(sample) } }
+            }
         }
         // Remotes every other tick (4 s): cheap for the hosts, fresh enough for a glance.
         if tick % 2 == 1 { for r in remotes { pollRemote(r) } }
     }
 
+    private func apply(_ sample: LocalSampler.Sample) {
+        sampling = false
+        guard var v = vitals[Self.localId] else { return }
+        v.status = .ok
+        v.cpu = sample.cpu
+        v.gpu = sample.gpu
+        v.memory = sample.memory
+        v.memoryTotalGB = sample.memoryTotalGB
+        if let t = sample.temperature { v.temperature = t }
+        v.cores = ProcessInfo.processInfo.activeProcessorCount
+        v.gpuName = "Apple GPU"
+        publish(v)
+    }
+
+    /// Stores a reading only when it would look different, so an unchanged poll re-renders nothing.
+    private func publish(_ reading: MachineVitals) {
+        var v = reading
+        v.quantize()
+        if vitals[v.id] != v { vitals[v.id] = v }
+    }
+
     private func pollRemote(_ config: MachineConfig) {
         guard let host = config.sshHost, !inFlight.contains(config.id) else { return }
         inFlight.insert(config.id)
-        DispatchQueue.global(qos: .utility).async {
-            let result = SSHProbe.run(host: host, command: RemoteVitals.script)
+        SSHProbe.run(host: host, command: RemoteVitals.script) { result in
             DispatchQueue.main.async {
                 MainActor.assumeIsolated { self.apply(result, to: config) }
             }
@@ -106,7 +133,8 @@ public final class MachineMonitor {
             let r = RemoteVitals.parse(output)
             v.status = .ok
             v.message = nil
-            v.record(cpu: r.cpuSample?.utilization(since: lastCPU[config.id]), gpu: r.gpu)
+            v.cpu = r.cpuSample?.utilization(since: lastCPU[config.id])
+            v.gpu = r.gpu
             if let sample = r.cpuSample { lastCPU[config.id] = sample }
             v.memory = r.memory
             v.memoryTotalGB = r.memoryTotalGB
@@ -121,7 +149,7 @@ public final class MachineMonitor {
             v.message = failure.message
             lastCPU[config.id] = nil
         }
-        vitals[config.id] = v
+        publish(v)
     }
 }
 
@@ -130,8 +158,11 @@ public final class MachineMonitor {
 enum SSHProbe {
     struct Failure: Error { let message: String }
 
-    static func run(host: String, command: String, timeout: TimeInterval = 8) -> Result<String, Failure> {
-        guard MachineConfig.isValidHost(host) else { return .failure(Failure(message: "Invalid host")) }
+    /// Calls `done` (on a background queue) once ssh exits. Nothing waits in the meantime, so a slow or
+    /// unreachable host holds up neither a thread nor the other hosts.
+    static func run(host: String, command: String, timeout: TimeInterval = 8,
+                    done: @escaping @Sendable (Result<String, Failure>) -> Void) {
+        guard MachineConfig.isValidHost(host) else { return done(.failure(Failure(message: "Invalid host"))) }
         let p = Process()
         p.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
         p.arguments = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=5", "-o", "ServerAliveInterval=10",
@@ -141,23 +172,23 @@ enum SSHProbe {
         p.standardOutput = out
         p.standardError = err
         p.standardInput = FileHandle.nullDevice
-        do { try p.run() } catch { return .failure(Failure(message: error.localizedDescription)) }
-        let killer = DispatchWorkItem { if p.isRunning { p.terminate() } }
-        DispatchQueue.global().asyncAfter(deadline: .now() + timeout, execute: killer)
-        let data = out.fileHandleForReading.readDataToEndOfFile()
-        let errData = err.fileHandleForReading.readDataToEndOfFile()
-        p.waitUntilExit()
-        killer.cancel()
-        guard p.terminationStatus == 0 else {
-            let msg = String(decoding: errData, as: UTF8.self).split(separator: "\n").last.map(String.init) ?? "ssh exited \(p.terminationStatus)"
-            return .failure(Failure(message: msg.preview(90)))
+        p.terminationHandler = { p in
+            // The reply is a few short lines, well within a pipe's buffer, so it's all there once ssh exits.
+            let data = out.fileHandleForReading.readDataToEndOfFile()
+            let errData = err.fileHandleForReading.readDataToEndOfFile()
+            guard p.terminationStatus == 0 else {
+                let msg = String(decoding: errData, as: UTF8.self).split(separator: "\n").last.map(String.init) ?? "ssh exited \(p.terminationStatus)"
+                return done(.failure(Failure(message: msg.preview(90))))
+            }
+            done(.success(String(decoding: data, as: UTF8.self)))
         }
-        return .success(String(decoding: data, as: UTF8.self))
+        do { try p.run() } catch { return done(.failure(Failure(message: error.localizedDescription))) }
+        DispatchQueue.global().asyncAfter(deadline: .now() + timeout) { if p.isRunning { p.terminate() } }
     }
 }
 
-/// This Mac's CPU, GPU, memory and hottest SoC die temperature.
-final class LocalSampler {
+/// This Mac's CPU, GPU, memory and hottest SoC die temperature. Use from one queue at a time.
+final class LocalSampler: @unchecked Sendable {
     struct Sample {
         var cpu: Double?
         var gpu: Double?
@@ -167,12 +198,13 @@ final class LocalSampler {
     }
 
     private var previous: host_cpu_load_info?
-    private let thermal = ThermalSensors()
+    /// Opening the HID sensors takes several ms; done on first use, on the sampling queue.
+    private lazy var thermal = ThermalSensors()
 
-    func sample() -> Sample {
+    func sample(temperature: Bool = true) -> Sample {
         let total = Double(ProcessInfo.processInfo.physicalMemory)
         return Sample(cpu: cpu(), gpu: Self.gpuUtilization(), memory: memory(total: total),
-                      memoryTotalGB: total / 1_073_741_824, temperature: thermal.hottestDie())
+                      memoryTotalGB: total / 1_073_741_824, temperature: temperature ? thermal.hottestDie() : nil)
     }
 
     private func cpu() -> Double? {

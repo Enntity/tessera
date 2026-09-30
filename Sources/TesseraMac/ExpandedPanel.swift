@@ -71,7 +71,7 @@ struct PanelContent: View {
                     if let session = workspace.terminals[id] {
                         ReparentHost(view: session.view, focus: true)
                             .overlay {
-                                // Same minimap look as the tiles; the live terminal underneath keeps the keyboard.
+                                // Same word blocks as the tiles; the live terminal underneath keeps the keyboard.
                                 if model.privacyMode {
                                     TerminalTileContent(session: session).allowsHitTesting(false)
                                 }
@@ -172,7 +172,7 @@ struct AgentPanel: View {
 
     var body: some View {
         let workspace = model.workspace
-        let session = workspace.agents.sessions[id]
+        let session = workspace.agents.session(id)
         let isDsh = session?.flavor == .dsh
         let livePage = isDsh && workspace.dsh.state == .running ? workspace.dshPage : nil
         VStack(spacing: 0) {

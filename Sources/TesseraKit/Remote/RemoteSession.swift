@@ -51,10 +51,9 @@ public final class RemoteSession {
     public private(set) var usage: [UsageReading] = []
     public private(set) var launchers: [LaunchPreset] = []
     public private(set) var notice: String?
-    /// Terminal mirrors, fed by snapshots and live data for watched tiles.
-    @ObservationIgnored public private(set) var mirrors: [String: TerminalMirror] = [:]
-    /// Per-terminal redraw counters, observed by views.
-    public private(set) var revisions: [String: Int] = [:]
+    /// Terminal mirrors, fed by snapshots and live data for watched tiles. This changes only when a
+    /// mirror comes or goes; each mirror's own revision drives its redraws.
+    public private(set) var mirrors: [String: TerminalMirror] = [:]
 
     @ObservationIgnored private var connection: NWConnection?
     @ObservationIgnored private var code = ""
@@ -69,7 +68,7 @@ public final class RemoteSession {
     }
 
     public var attentionTiles: [TileInfo] {
-        tiles.filter { $0.attention || $0.activity == .needsInput }
+        tiles.filter(\.needsUser)
             .sorted { $0.lastActivityAt < $1.lastActivityAt }
     }
 
@@ -218,14 +217,10 @@ public final class RemoteSession {
         case .tile(let info):
             if let i = tiles.firstIndex(where: { $0.id == info.id }) { tiles[i] = info }
         case .terminalSnapshot(let f):
-            let mirror = mirrors[f.id] ?? TerminalMirror(cols: f.cols, rows: f.rows)
-            mirrors[f.id] = mirror
-            mirror.reset(cols: f.cols, rows: f.rows, bytes: [UInt8](f.bytes))
-            revisions[f.id, default: 0] += 1
+            if mirrors[f.id] == nil { mirrors[f.id] = TerminalMirror(cols: f.cols, rows: f.rows) }
+            mirrors[f.id]?.reset(cols: f.cols, rows: f.rows, bytes: [UInt8](f.bytes))
         case .terminalData(let f):
-            guard let mirror = mirrors[f.id] else { return }
-            mirror.feed([UInt8](f.bytes), cols: f.cols, rows: f.rows)
-            revisions[f.id, default: 0] += 1
+            mirrors[f.id]?.feed([UInt8](f.bytes), cols: f.cols, rows: f.rows)
         case .conversation(let c):
             conversations[c.id] = c.snapshot
         case .usage(let readings):
