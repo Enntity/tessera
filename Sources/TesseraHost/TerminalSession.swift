@@ -328,7 +328,10 @@ public final class TerminalSession: NSObject {
     /// Starts the clock after anything that changes the screen, until it settles again.
     private func wake() {
         guard clock == nil else { return }
-        let clock = Timer(timeInterval: 0.1, repeats: true) { [weak self] timer in
+        // Every terminal's clock ticks on one shared 0.1 s grid, so busy terminals redraw together
+        // in one pass instead of each on its own.
+        let next = (Date.timeIntervalSinceReferenceDate / 0.1).rounded(.up) * 0.1
+        let clock = Timer(fire: Date(timeIntervalSinceReferenceDate: next), interval: 0.1, repeats: true) { [weak self] timer in
             MainActor.assumeIsolated {
                 guard let self else { return timer.invalidate() }
                 self.tick(now: Date())
