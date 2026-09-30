@@ -209,6 +209,23 @@ final class TranscriptParserTests: XCTestCase {
         XCTAssertEqual(s.items.last?.text, "Fixed.")
     }
 
+    func testRunningToolSnapshotsHoldStillBetweenScans() {
+        let now = ISO8601DateFormatter().date(from: "2026-09-28T10:00:10Z")!
+        var claude = ClaudeTranscriptParser()
+        claude.ingest(text: """
+        {"type":"assistant","uuid":"a1","timestamp":"2026-09-28T10:00:05.000Z","message":{"stop_reason":"tool_use","content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"make"}}]}}
+        """)
+        XCTAssertEqual(claude.snapshot(now: now).detail, "Running Bash")
+        XCTAssertEqual(claude.snapshot(now: now), claude.snapshot(now: now.addingTimeInterval(7)))
+        var codex = CodexTranscriptParser()
+        codex.ingest(text: """
+        {"timestamp":"2026-09-28T10:00:01.000Z","type":"event_msg","payload":{"type":"task_started","turn_id":"t"}}
+        {"timestamp":"2026-09-28T10:00:02.000Z","type":"response_item","payload":{"type":"function_call","name":"exec_command","arguments":"{}","call_id":"c1"}}
+        """)
+        XCTAssertEqual(codex.snapshot(now: now).detail, "Running exec_command")
+        XCTAssertEqual(codex.snapshot(now: now), codex.snapshot(now: now.addingTimeInterval(7)))
+    }
+
     func testClaudeStalledEditIsNeedsInput() {
         var p = ClaudeTranscriptParser()
         p.ingest(text: """

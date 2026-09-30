@@ -28,6 +28,8 @@ public final class AgentAppWatcher {
     public private(set) var codexRateLimits: CodexRateLimits?
     /// Sessions idle longer than this drop off the board.
     public var lookback: TimeInterval = 36 * 3600
+    /// Called after a scan that changed anything.
+    @ObservationIgnored public var onChange: (() -> Void)?
 
     @ObservationIgnored private let scanner = TranscriptScanner()
     @ObservationIgnored private var timer: Timer?
@@ -40,6 +42,7 @@ public final class AgentAppWatcher {
         timer = Timer.scheduledTimer(withTimeInterval: 1.5, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.scan() }
         }
+        timer?.tolerance = 0.3
     }
 
     public func stop() {
@@ -59,8 +62,16 @@ public final class AgentAppWatcher {
                     guard let self else { return }
                     self.scanning = false
                     // Reassigning unchanged data would re-render the whole board every scan.
-                    if self.sessions != result.sessions { self.sessions = result.sessions }
-                    if let limits = result.rateLimits, limits != self.codexRateLimits { self.codexRateLimits = limits }
+                    var changed = false
+                    if self.sessions != result.sessions {
+                        self.sessions = result.sessions
+                        changed = true
+                    }
+                    if let limits = result.rateLimits, limits != self.codexRateLimits {
+                        self.codexRateLimits = limits
+                        changed = true
+                    }
+                    if changed { self.onChange?() }
                 }
             }
         }

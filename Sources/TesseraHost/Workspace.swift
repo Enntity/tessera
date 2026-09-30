@@ -36,13 +36,8 @@ public final class Workspace {
     public var resumeOnLaunch = true
     public var defaultDirectory: String = NSHomeDirectory()
 
-    /// Emits whenever tile membership, order, or any tile's metadata changes (for remote clients).
-    @ObservationIgnored public var onTilesChanged: (() -> Void)?
-
     @ObservationIgnored private var agentAcknowledged: [String: Date] = [:]
     @ObservationIgnored private var hiddenAgents: [String: Date] = [:]
-    @ObservationIgnored private var clock: Timer?
-    @ObservationIgnored private var lastPublished: [TileInfo] = []
     @ObservationIgnored private var firstAgentScan = true
     @ObservationIgnored private let directory: URL
 
@@ -60,6 +55,7 @@ public final class Workspace {
 
     public func start() {
         restore()
+        agents.onChange = { [weak self] in self?.agentsChanged() }
         agents.start()
         usage.start()
         machines.start()
@@ -67,12 +63,11 @@ public final class Workspace {
             let found = LaunchCatalog.detectInstalled()
             DispatchQueue.main.async { MainActor.assumeIsolated { self.presets = found } }
         }
-        // Common mode keeps tiles live while a menu is open or the window is being resized.
-        let clock = Timer(timeInterval: 0.1, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated { self?.tick() }
+        let binder = Timer(timeInterval: 5, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.bindAgentSessions() }
         }
-        RunLoop.main.add(clock, forMode: .common)
-        self.clock = clock
+        binder.tolerance = 1
+        RunLoop.main.add(binder, forMode: .common)
         if order.isEmpty { launch(command: nil) }
     }
 
@@ -398,29 +393,16 @@ public final class Workspace {
             added.append(a)
         }
         openPendingAppConversation(newlyAdded: added)
-        let before = order.count
-        order.removeAll { id in id.contains(":") && live[id] == nil && terminals[id] == nil && browsers[id] == nil }
-        if order.count != before, let e = expandedId, !order.contains(e) { expandedId = nil }
+        // Write only a real change: even an empty removal would re-render everything reading `order`.
+        let kept = order.filter { id in !(id.contains(":") && live[id] == nil && terminals[id] == nil && browsers[id] == nil) }
+        guard kept.count != order.count else { return }
+        order = kept
+        if let e = expandedId, !order.contains(e) { expandedId = nil }
     }
 
-    // MARK: Clock
-
-    private var tickCount = 0
-
-    private func tick() {
-        tickCount &+= 1
-        let now = Date()
-        for t in terminals.values { t.tick(now: now) }
-        if tickCount % 50 == 0 { bindAgentSessions(now: now) }
-        if tickCount % 5 == 0 {
-            syncAgents()
-            if usage.codexRateLimits != agents.codexRateLimits { usage.codexRateLimits = agents.codexRateLimits }
-            let tiles = allTiles
-            if tiles != lastPublished {
-                lastPublished = tiles
-                onTilesChanged?()
-            }
-        }
+    private func agentsChanged() {
+        syncAgents()
+        if usage.codexRateLimits != agents.codexRateLimits { usage.codexRateLimits = agents.codexRateLimits }
     }
 
     private func adopt(_ session: TerminalSession) {
@@ -441,7 +423,7 @@ public final class Workspace {
 
     /// Agents whose conversation id isn't known yet (Codex, or anything typed into a shell or started
     /// through a launcher) are matched to the session file their tool writes.
-    private func bindAgentSessions(now: Date) {
+    private func bindAgentSessions() {
         guard !binding else { return }
         // Keep looking for as long as the agent runs: a conversation may start long after launch.
         let waiting = terminals.values.filter { $0.isRunning && !$0.isSuspended && $0.sessionId == nil }

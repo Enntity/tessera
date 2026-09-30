@@ -152,6 +152,20 @@ final class TerminalSessionTests: XCTestCase {
         XCTAssertEqual(line, "HIST=\(home.url.path)/.zsh_history")
     }
 
+    /// A terminal with nothing happening costs nothing: its clock stops once the screen settles,
+    /// and output starts it again.
+    func testClockRunsOnlyWhileTheScreenChanges() throws {
+        let home = try isolatedHome()
+        let session = TerminalSession(command: nil, cwd: NSTemporaryDirectory(), shell: "/bin/zsh", environmentOverrides: home.env)
+        defer { session.terminate() }
+        XCTAssertTrue(waitUntil(20) { session.terminal.screenTail(40).contains { !$0.isEmpty } })
+        XCTAssertTrue(waitUntil(10) { session.clock == nil })
+        session.send(Array("echo tessera-tick\r".utf8))
+        XCTAssertTrue(waitUntil(5) { session.clock != nil })
+        XCTAssertTrue(waitUntil(10) { session.clock == nil })
+        XCTAssertTrue(session.terminal.screenTail(40).contains("tessera-tick"))
+    }
+
     /// An unbound `resume --last` that may not continue the latest starts clean, not with `--last`.
     func testUnboundContinueStartsFresh() {
         let session = TerminalSession(command: "codex-work resume --last", cwd: NSTemporaryDirectory(), resuming: true,

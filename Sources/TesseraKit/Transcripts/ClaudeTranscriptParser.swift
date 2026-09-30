@@ -161,8 +161,9 @@ public struct ClaudeTranscriptParser: TranscriptParser {
                 activity = .needsInput
                 detail = "Waiting to approve \(name)"
             } else {
+                // No elapsed time here: a detail that changed every second would make every scan a change.
                 activity = .working
-                detail = "Running \(name) · \(Self.format(age))"
+                detail = "Running \(name)"
             }
         } else if turnOpen {
             let stale = lastEventAt.map { now.timeIntervalSince($0) > 600 } ?? true
@@ -181,10 +182,5 @@ public struct ClaudeTranscriptParser: TranscriptParser {
         }
         return ConversationSnapshot(items: items, activity: activity, detail: detail, model: model,
                                     lastEventAt: lastEventAt, contextTokens: contextTokens)
-    }
-
-    static func format(_ seconds: TimeInterval) -> String {
-        let s = max(0, Int(seconds))
-        return s < 60 ? "\(s)s" : "\(s / 60)m \(s % 60)s"
     }
 }

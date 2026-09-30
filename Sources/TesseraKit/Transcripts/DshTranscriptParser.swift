@@ -101,7 +101,7 @@ public struct DshTranscriptParser: TranscriptParser {
             let stale = lastEventAt.map { now.timeIntervalSince($0) > 900 } ?? true
             activity = stale ? .idle : .working
             if let tool = pendingTools.values.min(by: { $0.at < $1.at }) {
-                detail = "Running \(tool.name) · \(ClaudeTranscriptParser.format(now.timeIntervalSince(tool.at)))"
+                detail = "Running \(tool.name)"
             }
         } else if let end = lastTurnEnd {
             activity = end == "completed" ? .done : .idle

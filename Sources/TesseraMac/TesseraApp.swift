@@ -77,12 +77,9 @@ final class AppModel {
         if Bundle.main.bundleIdentifier != nil {
             notifier = AttentionNotifier { [weak self] id in self?.open(id) }
         }
-        Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated {
-                guard let self else { return }
-                self.updateDockBadge()
-                self.notifier?.update(with: self.workspace.allTiles)
-            }
+        // The Dock badge and alerts follow the board as it changes.
+        observe({ [weak self] in self?.workspace.allTiles ?? [] }) { [weak self] tiles in
+            self?.attentionChanged(tiles)
         }
         #if DEBUG
         if let actions = ProcessInfo.processInfo.environment["TESSERA_DEBUG_ACTIONS"] {
@@ -172,9 +169,11 @@ final class AppModel {
         on ? server.start() : server.stop()
     }
 
-    private func updateDockBadge() {
-        let waiting = workspace.counts.needsInput
-        NSApp.dockTile.badgeLabel = waiting > 0 ? "\(waiting)" : nil
+    private func attentionChanged(_ tiles: [TileInfo]) {
+        let waiting = tiles.filter { $0.activity == .needsInput }.count
+        let badge = waiting > 0 ? "\(waiting)" : nil
+        if NSApp.dockTile.badgeLabel != badge { NSApp.dockTile.badgeLabel = badge }
+        notifier?.update(with: tiles)
     }
 
     /// Converts a window-space rect (top-left origin) to AppKit screen coordinates.
