@@ -86,10 +86,9 @@ public final class Workspace {
         return nil
     }
 
-    /// Whether `id` is on the board; unlike `info`, this doesn't read (or observe) the tile's data.
-    public func exists(_ id: String) -> Bool {
-        terminals[id] != nil || browsers[id] != nil || agents.sessions[id] != nil
-    }
+    /// Whether `id` is on the board (a closed app session is still known, but not on it). Unlike
+    /// `info`, this doesn't read (or observe) the tile's data.
+    public func exists(_ id: String) -> Bool { order.contains(id) }
 
     public var allTiles: [TileInfo] { order.compactMap(info) }
 
