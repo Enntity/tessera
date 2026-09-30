@@ -52,6 +52,15 @@ public struct GridLayout: Equatable, Sendable {
                        y: CGFloat(row) * (tileSize.height + spacing))
     }
 
+    /// The middle, across `width`, of the column nearest the middle of the grid (of two as near, the
+    /// left one). What is laid over the last row there sits between a footer's two ends, where
+    /// nothing is written, rather than across the ends of two.
+    public func middleColumnCenter(in width: CGFloat) -> CGFloat {
+        guard tileSize.width > 0 else { return width / 2 }
+        let x = origin(of: (max(columns, 1) - 1) / 2, in: CGSize(width: width, height: 0)).x
+        return x + tileSize.width / 2
+    }
+
     public var contentHeight: CGFloat {
         CGFloat(rows) * tileSize.height + CGFloat(max(rows - 1, 0)) * spacing
     }

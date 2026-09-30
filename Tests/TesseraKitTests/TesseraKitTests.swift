@@ -50,6 +50,22 @@ final class GridLayoutTests: XCTestCase {
 }
 
 /// The open panel on its way out of its tile and back into it.
+final class GridOverlayTests: XCTestCase {
+    /// A toast over the last row sits in the middle of a tile, not across the gutter between two.
+    func testTheMiddleColumnIsWhereAToastSits() {
+        func grid(_ columns: Int) -> GridLayout {
+            GridLayout(columns: columns, rows: 2, tileSize: CGSize(width: 200, height: 120), spacing: 10, scrolls: false)
+        }
+        XCTAssertEqual(grid(3).middleColumnCenter(in: 620), 310)
+        XCTAssertEqual(grid(1).middleColumnCenter(in: 200), 100)
+        // Of two columns as near the middle, the left one; the grid is centred in a wider view.
+        XCTAssertEqual(grid(2).middleColumnCenter(in: 410), 100)
+        XCTAssertEqual(grid(4).middleColumnCenter(in: 1030), 100 + 210 + 100)
+        // Nothing on the board: the middle of the view.
+        XCTAssertEqual(GridLayout.fit(count: 0, in: CGSize(width: 800, height: 600)).middleColumnCenter(in: 800), 400)
+    }
+}
+
 final class PanelZoomTests: XCTestCase {
     let tile = CGRect(x: 600, y: 300, width: 260, height: 170)
     let open = CGRect(x: 100, y: 12, width: 1300, height: 850)

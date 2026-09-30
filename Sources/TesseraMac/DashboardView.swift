@@ -26,11 +26,9 @@ struct DashboardView: View {
                             TabStrip()
                             BoardView()
                         }
-                        // Over the board's own bottom edge, in the margin under the last row.
                         .overlay(alignment: .bottom) {
                             if let toast = model.closedToast {
                                 UndoToast(toast: toast)
-                                    .padding(.bottom, Style.Space.s)
                                     .transition(.move(edge: .bottom).combined(with: .opacity))
                             }
                         }
@@ -65,7 +63,8 @@ struct DashboardView: View {
 }
 
 /// After a close: what was closed and the way back, for a few seconds. (Undo stays on the Edit
-/// menu.)
+/// menu.) It sits at the bottom of the board, over the last row's footers where they are blank:
+/// level with them, in the middle of a tile.
 struct UndoToast: View {
     @Environment(AppModel.self) private var model
     let toast: ClosedToast
@@ -85,6 +84,8 @@ struct UndoToast: View {
         .padding(.horizontal, Style.Space.l)
         .frame(height: Style.Metrics.control)
         .overlaySurface(Capsule())
+        .offset(x: model.toastOffset)
+        .padding(.bottom, Style.Space.m)
         .task(id: toast) {
             try? await Task.sleep(for: .seconds(8))
             if !Task.isCancelled { model.dismiss(toast) }

@@ -480,6 +480,12 @@ final class AppModel {
                       width: layout.tileSize.width, height: layout.tileSize.height)
     }
 
+    /// How far from the board's middle the Undo toast sits, to be over the middle of a tile.
+    var toastOffset: CGFloat {
+        guard let width = boardFrame?.width else { return 0 }
+        return grid(count: workspace.visibleIds.count, in: boardFrame?.size ?? .zero).middleColumnCenter(in: width) - width / 2
+    }
+
     /// Where a tile opened from `source` settles (window coordinates, top-left origin).
     func openedRect(from source: CGRect?) -> CGRect? {
         boardFrame.map { ExpandedPanel.target(from: source, board: $0) }
