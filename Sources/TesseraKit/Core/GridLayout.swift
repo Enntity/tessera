@@ -69,3 +69,40 @@ public struct GridLayout: Equatable, Sendable {
         return CGRect(x: x, y: y, width: w, height: h)
     }
 }
+
+/// A step of the selection across the grid.
+public enum GridMove: Sendable {
+    case left, right, up, down
+    /// Through every tile in order, round and round (⌘[ ⌘]).
+    case previous, next
+}
+
+public extension GridLayout {
+    /// The tile a move from `index` lands on among `count` tiles, or nil when there is nowhere to go.
+    /// Arrows stop at the edges; ↓ above a short last row lands on its last tile. With nothing
+    /// selected, a move starts at the first tile (`previous`: the last).
+    func index(moving move: GridMove, from index: Int?, count: Int) -> Int? {
+        guard count > 0 else { return nil }
+        guard let index, index < count else { return move == .previous ? count - 1 : 0 }
+        let cols = max(columns, 1)
+        let target: Int
+        switch move {
+        case .left: target = index - 1
+        case .right: target = index + 1
+        case .up: target = index - cols
+        case .down: target = index / cols < (count - 1) / cols ? min(index + cols, count - 1) : count
+        case .previous: target = (index + count - 1) % count
+        case .next: target = (index + 1) % count
+        }
+        return (0..<count).contains(target) && target != index ? target : nil
+    }
+
+    /// How far a view `height` tall must be scrolled to show all of tile `index`: `current` when it
+    /// already does, otherwise the nearest offset that does.
+    func scrollOffset(showing index: Int, height: CGFloat, current: CGFloat) -> CGFloat {
+        guard scrolls else { return 0 }
+        let top = CGFloat(index / max(columns, 1)) * (tileSize.height + spacing)
+        let offset = min(top, max(current, top + tileSize.height - height))
+        return min(max(offset, 0), max(contentHeight - height, 0))
+    }
+}

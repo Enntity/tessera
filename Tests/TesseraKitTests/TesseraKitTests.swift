@@ -51,6 +51,63 @@ final class GridLayoutTests: XCTestCase {
     }
 }
 
+/// Arrow keys on the board: the real columns, no wrap-around, and the view follows.
+final class GridNavigationTests: XCTestCase {
+    // Seven tiles in three columns:  0 1 2 / 3 4 5 / 6
+    let grid = GridLayout(columns: 3, rows: 3, tileSize: CGSize(width: 100, height: 60), spacing: 10, scrolls: true)
+
+    private func move(_ move: GridMove, from index: Int?) -> Int? { grid.index(moving: move, from: index, count: 7) }
+
+    func testArrowsFollowTheColumnsAndStopAtTheEdges() {
+        XCTAssertEqual(move(.down, from: 1), 4)
+        XCTAssertEqual(move(.up, from: 4), 1)
+        XCTAssertEqual(move(.right, from: 2), 3)
+        XCTAssertEqual(move(.left, from: 3), 2)
+        // No wrap-around: the edges hold.
+        XCTAssertNil(move(.up, from: 1))
+        XCTAssertNil(move(.down, from: 6))
+        XCTAssertNil(move(.left, from: 0))
+        XCTAssertNil(move(.right, from: 6))
+    }
+
+    func testDownAboveAShortLastRowLandsOnItsLastTile() {
+        XCTAssertEqual(move(.down, from: 3), 6)
+        XCTAssertEqual(move(.down, from: 5), 6)
+        // One column: two stacked tiles are one step apart.
+        let stacked = GridLayout(columns: 1, rows: 2, tileSize: .zero, spacing: 10, scrolls: false)
+        XCTAssertEqual(stacked.index(moving: .down, from: 0, count: 2), 1)
+        XCTAssertNil(stacked.index(moving: .down, from: 1, count: 2))
+    }
+
+    func testPreviousAndNextGoRoundEveryTile() {
+        XCTAssertEqual(move(.next, from: 6), 0)
+        XCTAssertEqual(move(.previous, from: 0), 6)
+        XCTAssertEqual(move(.next, from: 2), 3)
+    }
+
+    func testWithNothingSelectedAMoveStartsAtAnEnd() {
+        XCTAssertEqual(move(.right, from: nil), 0)
+        XCTAssertEqual(move(.down, from: nil), 0)
+        XCTAssertEqual(move(.next, from: nil), 0)
+        XCTAssertEqual(move(.previous, from: nil), 6)
+        XCTAssertNil(grid.index(moving: .next, from: nil, count: 0))
+        // A selection that is no longer there counts as none.
+        XCTAssertEqual(move(.left, from: 9), 0)
+    }
+
+    func testScrollFollowsOnlyAsFarAsNeeded() {
+        // Rows at 0, 70 and 140; 200 of content in a 100-tall view.
+        XCTAssertEqual(grid.scrollOffset(showing: 0, height: 100, current: 0), 0)
+        XCTAssertEqual(grid.scrollOffset(showing: 4, height: 100, current: 0), 30)
+        XCTAssertEqual(grid.scrollOffset(showing: 6, height: 100, current: 0), 100)
+        XCTAssertEqual(grid.scrollOffset(showing: 1, height: 100, current: 100), 0)
+        // Already in view: nothing moves.
+        XCTAssertEqual(grid.scrollOffset(showing: 4, height: 100, current: 50), 50)
+        let fits = GridLayout.fit(count: 4, in: CGSize(width: 1000, height: 1000))
+        XCTAssertEqual(fits.scrollOffset(showing: 3, height: 1000, current: 0), 0)
+    }
+}
+
 final class TerminalActivityTrackerTests: XCTestCase {
     let t0 = Date(timeIntervalSince1970: 1_000_000)
 
