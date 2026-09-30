@@ -81,32 +81,42 @@ struct PanelContent: View {
                 PanelHeader(info: info)
                 LiveContent(info: info)
                 KeyHints(hints: KeyHint.panel(info, suspended: workspace.isSuspended(id),
-                                              app: workspace.opensInApp(id) ? info.flavor.displayName : nil, live: info.flavor == .dsh))
+                                              app: workspace.opensInApp(id) ? info.flavor.displayName : nil, live: info.flavor == .dsh),
+                         // Why a page didn't load (a terminal that failed says so over its screen).
+                         failure: info.kind == .browser && info.activity == .failed ? info.detail : nil)
             }
         }
     }
 }
 
-/// What the keyboard does here, along the bottom of the open panel: as many of the hints as fit.
+/// What the keyboard does here, along the bottom of the open panel: as many of the hints as fit,
+/// after what went wrong, when something did.
 struct KeyHints: View {
     let hints: [KeyHint]
+    var failure: String?
 
     var body: some View {
-        ViewThatFits(in: .horizontal) {
-            ForEach((1...max(hints.count, 1)).reversed(), id: \.self) { count in
-                HStack(spacing: Style.Space.xl) {
-                    ForEach(hints.prefix(count)) { hint in
-                        HStack(spacing: Style.Space.xs) {
-                            Text(hint.keys).foregroundStyle(Style.dim)
-                            Text(hint.label).foregroundStyle(Style.muted)
+        HStack(spacing: Style.Space.xl) {
+            ViewThatFits(in: .horizontal) {
+                ForEach((1...max(hints.count, 1)).reversed(), id: \.self) { count in
+                    HStack(spacing: Style.Space.xl) {
+                        ForEach(hints.prefix(count)) { hint in
+                            HStack(spacing: Style.Space.xs) {
+                                Text(hint.keys).foregroundStyle(Style.dim)
+                                Text(hint.label).foregroundStyle(Style.muted)
+                            }
                         }
                     }
+                    .fixedSize()
                 }
-                .fixedSize()
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            if let failure {
+                Text(failure).foregroundStyle(Style.coral).lineLimit(1).truncationMode(.tail).layoutPriority(1)
+                    .help(failure)
             }
         }
         .font(Style.caption)
-        .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, Style.Space.l)
         .frame(height: Style.Metrics.hints)
         .overlay(alignment: .top) { Hairline() }

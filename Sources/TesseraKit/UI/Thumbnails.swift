@@ -106,7 +106,7 @@ public struct ConversationThumbnail: View {
         case .tool, .toolResult:
             HStack(spacing: 4 * fontScale) {
                 Image(systemName: item.isError ? "exclamationmark.triangle.fill" : "chevron.right.2")
-                    .font(.system(size: 7 * fontScale, weight: .bold))
+                    .font(Style.ui(7 * fontScale, .bold))
                     .foregroundStyle(item.isError ? Style.coral : Style.muted)
                 Text(item.toolName ?? "tool")
                     .font(Style.mono(9.6 * fontScale, .semibold))
