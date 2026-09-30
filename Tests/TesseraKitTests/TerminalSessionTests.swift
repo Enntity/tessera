@@ -166,6 +166,19 @@ final class TerminalSessionTests: XCTestCase {
         XCTAssertTrue(session.terminal.screenTail(40).contains("tessera-tick"))
     }
 
+    /// A terminal that keeps working keeps its age current, a few seconds at a time, even when
+    /// nothing else about the tile changes.
+    func testWorkingTerminalKeepsItsAgeCurrent() throws {
+        let home = try isolatedHome()
+        let session = TerminalSession(command: "while :; do echo tick; sleep 0.3; done", cwd: NSTemporaryDirectory(),
+                                      shell: "/bin/zsh", environmentOverrides: home.env)
+        defer { session.terminate() }
+        XCTAssertTrue(waitUntil(20) { session.info.activity == .working })
+        let since = session.info.lastActivityAt
+        XCTAssertTrue(waitUntil(8) { session.info.lastActivityAt.timeIntervalSince(since) > 3 })
+        XCTAssertEqual(session.info.activity, .working)
+    }
+
     /// An unbound `resume --last` that may not continue the latest starts clean, not with `--last`.
     func testUnboundContinueStartsFresh() {
         let session = TerminalSession(command: "codex-work resume --last", cwd: NSTemporaryDirectory(), resuming: true,

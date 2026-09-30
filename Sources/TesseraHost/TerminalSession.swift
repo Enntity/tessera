@@ -322,7 +322,8 @@ public final class TerminalSession: NSObject {
         guard now >= nextScanAt else { return }
         nextScanAt = now.addingTimeInterval(0.25)
         settledScanDone = quiet > 4
-        if tracker.tick(now: now, screenTail: terminal.screenTail(24)) { refreshInfo() }
+        // Working, it refreshes on every scan so its age keeps up (refreshInfo moves it every few seconds).
+        if tracker.tick(now: now, screenTail: terminal.screenTail(24)) || tracker.activity == .working { refreshInfo() }
     }
 
     /// Starts the clock after anything that changes the screen, until it settles again.
