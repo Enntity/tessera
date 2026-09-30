@@ -78,7 +78,7 @@ extension AppModel {
                 if let event = debugKeyEvent(.keyDown, ["return": "\r", "tab": "\t"][key] ?? key, code: 0, flags: flags) {
                     NSApp.mainMenu?.performKeyEquivalent(with: event)
                 }
-            case "undo": window?.firstResponder?.tryToPerform(Selector(("undo:")), with: nil)
+            case "undo": undo(key: window) // Edit ▸ Undo as if the board's window were key
             case "run": BoardCommand(rawValue: arg).map(run)
             case "filter":
                 onBoard { $0.filter = arg == "attention" ? .attention : $0.groups.list.first { $0.name == arg }.map { .group($0.id) } ?? .all }

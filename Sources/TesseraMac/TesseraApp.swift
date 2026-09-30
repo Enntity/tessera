@@ -64,7 +64,8 @@ final class AppModel {
     private(set) var addressFocus = 0
     /// The last close, while its toast offers to undo it.
     private(set) var closedToast: ClosedToast?
-    @ObservationIgnored private var undoMarks: [UndoMark] = []
+    /// The closes Edit ▸ Undo can still undo, the latest last.
+    private var undoMarks: [UndoMark] = []
     @ObservationIgnored weak var window: NSWindow?
     @ObservationIgnored private var started = false
     @ObservationIgnored private var notifier: AttentionNotifier?
@@ -142,30 +143,25 @@ final class AppModel {
     /// Closes tiles (an app conversation: hides it), and offers the way back: a toast, and Undo on
     /// the Edit menu (⌘Z). Every close comes through here.
     func close(_ ids: [String]) {
-        var closed: [ClosedTile] = []
         act(.spring(duration: 0.3)) {
-            closed = ids.compactMap(workspace.close)
-            if let first = closed.first {
-                let many = first.kind == .agentSession ? "conversations" : "tiles"
-                closedToast = ClosedToast(ids: closed.map(\.id), text: first.kind.closedLabel + " "
-                                          + (closed.count == 1 ? first.title.preview(40) : "\(closed.count) \(many)"))
-            }
+            let closed = ids.compactMap(workspace.close)
+            guard let first = closed.first else { return }
+            let many = first.kind == .agentSession ? "conversations" : "tiles"
+            closedToast = ClosedToast(ids: closed.map(\.id), text: first.kind.closedLabel + " "
+                                      + (closed.count == 1 ? first.title.preview(40) : "\(closed.count) \(many)"))
+            guard let undo = window?.undoManager else { return }
+            let mark = UndoMark(ids: closed.map(\.id), name: first.kind == .agentSession ? "Hide Conversation" : "Close Tile")
+            undoMarks.append(mark)
+            // Each close is an Undo of its own, however it arrives (a key, a menu, the phone): AppKit
+            // would group it with whatever else is registered before the next event.
+            undo.groupsByEvent = false
+            undo.beginUndoGrouping()
+            undo.registerUndo(withTarget: mark) { [weak self] mark in self?.reopen(mark.ids) }
+            undo.setActionName(mark.name)
+            undo.endUndoGrouping()
+            undo.groupsByEvent = true
+            pruneUndo()
         }
-        guard let first = closed.first, let undo = window?.undoManager else { return }
-        let mark = UndoMark(ids: closed.map(\.id))
-        undoMarks.append(mark)
-        // Each close is an Undo of its own, however it arrives (a key, a menu, the phone): AppKit
-        // would group it with whatever else is registered before the next event.
-        undo.groupsByEvent = false
-        undo.beginUndoGrouping()
-        undo.registerUndo(withTarget: mark) { [weak self] mark in
-            self?.undoMarks.removeAll { $0 === mark }
-            self?.reopen(mark.ids)
-        }
-        undo.setActionName(first.kind == .agentSession ? "Hide Conversation" : "Close Tile")
-        undo.endUndoGrouping()
-        undo.groupsByEvent = true
-        pruneUndo()
     }
 
     func close(_ id: String) { close([id]) }
@@ -177,8 +173,8 @@ final class AppModel {
             let back = ids.filter(workspace.reopen)
             if open, let id = back.first { workspace.open(id, nativeAt: appRect(for: id)) }
             if let toast = closedToast, !toast.ids.contains(where: isClosed) { closedToast = nil }
+            pruneUndo()
         }
-        pruneUndo()
     }
 
     private func isClosed(_ id: String) -> Bool { workspace.recentlyClosed.tiles.contains { $0.id == id } }
@@ -192,6 +188,22 @@ final class AppModel {
             return true
         }
     }
+
+    /// Edit ▸ Undo (⌘Z), `key` being the window with the keyboard. Whatever has the keyboard undoes
+    /// its own typing, and otherwise its window undoes the last close. But SwiftUI's stand-in for
+    /// the focused board has no undo manager, which leaves the window's own Undo dead: then the
+    /// close is undone here.
+    func undo(key: NSWindow?) {
+        let responder = key?.firstResponder
+        if key === window, responder?.undoManager == nil {
+            window?.undoManager?.undo()
+        } else {
+            responder?.tryToPerform(Selector(("undo:")), with: nil)
+        }
+    }
+
+    /// What Edit ▸ Undo is called: after the last close still to undo.
+    var undoTitle: String { "Undo" + (undoMarks.last.map { " " + $0.name } ?? "") }
 
     /// The toast goes after a few seconds; Undo stays on the Edit menu.
     func dismiss(_ toast: ClosedToast) {
@@ -340,6 +352,10 @@ struct ClosedToast: Equatable {
 /// way (the toast, ⌘K) that Undo can be taken off the menu.
 private final class UndoMark {
     let ids: [String]
+    let name: String
 
-    init(ids: [String]) { self.ids = ids }
+    init(ids: [String], name: String) {
+        self.ids = ids
+        self.name = name
+    }
 }

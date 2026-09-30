@@ -24,6 +24,13 @@ struct BoardCommands: Commands {
             Button("Close") { model.closeFront(key: NSApp.keyWindow) }
                 .keyboardShortcut("w")
         }
+        // The system's Undo can't act while the board has the keyboard (see `AppModel.undo`).
+        CommandGroup(replacing: .undoRedo) {
+            Button(model.undoTitle) { model.undo(key: NSApp.keyWindow) }
+                .keyboardShortcut("z")
+            Button("Redo") { NSApp.sendAction(Selector(("redo:")), to: nil, from: nil) }
+                .keyboardShortcut("z", modifiers: [.command, .shift])
+        }
         CommandMenu("Board") {
             Button("Command Palette") {
                 // From the ⌘L palette, ⌘K goes to the full one rather than closing it.
