@@ -120,6 +120,21 @@ final class TerminalSessionTests: XCTestCase {
         XCTAssertTrue(waitUntil(5) { session.sessionId == nil })
     }
 
+    /// A program that isn't on PATH says nothing about its conversation: the tile shuts down with
+    /// the id intact instead of starting fresh or dropping to a plain shell.
+    func testMissingProgramKeepsTheConversation() throws {
+        let home = try isolatedHome()
+        let command = "/nonexistent-tessera/codex-tessera-missing"
+        let session = TerminalSession(command: command, cwd: NSTemporaryDirectory(), sessionId: "S1", resuming: true,
+                                      shell: "/bin/zsh", environmentOverrides: home.env)
+        defer { session.terminate() }
+        XCTAssertTrue(waitUntil(20) { session.isSuspended })
+        XCTAssertEqual(session.command, command)
+        XCTAssertEqual(session.sessionId, "S1")
+        XCTAssertEqual(session.info.detail, "Not found · Resume runs: \(command) resume S1")
+        XCTAssertFalse(session.terminal.screenTail(40).contains { $0.contains("Could not resume") })
+    }
+
     /// fish users get the same typed-command tracking via Tessera's fish hooks.
     func testFishTracksTypedLaunchers() throws {
         let fish = ["/opt/homebrew/bin/fish", "/usr/local/bin/fish"].first { FileManager.default.isExecutableFile(atPath: $0) }

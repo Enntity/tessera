@@ -465,6 +465,11 @@ final class SessionResumeTests: XCTestCase {
     }
 
     /// Output printed into a tile (a cat'ed file, an ssh session) can't plant a command to resume.
+    func testMissingProgramReport() {
+        XCTAssertEqual(ShellEvent.parse("missing;abc", nonce: "abc"), .programMissing)
+        XCTAssertNil(ShellEvent.parse("missing;forged", nonce: "abc"))
+    }
+
     func testForgedReportsAreIgnored() {
         let b64 = Data("claude-evil".utf8).base64EncodedString()
         XCTAssertNil(ShellEvent.parse("cmd;guess;\(b64)", nonce: "real-secret"))
@@ -490,12 +495,15 @@ final class SessionResumeTests: XCTestCase {
     func testLaunchScriptFallsBackOnlyOnQuickFailure() {
         let posix = LaunchScript.build(primary: "claude --resume x", fallback: "claude", followUp: "exec zsh -l -i", dialect: .posix, nonce: "n")
         XCTAssertTrue(posix.hasPrefix("__t=$SECONDS; claude --resume x; __s=$?;"))
-        XCTAssertTrue(posix.contains("then printf"))
+        // Not found (126/127) is reported; other quick failures, below the signal range, start fresh.
+        XCTAssertTrue(posix.contains("if [ $__s -eq 126 ] || [ $__s -eq 127 ]; then printf '\\033]6973;missing;n\\007'; elif"))
+        XCTAssertTrue(posix.contains("[ $__s -lt 126 ]") && posix.contains(";fresh;n") && posix.contains("; claude; fi;"))
         XCTAssertTrue(posix.hasSuffix("fi; exec zsh -l -i"))
-        XCTAssertEqual(LaunchScript.build(primary: "npm test", fallback: nil, followUp: "exec zsh -l -i", dialect: .posix, nonce: "n"),
-                       "npm test; exec zsh -l -i")
+        let plain = LaunchScript.build(primary: "npm test", fallback: nil, followUp: "exec zsh -l -i", dialect: .posix, nonce: "n")
+        XCTAssertTrue(plain.contains(";missing;n") && !plain.contains("fresh") && plain.hasSuffix("fi; exec zsh -l -i"))
         let fish = LaunchScript.build(primary: "codex resume x", fallback: "codex", followUp: "exec fish -l -i", dialect: .fish, nonce: "n")
-        XCTAssertTrue(fish.contains("set -l __s $status") && fish.hasSuffix("end; exec fish -l -i"))
+        XCTAssertTrue(fish.contains("set -l __s $status") && fish.contains(";missing;n") && fish.contains("else if test $__s -ne 0 -a $__s -lt 126"))
+        XCTAssertTrue(fish.hasSuffix("end; exec fish -l -i"))
     }
 
     func testFreshLaunchReclaimsUnsavedId() {

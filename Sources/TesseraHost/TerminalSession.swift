@@ -241,11 +241,11 @@ public final class TerminalSession: NSObject {
     }
 
     /// Stop the process but keep the tile, its folder and its conversation id for Resume.
-    public func shutDown() {
+    public func shutDown(because reason: String? = nil) {
         if let dir = liveDirectory() { cwd = dir }
         terminate()
         isSuspended = true
-        tracker.noteSuspended(resumeHint: resumeHint)
+        tracker.noteSuspended(resumeHint: [reason, resumeHint].compactMap { $0 }.joined(separator: " · "))
         refreshInfo()
     }
 
@@ -358,8 +358,11 @@ public final class TerminalSession: NSObject {
             mayContinueLatest = false
             launchedAt = Date()
             onResumableChange?()
+        case .programMissing:
+            // Not there to run (e.g. not on PATH after a toolchain switch): keep the conversation for Resume.
+            shutDown(because: "Not found")
         case .prompt:
-            guard command != nil else { return }
+            guard command != nil, !isSuspended else { return }
             command = nil
             sessionId = nil
             flavor = .shell

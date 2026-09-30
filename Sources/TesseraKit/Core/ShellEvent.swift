@@ -1,16 +1,19 @@
 import Foundation
 
 /// What a tile's shell reports to Tessera (OSC 6973): a command line starting (as typed, plus the
-/// alias-expanded form when the shell provides it), a return to the prompt, or that a resume
-/// couldn't pick the old session up and a fresh one was started instead.
+/// alias-expanded form when the shell provides it), a return to the prompt, that a resume couldn't
+/// pick the old session up and a fresh one was started instead, or that the launched program
+/// wasn't there to run at all.
 public enum ShellEvent: Equatable, Sendable {
     case command(typed: String, expanded: String?)
     case prompt(status: Int32)
     case startedFresh
+    case programMissing
 
     public static let oscCode = 6973
 
-    /// Payloads: `cmd;<nonce>;<b64 typed>[;<b64 expanded>]`, `done;<nonce>;<status>`, `fresh;<nonce>`.
+    /// Payloads: `cmd;<nonce>;<b64 typed>[;<b64 expanded>]`, `done;<nonce>;<status>`, `fresh;<nonce>`,
+    /// `missing;<nonce>`.
     /// Reports travel in the terminal's output, so anything printed there (a `cat`ed file, an ssh
     /// session) could imitate one; only reports carrying the tile's secret nonce are believed.
     public static func parse(_ payload: String, nonce: String) -> ShellEvent? {
@@ -25,6 +28,8 @@ public enum ShellEvent: Equatable, Sendable {
             return .prompt(status: Int32(parts.count > 2 ? parts[2].trimmingCharacters(in: .whitespaces) : "") ?? 0)
         case "fresh":
             return .startedFresh
+        case "missing":
+            return .programMissing
         default:
             return nil
         }
@@ -45,6 +50,10 @@ public enum ShellEvent: Equatable, Sendable {
 
 /// Builds the command line a tile's shell runs at start: the primary command (a resume, or a fresh
 /// launch with an assigned id), a fallback if that fails quickly, then an interactive shell.
+///
+/// Exit status 126/127 means the program wasn't there to run (e.g. not on PATH after a toolchain
+/// switch), which says nothing about the conversation: that is reported, never "fixed" by starting
+/// fresh. 128 and up is a signal, i.e. the user quit.
 public enum LaunchScript {
     public enum Dialect: Sendable { case posix, fish }
 
@@ -56,17 +65,23 @@ public enum LaunchScript {
     }
 
     public static func build(primary: String, fallback: String?, followUp: String, dialect: Dialect, nonce: String) -> String {
-        guard let fallback, fallback != primary else { return "\(primary); \(followUp)" }
+        let fallback = fallback == primary ? nil : fallback
         let note = "\\n\\033[2m[tessera] Could not resume that session; starting a new one.\\033[0m\\n"
-        let fresh = "printf '\\033]\(ShellEvent.oscCode);fresh;\(nonce)\\007'"
+        func report(_ event: String) -> String { "printf '\\033]\(ShellEvent.oscCode);\(event);\(nonce)\\007'" }
         switch dialect {
         case .posix:
+            let retry = fallback.map {
+                "elif [ $__s -ne 0 ] && [ $__s -lt 126 ] && [ $((SECONDS - __t)) -lt \(quickFailure) ]; then printf '\(note)'; \(report("fresh")); \($0); "
+            } ?? ""
             return "__t=$SECONDS; \(primary); __s=$?; "
-                + "if [ $__s -ne 0 ] && [ $((SECONDS - __t)) -lt \(quickFailure) ]; then printf '\(note)'; \(fresh); \(fallback); fi; "
+                + "if [ $__s -eq 126 ] || [ $__s -eq 127 ]; then \(report("missing")); \(retry)fi; "
                 + followUp
         case .fish:
+            let retry = fallback.map {
+                "else if test $__s -ne 0 -a $__s -lt 126 -a (math (date +%s) - $__t) -lt \(quickFailure); printf '\(note)'; \(report("fresh")); \($0); "
+            } ?? ""
             return "set -l __t (date +%s); \(primary); set -l __s $status; "
-                + "if test $__s -ne 0 -a (math (date +%s) - $__t) -lt \(quickFailure); printf '\(note)'; \(fresh); \(fallback); end; "
+                + "if test $__s -eq 126 -o $__s -eq 127; \(report("missing")); \(retry)end; "
                 + followUp
         }
     }

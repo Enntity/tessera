@@ -48,7 +48,9 @@ Native macOS app, with a focused iOS companion built on the same core.
     the tool writes (same folder, just after start) is matched to the tile. Two agents started in the
     same folder within a minute aren't guessed at.
   - If a resume fails fast (deleted session, older CLI, a launcher with its own session store), the
-    tile says so and starts a fresh session instead — you never land on a dead error.
+    tile says so and starts a fresh session instead — you never land on a dead error. If the tool
+    isn't found at all (say, after a toolchain switch), the tile shuts down and keeps its
+    conversation for Resume.
   - Agents you exited come back as a shell in their last folder. bash tiles resume what Tessera
     launched but don't track commands typed into them.
 - **Privacy mode (⇧⌘P).** For screenshots and video: terminal and conversation text become
