@@ -53,6 +53,7 @@ public final class UsageService {
         timer = Timer.scheduledTimer(withTimeInterval: Self.refreshInterval, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.refreshAll() }
         }
+        timer?.tolerance = 30
     }
 
     public func add(_ config: UsageProviderConfig, key: String?) {

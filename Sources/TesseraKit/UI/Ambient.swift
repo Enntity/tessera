@@ -2,8 +2,10 @@ import QuartzCore
 import SwiftUI
 #if os(macOS)
 import AppKit
+typealias PlatformView = NSView
 #else
 import UIKit
+typealias PlatformView = UIView
 #endif
 
 /// A continuous effect run by Core Animation in the render server. SwiftUI only adds or removes it,
@@ -121,12 +123,13 @@ final class AmbientView: PlatformView {
         animated = nil
         guard let effect, let host else { return }
         let made: CALayer
+        let target: CALayer
         let animation: CABasicAnimation
         switch effect {
         case .sweep(let color):
             let gradient = CAGradientLayer()
             let c = Self.cg(color)
-            gradient.colors = [c.copy(alpha: 0)!, c.copy(alpha: 0.9)!, c.copy(alpha: 0)!]
+            gradient.colors = [0, 0.9, 0].compactMap { c.copy(alpha: $0) }
             gradient.startPoint = CGPoint(x: 0, y: 0.5)
             gradient.endPoint = CGPoint(x: 1, y: 0.5)
             gradient.locations = [-0.3, -0.15, 0]
@@ -136,7 +139,7 @@ final class AmbientView: PlatformView {
             animation.toValue = [1.0, 1.15, 1.3]
             animation.duration = 1.4
             made = gradient
-            animated = (gradient, animation)
+            target = gradient
         case .pulse(let color, _, let lineWidth, let low, let high, let period):
             let shape = CALayer()
             shape.cornerCurve = .continuous
@@ -153,7 +156,7 @@ final class AmbientView: PlatformView {
             animation.duration = period
             animation.autoreverses = true
             made = shape
-            animated = (shape, animation)
+            target = shape
         case .dots(let color, let size, let spacing):
             let dot = CALayer()
             dot.backgroundColor = Self.cg(color)
@@ -169,11 +172,12 @@ final class AmbientView: PlatformView {
             animation.duration = 0.5
             animation.autoreverses = true
             made = row
-            animated = (dot, animation)
+            target = dot
         }
         animation.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
         animation.repeatCount = .infinity
         animation.isRemovedOnCompletion = false
+        animated = (target, animation)
         host.addSublayer(made)
         content = made
         place()
@@ -212,9 +216,3 @@ final class AmbientView: PlatformView {
     private static func cg(_ color: Color) -> CGColor { UIColor(color).cgColor }
     #endif
 }
-
-#if os(macOS)
-typealias PlatformView = NSView
-#else
-typealias PlatformView = UIView
-#endif
