@@ -3,13 +3,14 @@ import TesseraHost
 import TesseraKit
 
 /// The watch dock, between the board and the accounts: up to two tiles kept open, live, to be
-/// watched and typed into while the board carries on beside them. It reads which tiles are docked;
-/// each panel reads only its own tile.
+/// watched and typed into while the board carries on beside them. A tile dropped on it is docked.
+/// It reads which tiles are docked; each panel reads only its own tile.
 struct WatchDockColumn: View {
     @Environment(AppModel.self) private var model
     /// How wide it is on show, and how wide it can be made (see `BoardColumns`).
     let width: CGFloat
     let widest: CGFloat
+    @State private var targeted = false
 
     var body: some View {
         let ids = model.workspace.docked
@@ -34,6 +35,8 @@ struct WatchDockColumn: View {
             .padding(Style.Space.l)
         }
         .chromeSurface(rule: .leading)
+        .overlay { if targeted { Rectangle().strokeBorder(Style.Neutral.focus, lineWidth: 1.5).allowsHitTesting(false) } }
+        .onDrop(of: [.text], isTargeted: $targeted) { providers in providers.loadTileId { model.setDocked($0, true) } }
         .overlay(alignment: .leading) { DockGrip(width: width, widest: widest) }
         .animation(Style.Motion.standard, value: ids)
     }

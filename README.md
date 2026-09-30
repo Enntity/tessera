@@ -45,6 +45,17 @@ Native macOS app, with a focused iOS companion built on the same core.
   Terminals, Claude, Codex, dsh, Web — each with how many tiles it would show; a chip appears only
   while it has something to narrow. Chips of one sort widen each other (Claude or Codex), the two
   sorts and the text narrow each other (Claude, working, "auth"), all within the tab you're on.
+- **Watch dock.** ⌘D keeps a tile open beside the board (up to two, stacked, in a column left of
+  the accounts): a terminal you can type into, a page, a dsh session's live page, a Claude or
+  Codex conversation's transcript, all live while the board carries on. Each has a compact header:
+  what it is, its state, its menu, open full size, undock. A terminal or page is in one place at a
+  time, so opening a docked tile (a click on it, ⏎, ⌘J, a row in the lane) puts the keyboard in
+  its dock panel, whose edge lights up; ⌘W or ⌘⏎ go back to the board. Its tile on the board wears
+  a small mark. Drag the dock's edge to resize it; a third tile docked lets the oldest go; closing
+  a docked tile undocks it. What is docked and how wide are kept with the board. In a small
+  window the accounts, then the lane, make way for it.
+- **Tile size.** ⌘- shows more of a busy board at once, ⌘= makes tiles larger, ⌘0 is the standard
+  size again: the board scrolls only when tiles would get smaller than the size you chose.
 - **Tile states, the same at every size.** Colour means state and nothing else. *Idle*: nothing.
   *Working*: a cyan pill, and a highlight sweeping the line under the header (or the progress the
   program reports, a page's load included). *Needs you*: an amber pill and edge with a glow, and
@@ -103,18 +114,22 @@ Every gesture means the same thing on every kind of tile.
 
 | Gesture | Action |
 |---|---|
-| Click a tile · ⏎ on the selection | Open it: terminals, web and dsh tiles zoom open in place; a Claude or Codex conversation opens in its app. A double-click is a click |
-| Click outside the panel · ⌘⏎ · ⌘W | Back to the board; the tile stays selected |
+| Click a tile · ⏎ on the selection | Open it: terminals, web and dsh tiles zoom open in place (a docked one gets the keyboard where it is, in the dock); a Claude or Codex conversation opens in its app. A double-click is a click |
+| Click outside the panel · ⌘⏎ · ⌘W | Back to the board; the tile stays selected. From a docked terminal or page too: it stays docked |
 | Esc | Back to the board from a transcript or a terminal that has ended. A live terminal or page gets the key itself (agents use it to interrupt) |
 | ⌘⏎ (board) | Open the selected tile |
 | ⌘W (board) | Close the selected tile, with Undo; a Claude or Codex conversation is only hidden. In another window (Settings), ⌘W closes that window |
 | Hover ✕ | Close the tile, with Undo. On a Claude or Codex conversation the button is an eye (Hide): nothing is stopped |
 | ⌘Z · Undo in the toast | Bring back the tile just closed or hidden, where it was (in a text field, ⌘Z undoes typing as usual) |
 | ←↑→↓ | Move the selection across the grid; it stops at the edges and a scrolling board follows |
-| ⌘[ ⌘] | Previous / next tile, round and round. With a tile open, the open tile changes in place (a Claude or Codex conversation shows its transcript; ⌘O goes to the app) |
+| ⌘[ ⌘] | Previous / next tile, round and round. With a tile open, the open tile changes in place (a Claude or Codex conversation shows its transcript; ⌘O goes to the app), passing over docked tiles |
 | ⌃Tab | Back to the tile opened before this one; again to return |
-| Right-click · ⋯ in the open panel | Open · Open in app / Show Transcript · Continue in Terminal · Rename… · Shut Down / Resume · Restart / Reload · Open in Browser · Mark as Seen · Move to Tab · Close / Hide — whichever apply |
-| Drag | Reorder tiles; drop one on a tab to file it there |
+| ⌘D | Dock the open or selected tile beside the board, or undock it (also the button on the open panel, and ✕ on a docked tile). Docked from its open panel, a tile keeps the keyboard |
+| ⤢ on a docked tile | Open it full size, out of the dock; ⌘D there puts it back |
+| Drag the dock's left edge | Make the dock wider or narrower |
+| ⌘= / ⌘- / ⌘0 | Larger tiles / smaller tiles, so more fit / the standard size (also in the View menu) |
+| Right-click · ⋯ in the open panel or on a docked tile | Open · Open in app / Show Transcript · Continue in Terminal · Dock / Undock · Rename… · Shut Down / Resume · Restart / Reload · Open in Browser · Mark as Seen · Move to Tab · Close / Hide — whichever apply |
+| Drag | Reorder tiles; drop one on a tab to file it there, or on the dock to dock it |
 | Type on the board · ⌘F | Filter the board in place, as you type. ⏎ opens the first tile found, ←↑→↓ move among those found, Esc shows everything again |
 | ⌘K | Find or do anything. Typing finds tiles first — by title, folder, question or error, tab or state (`failed`, `needs`), hidden conversations included — and ⏎ goes to the top one. Below them: Open a URL, New …, the board commands, Reopen … (closed tiles), Run …, Ask Claude / Codex app …, web search. With nothing typed: what can be started, what needs you, and the commands that have something to do |
 | ⌘T / ⇧⌘T / ⌥⌘T | New shell / Claude Code / Codex (in the selected tile's folder) |
@@ -129,7 +144,7 @@ Every gesture means the same thing on every kind of tile.
 | ⌥⇧⌘W / ⌥⇧⌘R | Shut down / resume all terminals |
 | Board menu · ⌘K | Mark All Seen · Close Exited · Restart Failed · Hide Idle Conversations · Show Hidden Conversations, each for the tab being viewed |
 
-New tiles open at once, wherever they come from (⌘T, ⌘L, the palette, a preset, a machine chip,
+An open panel lists its keys along its bottom edge. New tiles open at once, wherever they come from (⌘T, ⌘L, the palette, a preset, a machine chip,
 Continue in Terminal, a link clicked in a terminal). Tabs, the filter and its chips, the top-bar
 counters and ⌘1…9 close an open panel before they act. Rename… gives any tile a name of your own, kept with the board; an
 empty name goes back to the tile's own title.
@@ -166,7 +181,7 @@ cd Apps/TesseraIOS && xcodegen generate && open TesseraIOS.xcodeproj
 
 Development helpers: `scripts/debug-run.sh <png> "<actions>"` builds a debug copy with its own data
 folder, runs scripted actions in it (`launch=cmd;url=…;select=title;open;key=down,return;cmd=k;`
-`type=text;click=title;hover=title;chip=claude;ctrl=tab;undo;run=closeExited;dump=state.json;shot=now.png;wait=2` — the full
+`type=text;click=title;hover=title;chip=claude;dock=title;ctrl=tab;undo;run=closeExited;dump=state.json;shot=now.png;wait=2` — the full
 list is in `Sources/TesseraMac/DebugActions.swift`) and writes window captures to the PNG. Its clicks and keys
 land while the copy is in the background. A scripted run never opens the Claude or Codex app (it
 records what it would have opened), and the copy posts no notifications. With
@@ -178,7 +193,8 @@ records what it would have opened), and the copy posts no notifications. With
 ```
 Sources/
   TesseraKit/     cross-platform (macOS + iOS)
-    Core/         models, attention tracker, tile search and the board's filter, grid layout, Keychain
+    Core/         models, attention tracker, tile search and the board's filter, grid layout, the
+                  dock's and the columns' rules, Keychain
     Terminal/     text/block renderer, snapshot encoder, display-only mirror
     Transcripts/  Claude, Codex and dsh transcript parsers (incremental)
     Usage/        provider request builders and response parsers
@@ -216,7 +232,8 @@ ask first.
 - No forward secrecy on the remote link yet (see above).
 - If you scroll back in a Mac terminal, the phone's snapshot and prompt detection follow the scrolled view.
 - No push notifications to the phone yet (needs an APNs relay); the phone updates while open.
-- Tile order persists; tile sizes are uniform (no pinning/resizing yet).
+- Tiles are one size, stepped for the whole board (⌘= ⌘-); a tile can be docked, not pinned in place.
+- A docked terminal takes the dock's width, so the program in it reflows; a third tile replaces the oldest.
 
 ## License
 
