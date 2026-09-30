@@ -192,7 +192,11 @@ struct BoardTile: View {
     let size: CGSize
 
     var body: some View {
-        if let info = model.workspace.info(id) { TileView(info: info, size: size) }
+        if let info = model.workspace.info(id) {
+            TileView(info: info, size: size)
+                // A tile's glow lies under its neighbours, not across their edges.
+                .zIndex(info.activity == .needsInput ? -1 : 0)
+        }
     }
 }
 
