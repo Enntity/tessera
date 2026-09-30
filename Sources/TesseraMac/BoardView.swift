@@ -208,7 +208,8 @@ struct TileView: View {
     var body: some View {
         let workspace = model.workspace
         let compact = size.width < 280
-        TileCard(info: info, isSelected: workspace.selectedId == info.id, isHovered: hovering, compact: compact,
+        // (An open tile's panel says it is the one; its ring would only show past the panel's edge.)
+        TileCard(info: info, isSelected: workspace.selectedId == info.id && workspace.expandedId != info.id, isHovered: hovering, compact: compact,
                  mark: workspace.dock.contains(info.id) ? AppModel.dockSymbol : nil) {
             content
         }
