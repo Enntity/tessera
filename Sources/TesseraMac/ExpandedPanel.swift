@@ -355,7 +355,7 @@ struct ReparentHost: NSViewRepresentable {
         context.coordinator.take = take
     }
 
-    static func dismantleNSView(_ container: HostContainer, coordinator: ()) {
+    static func dismantleNSView(_ container: HostContainer, coordinator: Coordinator) {
         for sub in container.subviews { sub.removeFromSuperview() }
     }
 

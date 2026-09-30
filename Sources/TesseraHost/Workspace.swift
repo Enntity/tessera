@@ -236,7 +236,7 @@ public final class Workspace {
     public func close(_ id: String) -> ClosedTile? {
         guard exists(id), let info = info(id) else { return nil }
         if expandedId == id { collapse() }
-        setDocked(id, false)
+        dock.remove(id)
         let visible = visibleIds
         // Read before the terminal ends: its folder comes from the live process.
         let closed = ClosedTile(title: info.title, subtitle: info.subtitle, tile: savedTile(id) ?? .init(id: id, kind: info.kind),
@@ -428,20 +428,32 @@ public final class Workspace {
     /// of it closes, and it counts as being looked at. A full dock lets its oldest tile go.
     public func setDocked(_ id: String, _ docked: Bool) {
         guard docked ? exists(id) && !dock.contains(id) : dock.contains(id) else { return }
+        var left: String?
         if docked {
             if expandedId == id { collapse() }
-            if let left = dock.add(id) { show(left, inDock: false) }
+            left = dock.add(id)
         } else {
             dock.remove(id)
         }
-        show(id, inDock: docked)
+        for id in [left, id].compactMap({ $0 }) { setViewed(id, dock.contains(id)) }
+        fit([left, id])
         save()
     }
 
-    /// In the dock a tile is being looked at, and a terminal is drawn smaller.
-    private func show(_ id: String, inDock: Bool) {
-        setViewed(id, inDock)
-        terminals[id]?.setCompact(inDock)
+    /// Takes a docked tile out of the dock and opens it full size (a Claude or Codex conversation:
+    /// its transcript).
+    public func openFromDock(_ id: String) {
+        guard dock.remove(id) else { return }
+        open(id, inApp: false)
+        fit([id])
+        save()
+    }
+
+    /// A docked terminal is drawn smaller. This comes last in whatever an action does: the new font
+    /// lays the terminal out there and then, and SwiftUI, redrawing at once for that, would show
+    /// the board without a change made to it afterwards.
+    private func fit(_ ids: [String?]) {
+        for id in ids.compactMap({ $0 }) { terminals[id]?.setCompact(dock.contains(id)) }
     }
 
     /// Whether the user has the tile's content in front of them: open, or docked.
@@ -779,6 +791,7 @@ public final class Workspace {
         // in it is looked at from the start.
         dock = WatchDock((saved.dock ?? []).filter { order.contains($0) || $0.contains(":") })
         dockWidth = saved.dockWidth.map { CGFloat($0) }
-        for id in dock.ids { show(id, inDock: true) }
+        for id in dock.ids { setViewed(id, true) }
+        fit(dock.ids)
     }
 }

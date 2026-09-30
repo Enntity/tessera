@@ -263,8 +263,8 @@ final class AppModel {
     func setDocked(_ id: String, _ docked: Bool) {
         let open = workspace.expandedId == id
         act(open ? Style.Motion.zoom : Style.Motion.standard) {
-            workspace.setDocked(id, docked)
             if docked, open, keyView(id) != nil { keyboardDock = id }
+            workspace.setDocked(id, docked)
         }
     }
 
@@ -273,10 +273,7 @@ final class AppModel {
 
     /// Out of the dock and open full size (a Claude or Codex conversation: its transcript).
     func expand(_ id: String) {
-        act(Style.Motion.zoom) {
-            workspace.setDocked(id, false)
-            workspace.open(id, inApp: false)
-        }
+        act(Style.Motion.zoom) { workspace.openFromDock(id) }
     }
 
     /// How wide the user made the dock, or how wide it starts.
