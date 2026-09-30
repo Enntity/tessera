@@ -3,7 +3,8 @@
 A mission-control board for AI work. Every running thing — terminals with Claude Code, Codex, Grok,
 omp or a plain shell; conversations inside the Claude and Codex desktop apps; any web page — is a
 live tile on one full-screen grid. Tiles animate as their content changes and light up when
-something finishes or needs you. Click one and it opens full-size right where it was.
+something finishes or needs you. Click one and it opens full-size right where it was; click outside
+and you are back on the board.
 
 Native macOS app, with a focused iOS companion built on the same core.
 
@@ -16,7 +17,8 @@ Native macOS app, with a focused iOS companion built on the same core.
   Opening one goes straight to the app, deep-linked to that conversation
   (`claude://code/continue?session=…`, `codex://threads/…`) and snapped where the opened tile would
   sit (Accessibility permission); nothing opens on the board, so you can come back and pick the next
-  one. Right-click for Tessera's own transcript, or "Continue in Terminal" to fork it into a CLI tile.
+  one. Right-click for Tessera's own transcript (⌘O there goes to the app), or "Continue in Terminal"
+  to fork it into a CLI tile.
 - **DeepSeek Harness (dsh) sessions as tiles.** Each recent top-level dsh conversation in
   `~/.dsh/sessions` (or `$DSH_HOME`) is its own live card — title, latest messages and tool calls,
   working while a turn runs, *Needs you* on a pending approval (with its reason). Opening one starts
@@ -35,12 +37,15 @@ Native macOS app, with a focused iOS companion built on the same core.
   modifies it, and falls back to counting your local transcripts), and a custom provider for any
   JSON balance endpoint. Keys live in the login Keychain.
 - **Tabs.** All · Needs you · your own tabs. Drag tiles onto a tab (or Move to Tab); new tiles land
-  in the tab you're viewing; each tab shows a count and an attention dot. ⌘1…9 switch.
+  in the tab you're viewing, as does a Claude or Codex app conversation started there once its tile
+  appears (from Needs you, new tiles go to All and the view follows); each tab shows a count and an
+  attention dot. ⌘1…9 switch. The selection is always a tile the tab shows.
 - **Machines.** Top-bar chips for this Mac and any SSH hosts (e.g. DGX Sparks): CPU / GPU / memory
   bars, hottest temperature, GPU watts; hover for details, click a remote to open an ssh tile.
 - **Shut down & resume.** Quit Tessera (or shut tiles down) and every agent comes back in the same
   conversation — including ones you typed into a shell yourself, and through your own launchers
-  (`codex-work` resumes as `codex-work resume <id>`). How:
+  (`codex-work` resumes as `codex-work resume <id>`). A tile that is shut down, exited or failed
+  opens to a Resume / Restart button (⏎ presses it), never a dead terminal. How:
   - zsh and fish tiles report each command as typed (launchers and aliases included) and when they're
     back at the prompt, via hooks loaded after your own startup files (files untouched; reports carry
     a per-tile secret so printed output can't forge them).
@@ -61,24 +66,36 @@ Native macOS app, with a focused iOS companion built on the same core.
   the exact screen with pinch-zoom), one-tap answers (`1 2 3 y n ⏎`, esc, ^C, arrows), transcripts,
   launching, and the accounts panel.
 
-## Keyboard
+## Mouse and keyboard
 
-| Keys | Action |
+Every gesture means the same thing on every kind of tile.
+
+| Gesture | Action |
 |---|---|
+| Click a tile · ⏎ on the selection | Open it: terminals, web and dsh tiles zoom open in place; a Claude or Codex conversation opens in its app. A double-click is a click |
+| Click outside the panel · ⌘⏎ · ⌘W | Back to the board; the tile stays selected |
+| Esc | Back to the board from a transcript or a terminal that has ended. A live terminal or page gets the key itself (agents use it to interrupt) |
+| ⌘⏎ (board) | Open the selected tile |
+| ⌘W (board) | Close the selected tile; a Claude or Codex conversation is only hidden. In another window (Settings), ⌘W closes that window |
+| Hover ✕ | Close the tile. On a Claude or Codex conversation the button is an eye (Hide): nothing is stopped |
+| ←↑→↓ | Move the selection across the grid; it stops at the edges and a scrolling board follows |
+| ⌘[ ⌘] | Previous / next tile, round and round. With a tile open, the open tile changes in place (a Claude or Codex conversation shows its transcript; ⌘O goes to the app) |
+| Right-click · ⋯ in the open panel | Open · Open in app / Show Transcript · Continue in Terminal · Rename… · Shut Down / Resume · Restart / Reload · Open in Browser · Mark as Seen · Move to Tab · Close / Hide — whichever apply |
+| Drag | Reorder tiles; drop one on a tab to file it there |
 | ⌘K | Command palette: launch agents, run commands, open URLs, jump to tiles |
 | ⌘T / ⇧⌘T / ⌥⌘T | New shell / Claude Code / Codex (in the selected tile's folder) |
-| ⌘L | New web tile |
-| ←↑→↓, ⏎ | Move selection, open tile |
-| ⌘⏎, Esc (board) | Open / close tile |
-| ⌘[ ⌘] | Previous / next tile |
+| ⌘L | New web tile; with a web tile open, its address field |
 | ⌘J | Next tile that needs you |
+| need you · done · working (top bar) | Open the next tile in that state, oldest first |
 | ⌘1 / ⌘2 / ⌘3…9 | All / Needs you / your tabs |
 | ⌘\ | Toggle the accounts sidebar |
 | ⇧⌘P | Privacy mode |
 | ⌥⇧⌘W / ⌥⇧⌘R | Shut down / resume all terminals |
-| ⌘W | Close tile |
 
-Esc inside an open terminal goes to the program (agents use it to interrupt), so use ⌘⏎ there.
+New tiles open at once, wherever they come from (⌘T, ⌘L, the palette, a preset, a machine chip,
+Continue in Terminal, a link clicked in a terminal). Tabs, the top-bar counters and ⌘1…9 close an
+open panel before they act. Rename… gives any tile a name of your own, kept with the board; an
+empty name goes back to the tile's own title.
 
 ## Build and run
 
@@ -110,9 +127,12 @@ xcodebuild -downloadComponent MetalToolchain
 cd Apps/TesseraIOS && xcodegen generate && open TesseraIOS.xcodeproj
 ```
 
-Development helpers: `scripts/debug-run.sh <png> "<actions>"` builds, launches with scripted
-actions (`launch=cmd;url=…;open=terminal|app|web;palette;remote;wait=2`) and writes window
-captures to the PNG. `swift scripts/make-icons.swift` regenerates the icons.
+Development helpers: `scripts/debug-run.sh <png> "<actions>"` builds a debug copy with its own data
+folder, runs scripted actions in it (`launch=cmd;url=…;select=title;open;key=down,return;cmd=k;`
+`type=text;click=title;dump=state.json;wait=2` — the full list is in
+`Sources/TesseraMac/DebugActions.swift`) and writes window captures to the PNG. A scripted run never
+opens the Claude or Codex app; it records what it would have opened. `swift scripts/make-icons.swift`
+regenerates the icons.
 
 ## Architecture
 
