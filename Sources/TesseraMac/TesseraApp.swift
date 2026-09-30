@@ -67,6 +67,7 @@ final class AppModel {
     func start() {
         guard !started else { return }
         started = true
+        if handOffToRunningCopy() { return }
         workspace.start()
         reportUnreadableFiles()
         if Preferences.store.bool(forKey: "tessera.remoteEnabled") { server.start() }

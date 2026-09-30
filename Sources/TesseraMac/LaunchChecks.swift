@@ -2,6 +2,16 @@ import AppKit
 import TesseraHost
 
 extension AppModel {
+    /// Another Tessera already runs this board: bring it forward and quit, rather than resume every
+    /// agent a second time.
+    func handOffToRunningCopy() -> Bool {
+        guard let holder = workspace.boardHolder else { return false }
+        FileHandle.standardError.write(Data("Tessera is already running with this board (pid \(holder)).\n".utf8))
+        NSRunningApplication(processIdentifier: holder)?.activate()
+        NSApp.terminate(nil)
+        return true
+    }
+
     /// Saved files Tessera couldn't fully read were kept aside rather than overwritten; say so once.
     func reportUnreadableFiles() {
         let copies = StateFile.keptAside

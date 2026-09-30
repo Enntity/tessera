@@ -35,6 +35,8 @@ public final class Workspace {
     /// Bring terminals back into their conversations when Tessera opens (else they wait, shut down).
     public var resumeOnLaunch = true
     public var defaultDirectory: String = NSHomeDirectory()
+    /// Another Tessera already runs this board (its pid, 0 if unknown): this copy must not start.
+    public let boardHolder: pid_t?
 
     /// Emits whenever tile membership, order, or any tile's metadata changes (for remote clients).
     @ObservationIgnored public var onTilesChanged: (() -> Void)?
@@ -56,6 +58,7 @@ public final class Workspace {
         #endif
         directory = dir
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        boardHolder = BoardLock.take(in: directory)
         usage = UsageService(directory: directory)
         machines = MachineMonitor(directory: directory)
     }

@@ -73,3 +73,15 @@ final class BoardOrderTests: XCTestCase {
         XCTAssertEqual(Workspace.persistedOrder([], saved: saved) { _ in false }, [])
     }
 }
+
+final class BoardLockTests: XCTestCase {
+    func testSecondTakerSeesTheHolder() throws {
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("tessera-lock-\(UUID().uuidString.prefix(6))")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        XCTAssertNil(BoardLock.take(in: dir))
+        XCTAssertEqual(BoardLock.take(in: dir), getpid())
+        // A folder that can't hold a lock doesn't stop a launch.
+        XCTAssertNil(BoardLock.take(in: dir.appendingPathComponent("missing")))
+    }
+}
