@@ -359,4 +359,26 @@ final class BrowserSessionTests: XCTestCase {
         XCTAssertNil(session.info.progress)
         XCTAssertEqual(session.info.activity, .idle)
     }
+
+    /// Privacy mode's mosaic hides a page as well in a narrow view, where it fills more of its picture.
+    func testMosaicCellsAreSizedToThePage() throws {
+        /// How much of the page, in its points, a cell of the mosaic covers.
+        func cell(picture: CGSize, pageWidth: CGFloat) throws -> CGSize {
+            let image = NSImage(size: picture, flipped: false) { rect in
+                NSColor.white.setFill()
+                rect.fill()
+                return true
+            }
+            let mosaic = try XCTUnwrap(BrowserSession.mosaic(image, pageWidth: pageWidth)?.cgImage(forProposedRect: nil, context: nil, hints: nil))
+            let pageHeight = picture.height * pageWidth / picture.width
+            return CGSize(width: pageWidth / CGFloat(mosaic.width), height: pageHeight / CGFloat(mosaic.height))
+        }
+        // The same picture of a page 1280 pt wide and of one 456 pt wide: a cell covers as much page in both.
+        for pageWidth in [1280.0, 456.0] {
+            let cell = try cell(picture: CGSize(width: 640, height: 400), pageWidth: pageWidth)
+            XCTAssertEqual(cell.width, BrowserSession.mosaicCell.width, accuracy: 4)
+            XCTAssertEqual(cell.height, BrowserSession.mosaicCell.height, accuracy: 2)
+        }
+        XCTAssertNil(BrowserSession.mosaic(NSImage(size: CGSize(width: 10, height: 10)), pageWidth: 0))
+    }
 }

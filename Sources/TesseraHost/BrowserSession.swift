@@ -113,16 +113,22 @@ public final class BrowserSession: NSObject {
             MainActor.assumeIsolated {
                 guard let self, let image else { return }
                 self.snapshot = image
-                self.mosaic = Self.mosaic(image)
+                self.mosaic = Self.mosaic(image, pageWidth: self.webView.bounds.width)
             }
         }
     }
 
+    /// A cell of the mosaic, in the page's own points: wider than a letter and about a line tall.
+    static let mosaicCell = CGSize(width: 32, height: 10)
+
     /// Downsample to wide, short cells; drawn without interpolation, lines of text become bars —
-    /// the same look as a terminal's word blocks.
-    static func mosaic(_ image: NSImage) -> NSImage? {
-        guard let cg = image.cgImage(forProposedRect: nil, context: nil, hints: nil) else { return nil }
-        let w = max(1, cg.width / 16), h = max(1, cg.height / 5)
+    /// the same look as a terminal's word blocks. The cells are sized to the page, `pageWidth`
+    /// across, not to the picture of it: a page in a narrow view (the dock) fills more of its
+    /// picture, and cells that kept to the picture would leave its words readable.
+    static func mosaic(_ image: NSImage, pageWidth: CGFloat) -> NSImage? {
+        guard let cg = image.cgImage(forProposedRect: nil, context: nil, hints: nil), pageWidth > 0 else { return nil }
+        let scale = CGFloat(cg.width) / pageWidth
+        let w = max(1, Int(CGFloat(cg.width) / (mosaicCell.width * scale))), h = max(1, Int(CGFloat(cg.height) / (mosaicCell.height * scale)))
         guard let ctx = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: 0,
                                   space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
         ctx.interpolationQuality = .medium
