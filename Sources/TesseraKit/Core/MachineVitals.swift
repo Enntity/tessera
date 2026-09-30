@@ -41,30 +41,23 @@ public struct MachineVitals: Codable, Identifiable, Hashable, Sendable {
     public var gpuPowerW: Double?
     public var load: Double?
     public var cores: Int?
-    public var cpuHistory: [Double]
-    public var gpuHistory: [Double]
-    public var updatedAt: Date
 
     public init(id: String, name: String, isLocal: Bool, status: Status = .connecting) {
         self.id = id
         self.name = name
         self.isLocal = isLocal
         self.status = status
-        self.cpuHistory = []
-        self.gpuHistory = []
-        self.updatedAt = Date()
     }
 
-    static let historyLength = 40
-
-    public mutating func record(cpu: Double?, gpu: Double?) {
-        self.cpu = cpu
-        self.gpu = gpu
-        if let cpu { cpuHistory.append(cpu) }
-        if let gpu { gpuHistory.append(gpu) }
-        if cpuHistory.count > Self.historyLength { cpuHistory.removeFirst(cpuHistory.count - Self.historyLength) }
-        if gpuHistory.count > Self.historyLength { gpuHistory.removeFirst(gpuHistory.count - Self.historyLength) }
-        updatedAt = Date()
+    /// Rounds readings to what the chip shows (whole percent and degrees), so a poll that changes
+    /// nothing visible leaves the value equal and re-renders nothing.
+    public mutating func quantize() {
+        func percent(_ v: Double?) -> Double? { v.map { ($0 * 100).rounded() / 100 } }
+        cpu = percent(cpu)
+        gpu = percent(gpu)
+        memory = percent(memory)
+        temperature = temperature?.rounded()
+        hottestSensor = hottestSensor?.rounded()
     }
 }
 

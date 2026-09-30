@@ -402,6 +402,22 @@ final class TileGroupsTests: XCTestCase {
 }
 
 final class RemoteVitalsTests: XCTestCase {
+    func testQuantizedReadingsDifferOnlyWhenTheChipWould() {
+        var a = MachineVitals(id: "m", name: "m", isLocal: true)
+        a.cpu = 0.4213
+        a.memory = 0.6671
+        a.temperature = 58.3
+        var b = a
+        b.cpu = 0.4189
+        b.temperature = 57.8
+        a.quantize()
+        b.quantize()
+        XCTAssertEqual(a, b)
+        b.cpu = 0.436
+        b.quantize()
+        XCTAssertNotEqual(a, b)
+    }
+
     let sample = """
     @stat cpu  13388591 4655 4582035 301064634 1058763 0 17213 0 0 0
     @memtotal 127600812

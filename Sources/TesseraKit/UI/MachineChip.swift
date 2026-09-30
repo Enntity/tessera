@@ -100,6 +100,5 @@ struct LevelBar: View {
             }
             Text(label).font(Style.mono(6.5, .bold)).foregroundStyle(Style.faint)
         }
-        .animation(.spring(duration: 0.5), value: v)
     }
 }

@@ -201,7 +201,7 @@ struct MachineStrip: View {
             }
             Menu {
                 let known = Set(monitor.remotes.compactMap(\.sshHost))
-                let hosts = MachineMonitor.suggestedHosts().filter { !known.contains($0) }
+                let hosts = monitor.suggestedHosts().filter { !known.contains($0) }
                 ForEach(hosts, id: \.self) { host in
                     Button(host) { monitor.add(host: host, name: nil) }
                 }
@@ -217,7 +217,7 @@ struct MachineStrip: View {
             .menuIndicator(.hidden)
             .fixedSize()
             .help("Watch another machine over SSH")
-            TimelineView(.periodic(from: .now, by: 1)) { ctx in
+            TimelineView(.everyMinute) { ctx in
                 Text(ctx.date, format: .dateTime.hour().minute())
                     .font(Style.mono(13, .semibold))
                     .foregroundStyle(Style.ink)

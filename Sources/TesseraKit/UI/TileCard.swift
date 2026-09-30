@@ -1,5 +1,8 @@
 import SwiftUI
 
+/// One phase for every tile's age clock, so their updates land together.
+private let ageClockStart = Date()
+
 /// The chrome around every tile: identity, state, and an attention signal you can catch in
 /// peripheral vision across a large screen.
 public struct TileCard<Content: View>: View {
@@ -73,7 +76,7 @@ public struct TileCard<Content: View>: View {
                 .foregroundStyle(info.detail != nil && info.activity.isAttention ? Style.state(info.activity) : Style.dim)
                 .lineLimit(1)
             Spacer(minLength: 4)
-            TimelineView(.periodic(from: .now, by: 15)) { ctx in
+            TimelineView(.periodic(from: ageClockStart, by: 15)) { ctx in
                 Text(info.lastActivityAt.shortAge(now: ctx.date))
                     .font(Style.mono(9))
                     .foregroundStyle(Style.faint)
