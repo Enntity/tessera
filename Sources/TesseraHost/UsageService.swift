@@ -19,6 +19,8 @@ public final class UsageService {
     @ObservationIgnored private var failures: [String: Int] = [:]
     @ObservationIgnored private var lastGood: [String: Date] = [:]
     @ObservationIgnored private let claudeLocal = ClaudeLocalUsage()
+    /// Providers shown with fixed readings (`pin`), never asked.
+    @ObservationIgnored private var pinned: Set<String> = []
     /// The user agreed to Tessera reading Claude Code's `/usage` in the background (`ClaudeUsageProbe`).
     public private(set) var claudeChecksOn = Preferences.store.bool(forKey: "tessera.claudeUsageChecks") {
         didSet { Preferences.store.set(claudeChecksOn, forKey: "tessera.claudeUsageChecks") }
@@ -100,6 +102,18 @@ public final class UsageService {
         }
     }
 
+    #if DEBUG
+    /// Development aid (`scripts/demo-shot.sh`): shows these readings, as of now, for the connected
+    /// providers they name.
+    public func pin(_ pins: [UsageReading]) {
+        for var r in pins where configs.contains(where: { $0.id == r.id }) {
+            r.updatedAt = Date()
+            pinned.insert(r.id)
+            readings[r.id] = r
+        }
+    }
+    #endif
+
     public func add(_ config: UsageProviderConfig, key: String?) {
         configs.removeAll { $0.id == config.id }
         configs.append(config)
@@ -142,6 +156,7 @@ public final class UsageService {
     public func refresh(_ config: UsageProviderConfig, force: Bool = false) {
         let spec = config.kind.spec
         let now = Date()
+        guard !pinned.contains(config.id) else { return }
         if config.kind != .codexPlan {
             if let until = retryAt[config.id], now < until { return }
             if !force, let last = lastAttempt[config.id], now.timeIntervalSince(last) < UsageAPI.minimumInterval(for: config.kind) { return }

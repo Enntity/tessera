@@ -21,7 +21,8 @@ extension AppModel {
     /// Actions, separated by `;`:
     /// - set-up, straight into the workspace: `cwd=<dir>` (where the next tiles start), `launch=<cmd>`,
     ///   `url=<url>`, `tab=<name>` (a tab holding the first two tiles), `shutdown`, `rename=<title>` (the
-    ///   selected tile), `machine=<ssh host>`, `remote`, `pairurl=<file>`, `privacy[=off]`, `lane[=off]`,
+    ///   selected tile), `machine=<ssh host>`, `vitals=<file>` and `accounts=<file>` (machine and account
+    ///   readings, JSON `[MachineVitals]` and `[UsageReading]`, shown as they are from then on), `remote`, `pairurl=<file>`, `privacy[=off]`, `lane[=off]`,
     ///   `size=<w>x<h>`, `wait=<s>`, `pace=<s>` (the gap between the actions that follow; 1 s unless set);
     /// - what a user does: `select=<title>`, `open[=terminal|web|<title>|<id>]` (never an app conversation),
     ///   `click=<title>` or `click=<x>,<y>` (a tile, or a point in the window) and `dblclick=…`,
@@ -53,6 +54,8 @@ extension AppModel {
             case "shutdown": if let id = workspace.selectedId { workspace.shutDown(id) }
             case "rename": if let id = workspace.selectedId { workspace.rename(id, to: arg) }
             case "machine": workspace.machines.add(host: arg, name: nil)
+            case "vitals": debugRead([MachineVitals].self, arg).map(workspace.machines.pin)
+            case "accounts": debugRead([UsageReading].self, arg).map(workspace.usage.pin)
             case "remote": server.start() // not persisted: normal launches keep the user's setting
             case "pairurl": try? server.pairingURL?.absoluteString.write(toFile: arg, atomically: true, encoding: .utf8)
             case "privacy": privacyMode = arg != "off"
@@ -138,6 +141,10 @@ extension AppModel {
             }
             runDebugActions(Array(actions.dropFirst()), after: next, pace: pace)
         }
+    }
+
+    private func debugRead<T: Decodable>(_ type: T.Type, _ path: String) -> T? {
+        (try? Data(contentsOf: URL(fileURLWithPath: path))).flatMap { try? JSONDecoder().decode(type, from: $0) }
     }
 
     /// The first tile on show of that kind (`terminal`, `web`, `conversation`: a Claude or Codex one,

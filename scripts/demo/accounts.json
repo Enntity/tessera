@@ -1,0 +1,13 @@
+[
+  {"id": "codex-plan", "name": "ChatGPT / Codex plan", "symbol": "chevron.left.forwardslash.chevron.right", "headline": "61% left",
+   "remaining": 0.61, "lines": ["5h 39% used · resets in 2h 4m", "Week 27% used · resets in 4d", "Plan: pro"], "status": "ok", "updatedAt": 0},
+  {"id": "claude-plan", "name": "Claude plan", "symbol": "sparkle", "headline": "72% left", "remaining": 0.72,
+   "lines": ["5h 28% used · resets 11:50am", "Week 19% used · resets Oct 7 at 9am"], "status": "ok", "updatedAt": 0},
+  {"id": "openrouter", "name": "OpenRouter", "symbol": "arrow.triangle.branch", "headline": "$184.20 left", "remaining": 0.614,
+   "lines": ["Used $115.80 of $300.00"], "status": "ok", "updatedAt": 0},
+  {"id": "anthropic", "name": "Anthropic API", "symbol": "a.circle", "headline": "$412.37 this month", "remaining": 0.588,
+   "lines": ["Budget $1000.00 · $587.63 left"], "status": "ok", "updatedAt": 0},
+  {"id": "deepseek", "name": "DeepSeek", "symbol": "water.waves", "headline": "$37.41 left", "lines": [], "status": "ok", "updatedAt": 0},
+  {"id": "moonshot", "name": "Moonshot / Kimi", "symbol": "moon.stars", "headline": "$18.90 left",
+   "lines": ["Includes $5.00 vouchers"], "status": "ok", "updatedAt": 0}
+]

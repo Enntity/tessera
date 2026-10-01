@@ -1,0 +1,12 @@
+[
+  {"id": "local", "name": "MacBook Pro", "isLocal": true, "status": "ok", "cpu": 0.34, "gpu": 0.41, "memory": 0.74,
+   "memoryTotalGB": 128, "temperature": 54, "gpuName": "Apple GPU", "cores": 16},
+  {"id": "spark01", "name": "spark01", "isLocal": false, "status": "ok", "cpu": 0.46, "gpu": 0.96, "memory": 0.91,
+   "memoryTotalGB": 119.7, "temperature": 79, "hottestSensor": 71, "gpuName": "NVIDIA GB10", "gpuPowerW": 68, "load": 9.4, "cores": 20},
+  {"id": "spark02", "name": "spark02", "isLocal": false, "status": "ok", "cpu": 0.52, "gpu": 0.94, "memory": 0.93,
+   "memoryTotalGB": 119.7, "temperature": 81, "hottestSensor": 73, "gpuName": "NVIDIA GB10", "gpuPowerW": 71, "load": 11.2, "cores": 20},
+  {"id": "spark03", "name": "spark03", "isLocal": false, "status": "ok", "cpu": 0.31, "gpu": 0.63, "memory": 0.58,
+   "memoryTotalGB": 119.7, "temperature": 66, "hottestSensor": 61, "gpuName": "NVIDIA GB10", "gpuPowerW": 41, "load": 5.1, "cores": 20},
+  {"id": "spark04", "name": "spark04", "isLocal": false, "status": "ok", "cpu": 0.58, "gpu": 0.99, "memory": 0.87,
+   "memoryTotalGB": 119.7, "temperature": 83, "hottestSensor": 75, "gpuName": "NVIDIA GB10", "gpuPowerW": 74, "load": 12.6, "cores": 20}
+]

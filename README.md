@@ -203,8 +203,10 @@ land while the copy is in the background. A scripted run never opens the Claude 
 records what it would have opened), and the copy posts no notifications. With
 `TESSERA_DEBUG_HOME=<dir>` its board has none of your own app sessions on it.
 `scripts/demo-shot.sh` makes the screenshot above from made-up data only: invented Claude and Codex
-conversations in a throwaway home folder (`scripts/demo/make-fixtures.py`), mock agents in the
-terminals (`scripts/demo/agent.sh`) and a mock dashboard page.
+conversations in a throwaway home folder (`scripts/demo/make-fixtures.py`), mock agent CLIs in the
+terminals (`scripts/demo/mock.sh`) and mock pages. `scripts/demo-shot.sh full` makes a busier one
+([docs/tessera-full.png](docs/tessera-full.png)): 30 tiles, with fixed readings for four made-up
+Sparks and six accounts (`scripts/demo/*.json`, through the debug build's `vitals=` and `accounts=`).
 `swift scripts/make-icons.swift` regenerates the icons.
 
 ## Architecture

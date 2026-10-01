@@ -30,6 +30,8 @@ public final class MachineMonitor {
     @ObservationIgnored private var inFlight: Set<String> = []
     @ObservationIgnored private var lastCPU: [String: RemoteVitals.CPUSample] = [:]
     @ObservationIgnored private var tick = 0
+    /// Machines shown with fixed readings (`pin`), never sampled.
+    @ObservationIgnored private var pinned: Set<String> = []
 
     public init(directory: URL) {
         store = directory.appendingPathComponent("machines.json")
@@ -84,6 +86,18 @@ public final class MachineMonitor {
         return hosts
     }
 
+    #if DEBUG
+    /// Development aid (`scripts/demo-shot.sh`): shows these readings, as they are, from now on.
+    /// Machines not watched yet are added for this run only.
+    public func pin(_ readings: [MachineVitals]) {
+        for r in readings {
+            if !ids.contains(r.id) { remotes.append(MachineConfig(id: r.id, name: r.name, sshHost: r.name)) }
+            pinned.insert(r.id)
+            publish(r)
+        }
+    }
+    #endif
+
     private func save() {
         StateFile.save(remotes, to: store)
     }
@@ -106,7 +120,7 @@ public final class MachineMonitor {
 
     private func apply(_ sample: LocalSampler.Sample) {
         sampling = false
-        guard var v = vitals[Self.localId] else { return }
+        guard !pinned.contains(Self.localId), var v = vitals[Self.localId] else { return }
         v.status = .ok
         v.cpu = sample.cpu
         v.gpu = sample.gpu
@@ -128,7 +142,7 @@ public final class MachineMonitor {
     }
 
     private func pollRemote(_ config: MachineConfig) {
-        guard let host = config.sshHost, !inFlight.contains(config.id) else { return }
+        guard let host = config.sshHost, !inFlight.contains(config.id), !pinned.contains(config.id) else { return }
         inFlight.insert(config.id)
         SSHProbe.run(host: host, command: RemoteVitals.script) { result in
             DispatchQueue.main.async {
