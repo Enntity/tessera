@@ -113,7 +113,7 @@ public extension UsageProviderKind {
                   keyHint: "xai-…", help: "xAI API key. Shows key status; top up in the console.")
         case .claudePlan:
             .init(name: "Claude plan", symbol: "sparkle", topUpURL: "https://claude.ai/settings/usage",
-                  keyHint: nil, help: "The 5-hour and weekly limits Claude Code reports to its status line, and usage counted from your local Claude transcripts. No key needed.")
+                  keyHint: nil, help: "Usage counted from your local Claude transcripts, and — once you choose Show plan limits on its card — the 5-hour and weekly limits from Claude Code's /usage. No key needed.")
         case .codexPlan:
             .init(name: "ChatGPT / Codex plan", symbol: "chevron.left.forwardslash.chevron.right", topUpURL: "https://chatgpt.com/codex/settings/usage",
                   keyHint: nil, help: "Reads the rate limits Codex records in ~/.codex/sessions. No key needed.")

@@ -10,9 +10,9 @@ import TesseraKit
 public final class MachineMonitor {
     public private(set) var remotes: [MachineConfig] = []
     public private(set) var vitals: [String: MachineVitals] = [:]
-    /// What each machine's chip says in words (`MachineVitals.face`), and its recent load for the
-    /// sparklines. Each apart from `vitals`, so that a sample redraws the loads and leaves the
-    /// words, and the bar they are laid out in, alone.
+    /// What each machine's chip says in words (`MachineVitals.face`), apart from `vitals`, so that a
+    /// sample redraws the load and memory bars and leaves the words, and the bar they are laid out
+    /// in, alone.
     public private(set) var faces: [String: MachineVitals] = [:]
 
     public static let localId = "local"

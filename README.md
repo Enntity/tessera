@@ -8,6 +8,10 @@ and you are back on the board.
 
 Native macOS app, with a focused iOS companion built on the same core.
 
+![Tessera: a board of agent sessions, terminals and a web page, with the Needs-you lane on the left, a docked terminal and the accounts sidebar](docs/tessera.png)
+
+<sub>Made-up data throughout (`scripts/demo-shot.sh` regenerates it).</sub>
+
 ## What it does
 
 - **Live terminal tiles.** Real PTYs (SwiftTerm). Thumbnails redraw from the terminal buffer at up
@@ -177,8 +181,8 @@ across rebuilds.
 
 On first use macOS asks for: **Accessibility** (to place the Claude/Codex window where a tile
 opens), **Notifications** (attention alerts while Tessera is in the background), **Local Network**
-(only if you turn on the iPhone link), and a **Keychain** prompt if you add the Claude plan
-provider. Everything else is optional and detected: the agent CLIs, the Claude and Codex apps,
+(only if you turn on the iPhone link), and **Keychain** access for the API keys you give usage
+providers. Everything else is optional and detected: the agent CLIs, the Claude and Codex apps,
 dsh, zsh or fish for command tracking, and ssh (plus `nvidia-smi` on GPU hosts) for machine chips.
 The SoC temperature on this Mac comes from IOKit's HID sensor SPI, looked up at runtime; if a macOS
 update removes it, the chip just omits the temperature.
@@ -198,6 +202,9 @@ list is in `Sources/TesseraMac/DebugActions.swift`) and writes window captures t
 land while the copy is in the background. A scripted run never opens the Claude or Codex app (it
 records what it would have opened), and the copy posts no notifications. With
 `TESSERA_DEBUG_HOME=<dir>` its board has none of your own app sessions on it.
+`scripts/demo-shot.sh` makes the screenshot above from made-up data only: invented Claude and Codex
+conversations in a throwaway home folder (`scripts/demo/make-fixtures.py`), mock agents in the
+terminals (`scripts/demo/agent.sh`) and a mock dashboard page.
 `swift scripts/make-icons.swift` regenerates the icons.
 
 ## Architecture

@@ -1,0 +1,32 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Deploys · production</title>
+<style>
+  body { margin: 0; font: 15px -apple-system, sans-serif; background: #0f1218; color: #d8dde6; }
+  header { padding: 18px 28px; border-bottom: 1px solid #222833; display: flex; gap: 14px; align-items: center; }
+  header b { font-size: 18px; } .pill { background: #173b2c; color: #5ee0a6; border-radius: 99px; padding: 3px 10px; font-size: 12px; }
+  main { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; padding: 24px 28px; }
+  .card { background: #161b24; border: 1px solid #232a36; border-radius: 10px; padding: 16px; }
+  .label { color: #7d8697; font-size: 12px; text-transform: uppercase; letter-spacing: .06em; }
+  .value { font-size: 30px; font-weight: 600; margin-top: 6px; }
+  .bars { display: flex; align-items: flex-end; gap: 5px; height: 90px; margin-top: 12px; }
+  .bars i { flex: 1; background: linear-gradient(#46d6e8, #2a7f8c); border-radius: 3px 3px 0 0; }
+  table { width: 100%; border-collapse: collapse; margin-top: 8px; } td { padding: 8px 4px; border-top: 1px solid #232a36; }
+  .ok { color: #5ee0a6; } .wide { grid-column: span 3; }
+</style></head>
+<body>
+<header><b>Deploys</b><span class="pill">all systems normal</span></header>
+<main>
+  <div class="card"><div class="label">Requests / min</div><div class="value">24.8k</div>
+    <div class="bars"><i style="height:40%"></i><i style="height:55%"></i><i style="height:48%"></i><i style="height:70%"></i><i style="height:62%"></i><i style="height:85%"></i><i style="height:77%"></i><i style="height:92%"></i></div></div>
+  <div class="card"><div class="label">Error rate</div><div class="value">0.27%</div>
+    <div class="bars"><i style="height:20%"></i><i style="height:14%"></i><i style="height:25%"></i><i style="height:12%"></i><i style="height:18%"></i><i style="height:10%"></i><i style="height:15%"></i><i style="height:9%"></i></div></div>
+  <div class="card"><div class="label">p95 latency</div><div class="value">186 ms</div>
+    <div class="bars"><i style="height:60%"></i><i style="height:58%"></i><i style="height:66%"></i><i style="height:52%"></i><i style="height:49%"></i><i style="height:47%"></i><i style="height:44%"></i><i style="height:41%"></i></div></div>
+  <div class="card wide"><div class="label">Recent deploys</div>
+    <table>
+      <tr><td>api</td><td>v4.18.2</td><td class="ok">healthy</td><td>4 min ago</td></tr>
+      <tr><td>web</td><td>v9.3.0</td><td class="ok">healthy</td><td>31 min ago</td></tr>
+      <tr><td>worker</td><td>v2.7.1</td><td class="ok">healthy</td><td>2 h ago</td></tr>
+    </table></div>
+</main>
+</body></html>
