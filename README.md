@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/assets/banner.png" alt="Tessera: mission control for AI work" width="100%">
+</p>
+
 # Tessera
 
 A mission-control board for AI work. Every running thing — terminals with Claude Code, Codex, Grok,
