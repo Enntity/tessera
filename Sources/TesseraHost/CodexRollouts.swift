@@ -4,12 +4,16 @@ import TesseraKit
 /// What the first line of a Codex rollout says about its session.
 struct CodexRolloutHead: Sendable {
     var originator: String
+    /// What launched the thread: `cli`, `exec`, `vscode` (the desktop app). Nil on older rollouts.
+    var source: String?
     var id: String
     var cwd: String
     var isSubagent: Bool
     var startedAt: Date?
 
-    var isDesktop: Bool { originator.localizedCaseInsensitiveContains("desktop") }
+    /// The app-bundled CLI reports the desktop originator for terminal sessions, so the launch
+    /// source decides; rollouts from before it existed fall back to the originator.
+    var isDesktop: Bool { source.map { $0 == "vscode" } ?? originator.localizedCaseInsensitiveContains("desktop") }
 }
 
 /// Codex writes every session (CLI or desktop) to `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl`.
@@ -59,8 +63,8 @@ enum CodexRollouts {
         var parser = CodexTranscriptParser()
         parser.ingest(line: Substring(String(decoding: data[..<newline], as: UTF8.self)))
         guard let originator = parser.originator, let id = parser.sessionId else { return nil }
-        return CodexRolloutHead(originator: originator, id: id, cwd: parser.cwd ?? "", isSubagent: parser.isSubagent,
-                                startedAt: parser.startedAt)
+        return CodexRolloutHead(originator: originator, source: parser.source, id: id, cwd: parser.cwd ?? "",
+                                isSubagent: parser.isSubagent, startedAt: parser.startedAt)
     }
 
     /// Matches Codex CLI tiles to the rollouts they started (see SessionBinding); desktop and helper

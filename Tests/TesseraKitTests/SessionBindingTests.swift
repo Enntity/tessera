@@ -43,6 +43,9 @@ final class SessionBindingTests: XCTestCase {
         try rollout("desk", startedAt: 1, originator: "Codex Desktop")
         try rollout("sub", startedAt: 2, extra: #","thread_source":"review""#)
         try rollout("r3", cwd: "/x", startedAt: 1)
+        // The app-bundled CLI reports the desktop originator; its launch source still binds.
+        try rollout("cli", startedAt: 40, originator: "Codex Desktop", extra: #","source":"cli""#)
+        try rollout("app", startedAt: 41, originator: "Codex Desktop", extra: #","source":"vscode""#)
 
         XCTAssertEqual(CodexRollouts.bind([candidate("a", "/w/.", at: 0)], claimed: [], root: root), ["a": "r1"])
         XCTAssertEqual(CodexRollouts.bind([candidate("a", "/w", at: 0)], claimed: ["r1"], root: root), ["a": "r2"])
@@ -52,6 +55,10 @@ final class SessionBindingTests: XCTestCase {
         // Nothing started after this launch; a continue matches what was written since instead.
         XCTAssertEqual(CodexRollouts.bind([candidate("c", "/w", at: 100)], claimed: [], root: root), [:])
         XCTAssertEqual(CodexRollouts.bind([candidate("c", "/w", at: 100, continuing: true)], claimed: [], root: root), ["c": "r1"])
+        // A source-marked CLI rollout binds even though the originator says desktop; a vscode
+        // (desktop app) rollout never does.
+        XCTAssertEqual(CodexRollouts.bind([candidate("d", "/w", at: 0)], claimed: ["r1", "r2"], root: root), ["d": "cli"])
+        XCTAssertEqual(CodexRollouts.bind([candidate("d", "/w", at: 0)], claimed: ["r1", "r2", "cli"], root: root), [:])
     }
 
     func testClaudeTranscriptsMatchEarliestFittingConversation() throws {
