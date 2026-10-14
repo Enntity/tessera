@@ -417,6 +417,23 @@ final class TranscriptParserTests: XCTestCase {
         XCTAssertEqual(s.activity, .needsInput)
     }
 
+    func testCodexSourceDistinguishesCLIFromDesktop() {
+        func parser(_ source: String) -> CodexTranscriptParser {
+            var p = CodexTranscriptParser()
+            p.ingest(line: #"{"timestamp":"2026-10-13T16:51:26.000Z","type":"session_meta","payload":{"id":"abc","cwd":"/tmp/x","originator":"Codex Desktop","source":"\#(source)"}}"#)
+            return p
+        }
+        // The app-bundled CLI reports the desktop originator; the launch source is what differs.
+        XCTAssertEqual(parser("cli").source, "cli")
+        XCTAssertEqual(parser("exec").source, "exec")
+        XCTAssertEqual(parser("vscode").source, "vscode")
+        // The old dict form (helpers) is not a launch source.
+        var p = CodexTranscriptParser()
+        p.ingest(line: #"{"timestamp":"2026-10-13T16:51:26.000Z","type":"session_meta","payload":{"id":"abc","cwd":"/tmp/x","originator":"Codex Desktop","source":{"subagent":{"other":"guardian"}},"thread_source":"guardian_review"}}"#)
+        XCTAssertEqual(p.source, nil)
+        XCTAssertEqual(p.isSubagent, true)
+    }
+
     func testCodexTurnAndApproval() {
         var p = CodexTranscriptParser()
         p.ingest(text: """

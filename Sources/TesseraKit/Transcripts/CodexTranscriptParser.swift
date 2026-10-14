@@ -9,6 +9,10 @@ public struct CodexTranscriptParser: TranscriptParser {
     public private(set) var lastEventAt: Date?
     public private(set) var cwd: String?
     public private(set) var originator: String?
+    /// What launched the thread: `cli`, `exec`, `vscode` (the desktop app), or a dict for helpers.
+    /// The originator alone can't tell CLI from desktop any more: the app-bundled CLI reports
+    /// "Codex Desktop" for terminal sessions too.
+    public private(set) var source: String?
     public private(set) var sessionId: String?
     /// Guardian reviews and spawned helpers are threads too, but not ones the user started.
     public private(set) var isSubagent = false
@@ -36,6 +40,7 @@ public struct CodexTranscriptParser: TranscriptParser {
         case "session_meta":
             cwd = payload["cwd"] as? String
             originator = payload["originator"] as? String
+            source = payload["source"] as? String
             sessionId = payload["id"] as? String ?? payload["session_id"] as? String
             startedAt = TranscriptSupport.date(payload["timestamp"]) ?? ts
             let threadSource = payload["thread_source"] as? String
