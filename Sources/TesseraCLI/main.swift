@@ -150,7 +150,8 @@ func rest(from index: Int) -> String { words.dropFirst(index).joined(separator: 
 func waitArgument(default value: Int) -> Int { Int(flag("--wait") ?? "") ?? value }
 
 do {
-    switch words.first ?? "help" {
+    // --help or -h anywhere prints usage; `tessera install --help` must not install.
+    switch has("--help") || words.contains("-h") ? "help" : (words.first ?? "help") {
     case "mcp":
         serveMCP()
     case "board":
