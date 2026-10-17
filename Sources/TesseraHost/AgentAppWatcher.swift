@@ -17,6 +17,11 @@ public struct AgentAppSession: Identifiable, Equatable, Sendable {
     /// The desktop app's own one-line turn summary (Claude writes these).
     public var summary: String?
     public var lastActivityAt: Date
+    /// 0...1, for work that reports how far along it is (LLooM jobs).
+    public var progress: Double? = nil
+    /// The conversation this one reports for (a LLooM job's `claude:<id>` / `codex:<id>`): opening
+    /// it goes there.
+    public var link: String? = nil
 }
 
 /// One session's latest state, observed on its own so a busy session re-renders only its tile.
@@ -46,6 +51,9 @@ public final class AgentAppWatcher {
 
     @ObservationIgnored private let scanner = TranscriptScanner()
     @ObservationIgnored private var scanning = false
+    /// What the last scan found, and what other sources publish (LLooM jobs): `sessions` is both.
+    @ObservationIgnored private var scanned: [String: AgentAppSession] = [:]
+    @ObservationIgnored private var external: [String: AgentAppSession] = [:]
 
     public init() {}
 
@@ -72,13 +80,26 @@ public final class AgentAppWatcher {
         }
     }
 
-    /// Writes only what changed: rewriting unchanged data would re-render the whole board every scan.
+    /// Sessions from another source, shown beside the ones found on disk. They join the board
+    /// with the first scan, so what had finished before Tessera opened doesn't light up.
+    public func setExternal(_ sessions: [AgentAppSession]) {
+        external = Dictionary(sessions.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+        if hasScanned { publish(rateLimits: nil) }
+    }
+
     private func apply(_ result: TranscriptScanner.Result) {
         scanning = false
         hasScanned = true
+        scanned = result.sessions
+        publish(rateLimits: result.rateLimits)
+    }
+
+    /// Writes only what changed: rewriting unchanged data would re-render the whole board every scan.
+    private func publish(rateLimits: CodexRateLimits?) {
+        let found = scanned.merging(external) { disk, _ in disk }
         var changed = false, cameOrWent = false
         var tiles = sessions
-        for (id, session) in result.sessions {
+        for (id, session) in found {
             if let tile = tiles[id] {
                 if tile.session != session { tile.session = session; changed = true }
             } else {
@@ -86,7 +107,7 @@ public final class AgentAppWatcher {
                 cameOrWent = true
             }
         }
-        for id in tiles.keys where result.sessions[id] == nil {
+        for id in tiles.keys where found[id] == nil {
             tiles[id] = nil
             cameOrWent = true
         }
@@ -94,7 +115,7 @@ public final class AgentAppWatcher {
             sessions = tiles
             changed = true
         }
-        if let limits = result.rateLimits, limits != codexRateLimits {
+        if let limits = rateLimits, limits != codexRateLimits {
             codexRateLimits = limits
             changed = true
         }
