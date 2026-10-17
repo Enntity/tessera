@@ -103,6 +103,14 @@ Native macOS app, with a focused iOS companion built on the same core.
   bars — GPU (CPU where there is no GPU to read) and memory — mint with headroom, amber busy, coral flat out;
   temperature and GPU watts under the name; hover for details, click a remote to open an ssh tile. A tile running
   `ssh` is named after its machine and says so in its footer, in place of the local folder.
+- **Fleet: shared hardware and agents' jobs.** Point Settings → Fleet at a
+  [LLooM](https://github.com/Enntity/lloom) head and its leases appear in a band over the board:
+  one chip per resource, showing who holds it, how long they have left and who is waiting. Jobs
+  that agents report (`lloom job start`, `progress`, `done`) become tiles, with their latest note,
+  progress bar and metrics on the card and their notes as the transcript. A finished, failed or
+  silent job lands in the Needs-you lane and notifies you, and so does a lease that is running out
+  or whose restore failed. Opening a job goes to the agent's own conversation when it reported one
+  (`--session`). The Jobs chip filters them. The admin key stays in your Keychain.
 - **Shut down & resume.** Quit Tessera (or shut tiles down) and every agent comes back in the same
   conversation — including ones you typed into a shell yourself, and through your own launchers
   (`codex-work` resumes as `codex-work resume <id>`). A tile that is shut down, exited or failed
