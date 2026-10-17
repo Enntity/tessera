@@ -7,7 +7,8 @@ let package = Package(
     products: [
         .library(name: "TesseraKit", targets: ["TesseraKit"]),
         .library(name: "TesseraHost", targets: ["TesseraHost"]),
-        .executable(name: "Tessera", targets: ["TesseraMac"])
+        .executable(name: "Tessera", targets: ["TesseraMac"]),
+        .executable(name: "tessera-cli", targets: ["TesseraCLI"])
     ],
     dependencies: [
         .package(url: "https://github.com/migueldeicaza/SwiftTerm", from: "1.9.0"),
@@ -20,17 +21,22 @@ let package = Package(
             name: "TesseraKit",
             dependencies: [.product(name: "SwiftTerm", package: "SwiftTerm")]
         ),
+        // Where Tessera's agent API is found; shared by the app and the `tessera` command, which
+        // stays Foundation-only.
+        .target(name: "TesseraAPI"),
         // macOS-only: owns processes, watches agent apps, places windows, serves remotes.
         .target(
             name: "TesseraHost",
-            dependencies: ["TesseraKit", .product(name: "SwiftTerm", package: "SwiftTerm"),
+            dependencies: ["TesseraKit", "TesseraAPI", .product(name: "SwiftTerm", package: "SwiftTerm"),
                            .product(name: "libzstd", package: "zstd")]
         ),
+        // `tessera`: agents' command line and stdio MCP server, talking to the running app.
+        .executableTarget(name: "TesseraCLI", dependencies: ["TesseraAPI"]),
         .executableTarget(
             name: "TesseraMac",
             dependencies: ["TesseraKit", "TesseraHost", .product(name: "SwiftTerm", package: "SwiftTerm")]
         ),
-        .testTarget(name: "TesseraKitTests", dependencies: ["TesseraKit", "TesseraHost",
+        .testTarget(name: "TesseraKitTests", dependencies: ["TesseraKit", "TesseraHost", "TesseraAPI",
                                                             .product(name: "libzstd", package: "zstd")])
     ],
     swiftLanguageModes: [.v5]

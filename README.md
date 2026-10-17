@@ -111,6 +111,23 @@ Native macOS app, with a focused iOS companion built on the same core.
   silent job lands in the Needs-you lane and notifies you, and so does a lease that is running out
   or whose restore failed. Opening a job goes to the agent's own conversation when it reported one
   (`--session`). The Jobs chip filters them. The admin key stays in your Keychain.
+- **Steward (Settings → Agents).** Point it at any OpenAI-compatible endpoint, such as a LLooM
+  gateway with a local model, and it keeps a one-line summary of each tile on the card's footer.
+  At the head of the Needs-you lane it writes a brief: what is going on in a sentence, what
+  finished, failed or started asking since you last looked, what needs you, and what can be put
+  away (Close all, with Undo). Tile text is sent with credentials removed, and nothing is sent in
+  privacy mode. It only suggests.
+- **Agents talk to Tessera, and through it to each other.** A `tessera` command, also an MCP
+  server (`tessera mcp`), lets any agent on the Mac see the board (`board`), read another tile
+  (`read`), find itself (`whoami`), message another agent (`send`, `inbox`), ask you something
+  (`ask`) and leave you a note (`notify`).
+  - Questions land in the Needs-you lane, as alerts and on the phone, with the agent's options as
+    one-tap answers and a reply field.
+  - A message is typed into a terminal agent's prompt only with your OK, unless you allow it
+    outright.
+  - It listens on 127.0.0.1 behind a token in a file only you can read; browser requests are refused.
+  - Settings → Agents → Install puts `tessera` on your PATH, installs the skill
+    (`skills/tessera`) for Claude Code and Codex, and registers the MCP server.
 - **Shut down & resume.** Quit Tessera (or shut tiles down) and every agent comes back in the same
   conversation — including ones you typed into a shell yourself, and through your own launchers
   (`codex-work` resumes as `codex-work resume <id>`). A tile that is shut down, exited or failed

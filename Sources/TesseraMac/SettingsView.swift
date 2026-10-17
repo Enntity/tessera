@@ -9,6 +9,7 @@ struct SettingsView: View {
             ProvidersSettings().tabItem { Label("Accounts", systemImage: "creditcard") }
             MachinesSettings().tabItem { Label("Machines", systemImage: "server.rack") }
             FleetSettings().tabItem { Label("Fleet", systemImage: AgentFlavor.lloom.symbol) }
+            AgentsSettings().tabItem { Label("Agents", systemImage: AgentFlavor.agentDesk.symbol) }
             RemoteSettings().tabItem { Label("iPhone", systemImage: "iphone") }
             GeneralSettings().tabItem { Label("General", systemImage: "gearshape") }
         }

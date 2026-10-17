@@ -60,7 +60,7 @@ public struct TileCard<Content: View>: View {
         .contentShape(Rectangle())
         // The whole title, which a narrow tile cuts short, and what the tile last said (not in
         // privacy mode, where that is kept off the screen).
-        .help([info.title, privacy ? nil : info.detail].compactMap { $0 }.joined(separator: "\n"))
+        .help([info.title, privacy ? nil : info.summary, privacy ? nil : info.detail].compactMap { $0 }.joined(separator: "\n"))
     }
 
     /// The tile's outline: a state that waits on the user lights it, otherwise it is a quiet
@@ -147,6 +147,9 @@ public struct TileCard<Content: View>: View {
             Spacer(minLength: Style.Space.xs)
             if info.activity == .failed, let detail = info.detail {
                 Text(detail).foregroundStyle(Style.coral).lineLimit(1)
+            } else if let summary = info.summary {
+                // The steward's line on it, ahead of the folder when space is short.
+                Text(privacy ? summary.obscured(true) : summary).foregroundStyle(Style.dim).lineLimit(1).layoutPriority(1)
             }
             Age(of: info.lastActivityAt)
         }

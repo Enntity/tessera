@@ -56,6 +56,7 @@ public enum Style {
         case .omp: Color(red: 0.70, green: 0.52, blue: 1.00)
         case .opencode, .aider: Color(red: 0.95, green: 0.60, blue: 0.85)
         case .lloom: Color(red: 0.55, green: 0.80, blue: 0.70)
+        case .agentDesk: Color(red: 0.98, green: 0.80, blue: 0.45)
         case .shell, .custom, .web: dim
         }
     }

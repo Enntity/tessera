@@ -53,7 +53,7 @@ public final class AgentAppWatcher {
     @ObservationIgnored private var scanning = false
     /// What the last scan found, and what other sources publish (LLooM jobs): `sessions` is both.
     @ObservationIgnored private var scanned: [String: AgentAppSession] = [:]
-    @ObservationIgnored private var external: [String: AgentAppSession] = [:]
+    @ObservationIgnored private var external: [String: [String: AgentAppSession]] = [:]
 
     public init() {}
 
@@ -82,8 +82,8 @@ public final class AgentAppWatcher {
 
     /// Sessions from another source, shown beside the ones found on disk. They join the board
     /// with the first scan, so what had finished before Tessera opened doesn't light up.
-    public func setExternal(_ sessions: [AgentAppSession]) {
-        external = Dictionary(sessions.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+    public func setExternal(_ sessions: [AgentAppSession], source: String) {
+        external[source] = Dictionary(sessions.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
         if hasScanned { publish(rateLimits: nil) }
     }
 
@@ -96,7 +96,7 @@ public final class AgentAppWatcher {
 
     /// Writes only what changed: rewriting unchanged data would re-render the whole board every scan.
     private func publish(rateLimits: CodexRateLimits?) {
-        let found = scanned.merging(external) { disk, _ in disk }
+        let found = external.values.reduce(scanned) { $0.merging($1) { disk, _ in disk } }
         var changed = false, cameOrWent = false
         var tiles = sessions
         for (id, session) in found {
