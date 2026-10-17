@@ -5,7 +5,7 @@ public struct BoardQuery: Equatable, Sendable {
     /// A filter chip: what a tile is doing (a state), or what it is (a kind).
     public enum Chip: String, CaseIterable, Identifiable, Sendable {
         case needsYou, working
-        case terminals, claude, codex, dsh, jobs, web
+        case terminals, claude, codex, dsh, zcode, jobs, web
 
         public var id: String { rawValue }
 
@@ -14,7 +14,7 @@ public struct BoardQuery: Equatable, Sendable {
             switch self {
             case .needsYou: .needsInput
             case .working: .working
-            case .terminals, .claude, .codex, .dsh, .jobs, .web: nil
+            case .terminals, .claude, .codex, .dsh, .zcode, .jobs, .web: nil
             }
         }
 
@@ -26,6 +26,7 @@ public struct BoardQuery: Equatable, Sendable {
             case .claude: .claudeDesktop
             case .codex: .codexDesktop
             case .dsh: .dsh
+            case .zcode: .zcodeDesktop
             case .jobs: .lloom
             case .web: .web
             }
@@ -37,6 +38,7 @@ public struct BoardQuery: Equatable, Sendable {
             case .needsYou: TileActivity.needsYouLabel
             case .terminals: "Terminals"
             case .dsh: "dsh"
+            case .zcode: "ZCode"
             case .jobs: "Jobs"
             default: activity?.label ?? flavor?.displayName ?? rawValue
             }
@@ -50,6 +52,7 @@ public struct BoardQuery: Equatable, Sendable {
             case .claude: tile.flavor == .claude || tile.flavor == .claudeDesktop
             case .codex: tile.flavor == .codex || tile.flavor == .codexDesktop
             case .dsh: tile.flavor == .dsh
+            case .zcode: tile.flavor == .zcodeDesktop
             case .jobs: tile.flavor == .lloom
             case .web: tile.kind == .browser
             }

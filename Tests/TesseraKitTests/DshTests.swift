@@ -124,12 +124,38 @@ final class DshWebServerTests: XCTestCase {
     /// Startup files can print anything; only the probe's tagged lines count.
     func testLauncherFromTaggedProbeOutput() {
         let noisy = "Welcome back!\n/not/a/path\n@path /opt/bin:/usr/bin\n@npx /opt/bin/npx\n"
-        XCTAssertEqual(DshWebServer.launcher(fromProbe: noisy).map { [$0.0] + $0.1 + [$0.2] },
-                       ["/opt/bin/npx", "-y", "@deepseek-ai/dsh", "/opt/bin:/usr/bin"])
-        XCTAssertEqual(DshWebServer.launcher(fromProbe: noisy + "@dsh /opt/bin/dsh\n")?.0, "/opt/bin/dsh")
-        // An alias isn't something to run; nothing found means not installed.
+        XCTAssertEqual(DshWebServer.launcher(fromProbe: noisy), nil)
+        XCTAssertEqual(DshWebServer.launcher(fromProbe: noisy + "@dsh /opt/bin/dsh\n"),
+                       DshWebServer.Launcher(executable: "/opt/bin/dsh", arguments: [], path: "/opt/bin:/usr/bin", environment: [:]))
+        // An alias isn't something to run; absent app/CLI means not installed.
         XCTAssertNil(DshWebServer.launcher(fromProbe: "@path /usr/bin\n@dsh alias dsh='x'\n"))
         XCTAssertNil(DshWebServer.launcher(fromProbe: "@dsh /opt/bin/dsh\n"))
+    }
+
+    func testPackagedHarnessRuntimeRunsItsBundledCliWithoutNpx() throws {
+        let app = FileManager.default.temporaryDirectory.appendingPathComponent("Harness-\(UUID().uuidString).app")
+        defer { try? FileManager.default.removeItem(at: app) }
+        let executable = app.appendingPathComponent("Contents/MacOS/DeepSeek Harness")
+        let archive = app.appendingPathComponent("Contents/Resources/app.asar")
+        try FileManager.default.createDirectory(at: executable.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: archive.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("synthetic executable".utf8).write(to: executable)
+        try Data("synthetic ASAR archive".utf8).write(to: archive)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: executable.path)
+
+        let launcher = try XCTUnwrap(DshWebServer.packagedLauncher(appURL: app, path: "/installed/runtime"))
+        XCTAssertEqual(launcher.executable, executable.path)
+        XCTAssertEqual(launcher.arguments, [archive.path + "/dsh/node_modules/@deepseek-ai/dsh/lib/bin.js"])
+        XCTAssertEqual(launcher.environment, ["ELECTRON_RUN_AS_NODE": "1"])
+        XCTAssertEqual(launcher.path, "/installed/runtime")
+        XCTAssertFalse(launcher.arguments.contains(where: { $0 == "-y" || $0 == "npx" }))
+    }
+
+    func testSessionSelectionScriptEscapesTitleAndFolder() {
+        let js = Workspace.selectDshSessionScript(title: #"Fix "quotes" & </script>"#, folder: "enn'tity")
+        XCTAssertTrue(js.contains(#"Fix \"quotes\""#))
+        XCTAssertTrue(js.contains(#"["enn'tity"][0]"#))
+        XCTAssertTrue(js.contains("more sessions") && js.contains("aria-expanded"))
     }
 
     /// A startup file that hangs can't hang the probe: interactive shells ignore SIGTERM, and what

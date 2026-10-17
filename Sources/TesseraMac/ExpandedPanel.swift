@@ -299,6 +299,11 @@ struct AgentPanel: View {
                         } label: { Label("Open in \(session?.flavor.displayName ?? "App")", systemImage: "arrow.up.forward.app") }
                             .buttonStyle(.capsulePrimary)
                             .keyboardShortcut("o")
+                    } else if let app = workspace.appForFocus(id) {
+                        Button {
+                            workspace.openApplication(app)
+                        } label: { Label("Open \(app.flavor.displayName)", systemImage: "arrow.up.forward.app") }
+                            .buttonStyle(.capsulePrimary)
                     }
                 }
             }
