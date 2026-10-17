@@ -22,6 +22,16 @@ public final class Workspace {
     public let machines: MachineMonitor
     /// A LLooM head's leases and agents' jobs (the Fleet band; jobs are tiles).
     public let fleet: FleetService
+    /// What agents leave for the user and each other (questions, notes, messages).
+    public let desk: AgentDesk
+    /// The model that summarizes tiles and briefs the board.
+    public let steward: StewardService
+    /// Tessera's API for agents on this Mac (MCP over loopback; the `tessera` command).
+    public let agentTools = AgentTools()
+    public let agentServer: AgentServer
+    /// When the user last went away from Tessera (the app stopped being frontmost): the brief says
+    /// what happened since.
+    public var awaySince = Date()
     public private(set) var presets: [LaunchPreset] = LaunchCatalog.known
     /// Desktop agent apps on this Mac that can start conversations from Tessera.
     public let installedApps: [AgentApp] = AgentApp.allCases.filter {
@@ -95,6 +105,9 @@ public final class Workspace {
         usage = UsageService(directory: directory)
         machines = MachineMonitor(directory: directory)
         fleet = FleetService(directory: directory)
+        desk = AgentDesk(directory: directory)
+        steward = StewardService(directory: directory)
+        agentServer = AgentServer(directory: directory, tools: agentTools)
     }
 
     public func start() {
@@ -116,6 +129,14 @@ public final class Workspace {
         machines.start()
         fleet.onChange = { [weak self] in self?.fleetChanged() }
         fleet.start()
+        desk.onChange = { [weak self] in self?.deskChanged() }
+        desk.typeInto = { [weak self] id, text in self?.typeMessage(text, into: id) ?? false }
+        deskChanged()
+        steward.digests = { [weak self] in self?.stewardDigests() ?? [] }
+        steward.changes = { [weak self] in self.map { Steward.changes($0.allTiles, since: $0.awaySince) } ?? [] }
+        steward.start()
+        agentTools.attach(self)
+        agentServer.start()
         DispatchQueue.global(qos: .utility).async {
             let found = LaunchCatalog.detectInstalled()
             DispatchQueue.main.async { MainActor.assumeIsolated { self.presets = found } }
@@ -131,10 +152,14 @@ public final class Workspace {
     // MARK: Tiles
 
     public func info(_ id: String) -> TileInfo? {
-        if let t = terminals[id] { return t.info }
-        if let b = browsers[id] { return b.info }
-        if let a = agents.session(id) { return agentInfo(a) }
-        return nil
+        var info: TileInfo
+        if let t = terminals[id] { info = t.info } else if let b = browsers[id] { info = b.info } else if let a = agents.session(id) {
+            info = agentInfo(a)
+        } else {
+            return nil
+        }
+        info.summary = steward.summaries[id]?.summary
+        return info
     }
 
     /// Whether `id` is on the board (a closed app session is still known, but not on it). Unlike
@@ -252,6 +277,7 @@ public final class Workspace {
         if let t = terminals.removeValue(forKey: id) { t.terminate() }
         if let b = browsers.removeValue(forKey: id) { b.webView.stopLoading() }
         if agents.sessions[id] != nil { hiddenAgents[id] = Date() } else { groups.assign(id, to: nil) }
+        desk.setAside(id)
         // Its place as of now (an app session may have arrived since the board was last saved).
         rememberOrder()
         order.removeAll { $0 == id }
@@ -498,12 +524,14 @@ public final class Workspace {
         terminals[id]?.acknowledge()
         browsers[id]?.acknowledge()
         if agents.sessions[id] != nil { agentAcknowledged[id] = Date() }
+        desk.seen(id)
     }
 
     /// Takes a tile out of what needs the user without answering it (Mark as Seen, Dismiss): its
     /// result counts as seen, its question as set aside until the next one.
     public func dismiss(_ id: String) {
         acknowledge(id)
+        desk.setAside(id)
         terminals[id]?.dismissQuestion()
         if agents.sessions[id] != nil { agentDismissed[id] = Date() }
     }
@@ -650,7 +678,37 @@ public final class Workspace {
     }
 
     private func fleetChanged() {
-        agents.setExternal(fleet.items(lookback: agents.lookback).map(FleetService.session))
+        agents.setExternal(fleet.items(lookback: agents.lookback).map(FleetService.session), source: "fleet")
+    }
+
+    private func deskChanged() {
+        agents.setExternal(desk.sessions, source: "desk")
+    }
+
+    /// The board as the steward reads it: every tile with what it shows.
+    private func stewardDigests() -> [Steward.Digest] {
+        let now = Date()
+        return allTiles.filter { $0.flavor != .agentDesk }.map { tile in
+            let text: String
+            if let t = terminals[tile.id] {
+                text = t.terminal.screenTail(t.terminal.rows).joined(separator: "\n").trimmingCharacters(in: .newlines)
+            } else if let a = agents.session(tile.id) {
+                text = a.snapshot.items.suffix(8).map { "\($0.role.rawValue): \($0.text.preview(400))" }.joined(separator: "\n")
+            } else {
+                text = tile.url ?? ""
+            }
+            return Steward.Digest(tile, text: text, unseen: tile.isUnseen, now: now)
+        }
+    }
+
+    /// Types an agent's message into a terminal tile as a paste, then presses Return, the way the
+    /// user would. False when the tile isn't a running terminal.
+    func typeMessage(_ text: String, into id: String) -> Bool {
+        guard let t = terminals[id], t.isRunning else { return false }
+        let bracketed = t.terminal.bracketedPasteMode
+        t.send(Array(((bracketed ? "\u{1b}[200~" : "") + text + (bracketed ? "\u{1b}[201~" : "")).utf8))
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { t.send([13]) }
+        return true
     }
 
     /// The tile of the conversation a LLooM job or lease names (`claude:<id>`, `codex:<id>`): by its
