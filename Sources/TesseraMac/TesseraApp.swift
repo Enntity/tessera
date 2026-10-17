@@ -109,7 +109,14 @@ final class AppModel {
         started = true
         if handOffToRunningCopy() { return }
         workspace.onLink = { [weak self] url in self?.create { $0.openBrowser(url.absoluteString) } }
+        // In privacy mode the steward reads nothing and agents can't read tiles.
+        workspace.steward.paused = { [weak self] in self?.privacyMode ?? true }
+        workspace.agentTools.privacy = { [weak self] in self?.privacyMode ?? true }
         workspace.start()
+        // The brief says what happened since the user last went away from Tessera.
+        NotificationCenter.default.addObserver(forName: NSApplication.didResignActiveNotification, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.workspace.awaySince = Date() }
+        }
         reportUnreadableFiles()
         if Preferences.store.bool(forKey: "tessera.remoteEnabled") { server.start() }
         // Record every terminal's folder and conversation, then stop them, so next launch resumes.

@@ -9,11 +9,15 @@ app="${TESSERA_APP_PATH:-$root/.build/app/Tessera.app}"
 contents="$app/Contents"
 
 swift build --package-path "$root" -c "$configuration" --product Tessera >&2
+swift build --package-path "$root" -c "$configuration" --product tessera-cli >&2
 bin_dir=$(swift build --package-path "$root" -c "$configuration" --show-bin-path)
 
 /bin/rm -rf "$app"
-mkdir -p "$contents/MacOS" "$contents/Resources"
+mkdir -p "$contents/MacOS" "$contents/Resources" "$contents/Helpers"
 /usr/bin/ditto "$bin_dir/Tessera" "$contents/MacOS/Tessera"
+# Agents' `tessera` command (Settings → Agents installs it on PATH) and the skills it installs.
+/usr/bin/ditto "$bin_dir/tessera-cli" "$contents/Helpers/tessera-cli"
+/usr/bin/ditto "$root/skills" "$contents/Resources/skills"
 /usr/bin/ditto "$root/Resources/Info.plist" "$contents/Info.plist"
 if [[ -f "$root/Resources/AppIcon.icns" ]]; then
   /usr/bin/ditto "$root/Resources/AppIcon.icns" "$contents/Resources/AppIcon.icns"
@@ -35,5 +39,6 @@ if [[ -z "$identity" ]]; then
   echo "warning: no code-signing identity; Accessibility permission will need re-granting after each build" >&2
 fi
 echo "signing with: $(/usr/bin/security find-identity -v -p codesigning 2>/dev/null | /usr/bin/grep -F "$identity" | /usr/bin/sed -nE 's/.*"(.*)"$/\1/p' | /usr/bin/head -n 1 || true) ($identity)" >&2
+/usr/bin/codesign --force --sign "$identity" "$contents/Helpers/tessera-cli"
 /usr/bin/codesign --force --sign "$identity" "$app"
 echo "$app"

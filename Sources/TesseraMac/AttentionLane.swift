@@ -25,6 +25,7 @@ struct AttentionLane: View {
 
             ScrollView {
                 VStack(spacing: Style.Space.m) {
+                    BriefCard()
                     ForEach(queue, id: \.self) { id in
                         LaneRow(id: id, isNext: id == queue.first)
                             .transition(.scale(scale: 0.9).combined(with: .opacity))
@@ -34,7 +35,7 @@ struct AttentionLane: View {
                 .padding(Style.Space.l)
             }
             .overlay(alignment: .top) {
-                if queue.isEmpty {
+                if queue.isEmpty, !model.workspace.steward.config.enabled {
                     VStack(spacing: Style.Space.m) {
                         Image(systemName: "checkmark.circle").font(Style.title).foregroundStyle(Style.faint)
                         Text("All caught up").font(Style.ui(.label, .medium)).foregroundStyle(Style.muted)
@@ -98,6 +99,10 @@ struct LaneRow: View {
                 .buttonStyle(.plain)
                 if hovering, info.kind == .terminal, info.activity == .needsInput {
                     answers.padding(.horizontal, Style.Space.m).padding(.bottom, Style.Space.m)
+                }
+                // An agent's question or message waits here for its answer, pointer or not.
+                if info.flavor == .agentDesk, info.activity == .needsInput {
+                    DeskAnswers(id: id).padding(.horizontal, Style.Space.m).padding(.bottom, Style.Space.m)
                 }
             }
             .overlay(alignment: .topTrailing) {

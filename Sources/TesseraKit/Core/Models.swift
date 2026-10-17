@@ -23,6 +23,8 @@ public enum AgentFlavor: String, Codable, Sendable, CaseIterable {
     case web
     /// Jobs agents report to a LLooM head, and its leases that need the user.
     case lloom
+    /// What agents leave for the user through Tessera: questions, notes, messages to approve.
+    case agentDesk
 
     public var displayName: String {
         switch self {
@@ -40,6 +42,7 @@ public enum AgentFlavor: String, Codable, Sendable, CaseIterable {
         case .dsh: "DeepSeek"
         case .web: "Web"
         case .lloom: "LLooM"
+        case .agentDesk: "Tessera"
         }
     }
 
@@ -58,6 +61,7 @@ public enum AgentFlavor: String, Codable, Sendable, CaseIterable {
         case .dsh: "water.waves"
         case .web: "globe"
         case .lloom: "square.stack.3d.up"
+        case .agentDesk: "bubble.left.and.bubble.right"
         }
     }
 
@@ -150,6 +154,8 @@ public struct TileInfo: Codable, Identifiable, Hashable, Sendable {
     public var url: String?
     /// 0...1 when the program reports progress (OSC 9;4).
     public var progress: Double?
+    /// The steward's line on what the tile is doing.
+    public var summary: String?
 
     /// Why the tile waits on the user, in a line: its question, its error, what it finished with.
     public var reason: String {
