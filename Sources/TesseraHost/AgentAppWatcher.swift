@@ -156,6 +156,7 @@ final class TranscriptScanner: @unchecked Sendable {
     private var codexIndexModified: Date = .distantPast
     private var lastRateLimitScan: Date = .distantPast
     private var rateLimits: CodexRateLimits?
+    private let zcode = ZCodeSessionScanner()
 
     /// First read of a large transcript only looks at the end; the state we need is recent.
     static let initialTailBytes: UInt64 = 1_000_000
@@ -169,6 +170,7 @@ final class TranscriptScanner: @unchecked Sendable {
         for s in scanClaudeDesktop(lookback: lookback, now: now) { sessions[s.id] = s }
         for s in scanCodexDesktop(lookback: lookback, now: now) { sessions[s.id] = s }
         for s in scanDsh(lookback: lookback, now: now) { sessions[s.id] = s }
+        for s in zcode.scan(lookback: lookback, now: now) { sessions[s.id] = s }
         // Drop what belongs to transcripts and folders that aged out or went away.
         for path in tails.keys where !touched.contains(path) { tails[path] = nil }
         for path in claudeMeta.keys where !touched.contains(path) { claudeMeta[path] = nil }

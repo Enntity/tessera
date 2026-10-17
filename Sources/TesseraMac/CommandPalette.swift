@@ -140,9 +140,10 @@ extension AppModel {
         let apps = workspace.installedApps.map { app in
             let flavor = app.flavor
             return PaletteItem(id: "app-\(app.rawValue)", symbol: flavor.symbol, color: Style.accent(flavor),
-                               title: seed.map { "Ask \(flavor.displayName) app: “\($0.preview(50))”" } ?? app.newLabel,
-                               subtitle: "New conversation in the \(flavor.displayName) app · " + folder) {
-                self.newAppConversation(app, prompt: seed)
+                               title: app.canCreateConversation ? (seed.map { "Ask \(flavor.displayName) app: “\($0.preview(50))”" } ?? app.newLabel) : app.newLabel,
+                               subtitle: app.canCreateConversation ? "New conversation in the \(flavor.displayName) app · " + folder : "Open the installed \(flavor.displayName) app") {
+                if app.canCreateConversation { self.newAppConversation(app, prompt: seed) }
+                else { self.workspace.openApplication(app) }
             }
         }
         // A command is offered when its name is typed, or, with nothing typed, when it has something to do.

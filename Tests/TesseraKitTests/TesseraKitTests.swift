@@ -1047,15 +1047,22 @@ final class AgentAppTests: XCTestCase {
     func testConversationLinksAndNames() {
         XCTAssertEqual(AgentApp.claude.conversationURL("local_1")?.absoluteString, "claude://code/continue?session=local_1")
         XCTAssertEqual(AgentApp.codex.conversationURL("abc-1")?.absoluteString, "codex://threads/abc-1")
-        XCTAssertEqual(AgentApp.allCases.map(\.name), ["Claude app", "Codex app"])
+        XCTAssertEqual(AgentApp.allCases.map(\.name), ["Claude app", "Codex app", "DeepSeek app", "Enntity ZCode app"])
+        for app in [AgentApp.deepseekHarness, .zcode] {
+            XCTAssertNil(app.conversationURL("session-1"))
+            XCTAssertNil(app.newConversationURL(folder: "/w", prompt: "draft"))
+        }
     }
 
     func testOnlyInstalledAppsTakeTheirConversations() {
         XCTAssertEqual(AgentApp(flavor: .claudeDesktop), .claude)
         XCTAssertEqual(AgentApp(flavor: .codexDesktop), .codex)
-        // The CLIs and dsh are tiles on the board, not app conversations.
+        // The harness apps can be focused, while their selected transcripts stay on the board.
         XCTAssertNil(AgentApp(flavor: .claude))
-        XCTAssertNil(AgentApp(flavor: .dsh))
+        XCTAssertEqual(AgentApp(flavor: .dsh), .deepseekHarness)
+        XCTAssertEqual(AgentApp(flavor: .zcodeDesktop), .zcode)
+        XCTAssertNil(AgentApp.opening(.dsh, installed: AgentApp.allCases))
+        XCTAssertNil(AgentApp.opening(.zcodeDesktop, installed: AgentApp.allCases))
         XCTAssertEqual(AgentApp.opening(.codexDesktop, installed: [.claude, .codex]), .codex)
         XCTAssertNil(AgentApp.opening(.codexDesktop, installed: [.claude]))
         XCTAssertNil(AgentApp.opening(.shell, installed: AgentApp.allCases))

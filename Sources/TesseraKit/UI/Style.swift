@@ -53,6 +53,7 @@ public enum Style {
         case .grok: Color(red: 0.80, green: 0.82, blue: 0.86)
         case .gemini: Color(red: 0.40, green: 0.66, blue: 1.00)
         case .dsh: Color(red: 0.36, green: 0.49, blue: 1.00)
+        case .zcodeDesktop: Color(red: 0.78, green: 0.45, blue: 0.96)
         case .omp: Color(red: 0.70, green: 0.52, blue: 1.00)
         case .opencode, .aider: Color(red: 0.95, green: 0.60, blue: 0.85)
         case .lloom: Color(red: 0.55, green: 0.80, blue: 0.70)

@@ -20,6 +20,12 @@ Native macOS app, with a focused iOS companion built on the same core.
 
 - **Live terminal tiles.** Real PTYs (SwiftTerm). Thumbnails redraw from the terminal buffer at up
   to 10 fps: the whole screen when it fits readably, otherwise its latest output. Any CLI works.
+- **Paste and drop.** ⌘V and Edit → Paste send text, URLs, rich text as plain text, and copied files
+  into the terminal. Image and other non-text clipboard pastes in command tiles reach the harness's
+  native Ctrl+V handler; the harness decides which formats it supports. Ctrl+V and Alt+V keep their
+  normal bindings. Drop files or images into a terminal to insert their paths. Images dropped on
+  the Mac, or pasted into a plain shell, are saved privately as PNGs. Paths are quoted, and text
+  respects bracketed paste. Local files are not uploaded to SSH hosts.
 - **Desktop-app sessions as tiles.** Claude desktop Code sessions and Codex desktop threads appear
   automatically, each as its own card with the latest exchange, tool calls and a typing indicator.
   Opening one goes straight to the app, deep-linked to that conversation
@@ -30,10 +36,16 @@ Native macOS app, with a focused iOS companion built on the same core.
 - **DeepSeek Harness (dsh) sessions as tiles.** Each recent top-level dsh conversation in
   `~/.dsh/sessions` (or `$DSH_HOME`) is its own live card — title, latest messages and tool calls,
   working while a turn runs, *Asking* on a pending approval (with its reason). Opening one starts
-  Tessera's own `dsh web` (via `dsh`, or `npx -y @deepseek-ai/dsh`, which fetches it from npm, on a
-  free port with `--no-open`),
+  Tessera's own `dsh web` using the Mac app's bundled CLI, or an installed `dsh` command, on a
+  free port with `--no-open`,
   signs the web tile in with its one-time token, and selects that session. The server stops when
-  Tessera quits — or crashes.
+  Tessera quits — or crashes. The launcher and transcript panel also offer Open DeepSeek Harness
+  to focus the installed Mac app.
+- **Enntity ZCode sessions as tiles.** Recent local tasks from the fork's task index appear with
+  their title, folder, status, and latest messages. Tessera reads the index and configured CLI
+  session database without changing them; archived, deleted, remote, and delegated sessions stay
+  off the board. The ZCode chip filters these tiles. Opening one shows its transcript, with an
+  Open ZCode action to focus Enntity ZCode. The app currently has no per-conversation deep link.
 - **Attention.** Output-then-silence → *Done*. Permission prompts, `(y/n)`, "Do you want to…",
   OSC 9/777 notifications, Claude's own "needs action" turn summaries, and Codex approval events
   → *Asking*, plus a Dock badge and system notifications while Tessera is in the background.

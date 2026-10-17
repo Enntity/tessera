@@ -27,10 +27,12 @@ public enum WindowPlacer {
             return
         }
         #endif
-        if let url {
-            NSWorkspace.shared.open(url)
-        } else if let appURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) {
-            NSWorkspace.shared.openApplication(at: appURL, configuration: NSWorkspace.OpenConfiguration())
+        if let appURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) {
+            if let url {
+                NSWorkspace.shared.open([url], withApplicationAt: appURL, configuration: NSWorkspace.OpenConfiguration())
+            } else {
+                NSWorkspace.shared.openApplication(at: appURL, configuration: NSWorkspace.OpenConfiguration())
+            }
         }
         guard let rect, isTrusted else { return }
         let target = axRect(fromAppKit: rect)

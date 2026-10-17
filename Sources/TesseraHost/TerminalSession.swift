@@ -40,7 +40,7 @@ public final class TerminalSession: NSObject {
     /// Bumped (throttled) when the screen changes; drives thumbnail redraws.
     public private(set) var revision = 0
 
-    @ObservationIgnored public let view: TerminalView
+    @ObservationIgnored public let view: TesseraTerminalView
     @ObservationIgnored private var process: LocalProcess?
     /// LocalProcess only holds its delegate weakly; the session owns it.
     @ObservationIgnored private var relay: ProcessRelay?
@@ -62,6 +62,9 @@ public final class TerminalSession: NSObject {
     @ObservationIgnored public var onResumableChange: (() -> Void)?
     /// Raw output fan-out for remote clients.
     @ObservationIgnored public var outputObservers: [UUID: ([UInt8]) -> Void] = [:]
+    /// Test seam: overrides where a pasted image is materialized, so tests never write to the
+    /// user's real cache directory. Nil in production.
+    @ObservationIgnored var pasteImageFallbackOverride: URL?
 
     static let defaultFont = font(12.5)
     /// In the dock: small enough that a column beside the board holds a program's 80 columns.
@@ -93,9 +96,10 @@ public final class TerminalSession: NSObject {
         let initial = title ?? (label ?? command).map { MachineConfig.sshHost(in: $0) ?? $0 } ?? "Shell"
         self.title = initial
         self.customTitle = title
-        self.view = TerminalView(frame: CGRect(origin: .zero, size: initialSize), font: Self.defaultFont)
+        self.view = TesseraTerminalView(frame: CGRect(origin: .zero, size: initialSize), font: Self.defaultFont)
         self.info = TileInfo(id: id, kind: .terminal, flavor: flavor, title: initial)
         super.init()
+        view.pasteContext = self
         configureView()
         if startSuspended {
             isSuspended = true
@@ -584,4 +588,49 @@ extension TerminalSession: TerminalViewDelegate {
     }
 
     nonisolated public func rangeChanged(source: TerminalView, startY: Int, endY: Int) {}
+}
+
+/// Clipboard input shares the terminal's text framing and native keyboard encoder.
+extension TerminalSession: TerminalPasteContext, TerminalNativePaste {
+
+    public var pasteboard: NSPasteboard { .general }
+
+    public func pasteSend(_ bytes: [UInt8]) {
+        view.unmarkText()
+        view.send(data: bytes[...])
+    }
+
+    public func pasteBracketedPasteMode() -> Bool {
+        terminal.bracketedPasteMode
+    }
+
+    /// Paste text as a literal UTF-8 paste, framed explicitly when the program asked for bracketed
+    /// paste. Never routed through `insertText`, which is not marked as a paste.
+    public func pasteInsertText(_ string: String, isPaste: Bool) {
+        TerminalPaste.pasteText(string, bracketed: isPaste && terminal.bracketedPasteMode, context: self)
+    }
+
+    public func pasteBeep() {
+        NSSound.beep()
+    }
+
+    /// Plain shells get a private local PNG path. A tile on another machine has no such local path
+    /// the remote program could use, so it declines rather than claim a local file is remote.
+    public func pasteImageFallbackURL() -> URL? {
+        if let override = pasteImageFallbackOverride { return override }
+        guard MachineConfig.sshHost(in: command ?? "") == nil, typedHost == nil else { return nil }
+        return TerminalPaste.imageFallbackURL()
+    }
+
+    public func pasteFlavor() -> AgentFlavor { flavor }
+
+    public func pasteNotice(_ message: String) {
+        // Failure feedback is the beep; notices must never become terminal input or output.
+    }
+
+    /// The harness shortcut, through the view's own keyDown so negotiated Kitty flags are honored.
+    @discardableResult
+    public func sendNativePaste() -> Bool {
+        view.sendNativeControlV()
+    }
 }

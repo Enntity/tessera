@@ -17,7 +17,7 @@ public enum TileKind: String, Codable, Sendable {
 /// Which tool a tile belongs to. Drives accent color, glyph, and prompt heuristics.
 public enum AgentFlavor: String, Codable, Sendable, CaseIterable {
     case shell, claude, codex, grok, gemini, omp, opencode, aider, custom
-    case claudeDesktop, codexDesktop
+    case claudeDesktop, codexDesktop, zcodeDesktop
     /// DeepSeek Harness (`dsh`) sessions.
     case dsh
     case web
@@ -39,6 +39,7 @@ public enum AgentFlavor: String, Codable, Sendable, CaseIterable {
         case .custom: "Command"
         case .claudeDesktop: "Claude"
         case .codexDesktop: "Codex"
+        case .zcodeDesktop: "Enntity ZCode"
         case .dsh: "DeepSeek"
         case .web: "Web"
         case .lloom: "LLooM"
@@ -51,7 +52,7 @@ public enum AgentFlavor: String, Codable, Sendable, CaseIterable {
         switch self {
         case .shell: "terminal"
         case .claude, .claudeDesktop: "sparkle"
-        case .codex, .codexDesktop: "chevron.left.forwardslash.chevron.right"
+        case .codex, .codexDesktop, .zcodeDesktop: "chevron.left.forwardslash.chevron.right"
         case .grok: "bolt.horizontal"
         case .gemini: "diamond"
         case .omp: "circle.hexagongrid"

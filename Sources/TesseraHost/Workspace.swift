@@ -16,7 +16,7 @@ public final class Workspace {
     public private(set) var terminals: [String: TerminalSession] = [:]
     public private(set) var browsers: [String: BrowserSession] = [:]
     public let agents = AgentAppWatcher()
-    /// The DeepSeek Harness web server used to open dsh sessions.
+    /// Shared local dsh web page used to select a live conversation from its sidebar.
     public let dsh = DshWebServer()
     public let usage: UsageService
     public let machines: MachineMonitor
@@ -568,6 +568,16 @@ public final class Workspace {
         WindowPlacer.open(a.openURL, bundleID: app.bundleID, placeAt: placeNativeWindows ? rect : nil)
     }
 
+    /// Opens or focuses an installed desktop app when its contract has no new-session link.
+    public func openApplication(_ app: AgentApp, at rect: CGRect? = nil) {
+        WindowPlacer.open(nil, bundleID: app.bundleID, placeAt: placeNativeWindows ? rect : nil)
+    }
+
+    public func appForFocus(_ id: String) -> AgentApp? {
+        guard let session = agents.session(id), let app = AgentApp(flavor: session.flavor), installedApps.contains(app) else { return nil }
+        return app
+    }
+
     // MARK: New app conversations
 
     /// A conversation just started in a desktop app: when its tile appears, it joins the tab it was
@@ -577,7 +587,10 @@ public final class Workspace {
     /// Starts a new conversation in the Claude or Codex app (in `folder`, with `prompt` placed in its
     /// composer), placing the app window at `rect` (AppKit screen coordinates) when allowed.
     public func newAppConversation(_ app: AgentApp, folder: String?, prompt: String? = nil, placeAt rect: CGRect? = nil) {
-        guard let url = app.newConversationURL(folder: folder, prompt: prompt) else { return }
+        guard app.canCreateConversation, let url = app.newConversationURL(folder: folder, prompt: prompt) else {
+            openApplication(app, at: rect)
+            return
+        }
         pendingAppConversation = (app, Date(), tabForNewTiles())
         WindowPlacer.open(url, bundleID: app.bundleID, placeAt: placeNativeWindows ? rect : nil)
     }
@@ -596,16 +609,14 @@ public final class Workspace {
         save()
     }
 
+    // MARK: Agent sessions
+
     // MARK: DeepSeek Harness
 
-    /// The dsh web UI, shown inside whichever dsh session's panel is open. It's one shared page,
-    /// never a tile of its own, so a session never appears twice on the board.
+    /// The dsh web UI is one shared page, shown inside the panel for the session it last selected.
     public private(set) var dshPage: BrowserSession?
-    /// The session that page shows: the one last opened in it.
     public private(set) var dshSession: String?
 
-    /// Brings up dsh web (starting Tessera's server if needed; the first load uses the token URL,
-    /// which signs the page in) and selects this session in it.
     private func openDsh(_ session: AgentAppSession) {
         dshSession = session.id
         dsh.ensureRunning { [weak self] result in
@@ -622,10 +633,7 @@ public final class Workspace {
         }
     }
 
-    /// dsh web has no per-session URL, so select the session in its sidebar. Sessions are grouped
-    /// under workspace rows that don't render their sessions while collapsed, and long lists hide
-    /// rows behind "Show N more sessions" — so: wait for the tree, expand the session's workspace
-    /// (by folder name, else every collapsed one), reveal overflow until the title appears, click it.
+    /// The local dsh web UI has no session URL; select its exact visible title within the workspace.
     nonisolated static func selectDshSessionScript(title: String, folder: String) -> String {
         func js(_ s: String) -> String {
             (try? JSONSerialization.data(withJSONObject: [s])).map { String(decoding: $0, as: UTF8.self) } ?? "[\"\"]"
@@ -657,8 +665,6 @@ public final class Workspace {
         })(\(js(title))[0], \(js(folder))[0]);
         """
     }
-
-    // MARK: Agent sessions
 
     private func agentInfo(_ a: AgentAppSession) -> TileInfo {
         let ack = agentAcknowledged[a.id] ?? .distantPast

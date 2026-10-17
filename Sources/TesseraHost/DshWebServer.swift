@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import Observation
 import TesseraKit
@@ -23,6 +24,12 @@ public final class DshWebServer {
     @ObservationIgnored private var output = ""
 
     public struct DshError: Error, Sendable { public let message: String }
+    struct Launcher: Equatable {
+        let executable: String
+        let arguments: [String]
+        let path: String
+        let environment: [String: String]
+    }
 
     public init() {}
 
@@ -39,15 +46,20 @@ public final class DshWebServer {
         output = ""
         DispatchQueue.global(qos: .userInitiated).async {
             let probe = LoginShell.run(Self.probeScript)
-            let resolved = probe.flatMap(Self.launcher(fromProbe:))
+            let appURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.deepseek.dsh")
+            let path = probe.flatMap { LoginShell.tagged("path", in: $0).first } ?? ProcessInfo.processInfo.environment["PATH"] ?? "/usr/bin:/bin"
+            let resolved = appURL.flatMap { Self.packagedLauncher(appURL: $0, path: path) }
+                ?? probe.flatMap(Self.launcher(fromProbe:))
             DispatchQueue.main.async {
                 MainActor.assumeIsolated {
-                    guard let (exe, args, path) = resolved else {
+                    guard let resolved else {
                         return self.finish(.failure(DshError(message: probe == nil
-                            ? "Couldn't read your PATH: your login shell didn't finish starting."
-                            : "dsh isn't installed. Install it with `npm i -g @deepseek-ai/dsh`, or make sure `npx` is on your PATH.")))
+                            ? "Couldn't find the installed DeepSeek Harness runtime or read your login shell PATH."
+                            : "DeepSeek Harness isn't installed and `dsh` isn't on your login shell PATH.")))
                     }
-                    self.launch(exe, args: args + ["--profile", "web", "--no-open", "--port", "0"], path: path)
+                    self.launch(resolved.executable,
+                                args: resolved.arguments + ["--profile", "web", "--no-open", "--port", "0"],
+                                path: resolved.path, environment: resolved.environment)
                 }
             }
         }
@@ -63,13 +75,14 @@ public final class DshWebServer {
     stop; wait "$c"
     """
 
-    private func launch(_ exe: String, args: [String], path: String) {
+    private func launch(_ exe: String, args: [String], path: String, environment extraEnvironment: [String: String] = [:]) {
         let p = Process()
         p.executableURL = URL(fileURLWithPath: "/bin/sh")
         p.arguments = ["-c", Self.watchdog, "dsh-web", exe] + args
         p.currentDirectoryURL = URL(fileURLWithPath: NSHomeDirectory())
         var env = ProcessInfo.processInfo.environment
         env["PATH"] = path
+        for (key, value) in extraEnvironment { env[key] = value }
         for key in env.keys where key.hasPrefix("TESSERA_") { env.removeValue(forKey: key) }
         env["TESSERA_PARENT_PID"] = String(ProcessInfo.processInfo.processIdentifier)
         p.environment = env
@@ -146,16 +159,26 @@ public final class DshWebServer {
         return url
     }
 
-    /// Asks the user's login shell for its PATH and where dsh and npx are, so version managers work.
+    /// Asks the user's login shell for its PATH and where dsh is, so version managers work.
     /// (Piped through sed, which reads the same in POSIX shells and fish.)
     nonisolated static let probeScript = "printenv PATH | /usr/bin/sed 's/^/@path /'; command -v dsh | /usr/bin/sed 's/^/@dsh /'; "
-        + "command -v npx | /usr/bin/sed 's/^/@npx /'"
 
     /// The dsh (or npx) executable and PATH from the probe's output.
-    nonisolated static func launcher(fromProbe output: String) -> (String, [String], String)? {
+    nonisolated static func launcher(fromProbe output: String) -> Launcher? {
         guard let path = LoginShell.tagged("path", in: output).first, path.contains("/") else { return nil }
-        if let dsh = LoginShell.tagged("dsh", in: output).first(where: { $0.hasPrefix("/") }) { return (dsh, [], path) }
-        if let npx = LoginShell.tagged("npx", in: output).first(where: { $0.hasPrefix("/") }) { return (npx, ["-y", "@deepseek-ai/dsh"], path) }
+        if let dsh = LoginShell.tagged("dsh", in: output).first(where: { $0.hasPrefix("/") }) {
+            return Launcher(executable: dsh, arguments: [], path: path, environment: [:])
+        }
         return nil
+    }
+
+    /// The installed app's own Electron runtime can execute its bundled CLI directly from ASAR.
+    /// This keeps `dsh web` local and avoids npx/package downloads or version drift.
+    nonisolated static func packagedLauncher(appURL: URL, path: String = "/usr/bin:/bin") -> Launcher? {
+        let executable = appURL.appendingPathComponent("Contents/MacOS/DeepSeek Harness").path
+        let archive = appURL.appendingPathComponent("Contents/Resources/app.asar").path
+        let entry = archive + "/dsh/node_modules/@deepseek-ai/dsh/lib/bin.js"
+        guard FileManager.default.isExecutableFile(atPath: executable), FileManager.default.fileExists(atPath: archive) else { return nil }
+        return Launcher(executable: executable, arguments: [entry], path: path, environment: ["ELECTRON_RUN_AS_NODE": "1"])
     }
 }
