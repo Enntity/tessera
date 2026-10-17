@@ -21,6 +21,8 @@ public enum AgentFlavor: String, Codable, Sendable, CaseIterable {
     /// DeepSeek Harness (`dsh`) sessions.
     case dsh
     case web
+    /// Jobs agents report to a LLooM head, and its leases that need the user.
+    case lloom
 
     public var displayName: String {
         switch self {
@@ -37,6 +39,7 @@ public enum AgentFlavor: String, Codable, Sendable, CaseIterable {
         case .codexDesktop: "Codex"
         case .dsh: "DeepSeek"
         case .web: "Web"
+        case .lloom: "LLooM"
         }
     }
 
@@ -54,6 +57,7 @@ public enum AgentFlavor: String, Codable, Sendable, CaseIterable {
         case .custom: "gearshape.2"
         case .dsh: "water.waves"
         case .web: "globe"
+        case .lloom: "square.stack.3d.up"
         }
     }
 

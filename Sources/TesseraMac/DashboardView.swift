@@ -24,6 +24,7 @@ struct DashboardView: View {
                         }
                         VStack(spacing: 0) {
                             TabStrip()
+                            if model.workspace.fleet.config != nil { FleetBand() }
                             BoardView()
                         }
                         .overlay(alignment: .bottom) {

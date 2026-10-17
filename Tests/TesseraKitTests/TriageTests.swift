@@ -166,7 +166,7 @@ final class BoardQueryTests: XCTestCase {
         XCTAssertEqual(holdings[.codex], ["codex", "codex-done"])
         XCTAssertEqual(holdings[.dsh], ["dsh"])
         XCTAssertEqual(holdings[.web], ["page"])
-        XCTAssertEqual(BoardQuery.Chip.allCases.map(\.label), ["Needs you", "Working", "Terminals", "Claude", "Codex", "dsh", "Web"])
+        XCTAssertEqual(BoardQuery.Chip.allCases.map(\.label), ["Needs you", "Working", "Terminals", "Claude", "Codex", "dsh", "Jobs", "Web"])
     }
 
     func testAnEmptyQueryShowsEverythingInOrder() {

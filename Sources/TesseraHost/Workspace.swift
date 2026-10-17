@@ -20,6 +20,8 @@ public final class Workspace {
     public let dsh = DshWebServer()
     public let usage: UsageService
     public let machines: MachineMonitor
+    /// A LLooM head's leases and agents' jobs (the Fleet band; jobs are tiles).
+    public let fleet: FleetService
     public private(set) var presets: [LaunchPreset] = LaunchCatalog.known
     /// Desktop agent apps on this Mac that can start conversations from Tessera.
     public let installedApps: [AgentApp] = AgentApp.allCases.filter {
@@ -92,6 +94,7 @@ public final class Workspace {
         boardHolder = BoardLock.take(in: directory)
         usage = UsageService(directory: directory)
         machines = MachineMonitor(directory: directory)
+        fleet = FleetService(directory: directory)
     }
 
     public func start() {
@@ -111,6 +114,8 @@ public final class Workspace {
         agents.start()
         usage.start()
         machines.start()
+        fleet.onChange = { [weak self] in self?.fleetChanged() }
+        fleet.start()
         DispatchQueue.global(qos: .utility).async {
             let found = LaunchCatalog.detectInstalled()
             DispatchQueue.main.async { MainActor.assumeIsolated { self.presets = found } }
@@ -415,6 +420,11 @@ public final class Workspace {
     /// keeps such a conversation in Tessera, as its transcript. An id not on the board opens nothing.
     public func open(_ id: String, inApp: Bool = true, nativeAt rect: CGRect? = nil) {
         guard exists(id) else { return }
+        // A LLooM job opens the conversation of the agent reporting it, when that is on the board.
+        if inApp, let conversation = linkedConversation(id) {
+            agentAcknowledged[id] = Date()
+            return open(conversation, inApp: true, nativeAt: rect)
+        }
         opened.note(id)
         if app(opening: id, inApp: inApp) != nil {
             collapse()
@@ -636,7 +646,22 @@ public final class Workspace {
         return TileInfo(id: a.id, kind: .agentSession, flavor: a.flavor, title: agentTitles[a.id] ?? a.title,
                         subtitle: a.cwd.abbreviatingHome, activity: activity,
                         attention: unseen,
-                        lastActivityAt: a.lastActivityAt, detail: detail)
+                        lastActivityAt: a.lastActivityAt, detail: detail, progress: a.progress)
+    }
+
+    private func fleetChanged() {
+        agents.setExternal(fleet.items(lookback: agents.lookback).map(FleetService.session))
+    }
+
+    /// The tile of the conversation a LLooM job or lease names (`claude:<id>`, `codex:<id>`): by its
+    /// tile id, else by the session id a terminal or a Claude app conversation carries.
+    public func linkedConversation(_ id: String) -> String? {
+        guard let link = agents.session(id)?.link, let colon = link.firstIndex(of: ":") else { return nil }
+        let sessionId = String(link[link.index(after: colon)...])
+        guard SessionResume.isSafeId(sessionId) else { return nil }
+        let candidates = [link] + terminals.filter { $0.value.sessionId == sessionId }.map(\.key)
+            + agents.sessions.filter { $0.value.session.resumeCommand?.split(separator: " ").contains(Substring(sessionId)) == true }.map(\.key)
+        return candidates.first { $0 != id && exists($0) && agents.session($0)?.flavor != .lloom }
     }
 
     private func syncAgents() {
