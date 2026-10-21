@@ -54,7 +54,13 @@ open class TesseraTerminalView: TerminalView {
     }
 
     public override init(frame: CGRect, font: NSFont?) {
-        super.init(frame: frame, font: font)
+        // SwiftTerm's default DA1 reply advertises sixel (";4"), which makes harnesses like omp
+        // send inline SIXEL images. SwiftTerm attaches those to buffer lines, and ordinary
+        // row-by-row repaints (how these agents redraw a viewport while streaming) do not clear
+        // them, so every repaint stacks a new ghost of the image; the thumbnail renderer cannot
+        // draw them at all. Decline the advertisement: clients then fall back to text charts,
+        // which render correctly in tiles and thumbnails alike.
+        super.init(frame: frame, font: font, options: TerminalOptions(enableSixelReported: false))
         registerForDraggedTypes([.fileURL, .URL, .string, .tiff, .png, .rtf])
     }
 
