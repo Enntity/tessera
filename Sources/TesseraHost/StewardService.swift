@@ -153,7 +153,9 @@ public final class StewardService {
             summarize(d, fingerprint: fp, base: base)
         }
         let boardState = digests.map { "\($0.id)\($0.state)\($0.waiting)\(summaries[$0.id]?.summary ?? "")" }.joined().hashValue
-        if !briefing, inFlight.isEmpty, briefedState != boardState, now.timeIntervalSince(lastBriefAt) >= Self.briefEvery || brief == nil {
+        // The brief must not wait for tile summaries to drain: on a busy board there is always
+        // another tile to summarize, and the brief would starve. It runs on its own request.
+        if !briefing, briefedState != boardState, now.timeIntervalSince(lastBriefAt) >= Self.briefEvery || brief == nil {
             makeBrief(digests.map { var d = $0; d.summary = summaries[d.id]?.summary; return d }, state: boardState, base: base)
         }
     }

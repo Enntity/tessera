@@ -162,7 +162,10 @@ public enum Steward {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         if let key, !key.isEmpty { request.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization") }
         let body: [String: Any] = ["model": model, "messages": messages, "temperature": 0.2, "max_tokens": maxTokens,
-                                   "response_format": ["type": "json_object"], "stream": false]
+                                   "response_format": ["type": "json_object"], "stream": false,
+                                   // The steward asks for short JSON; a reasoning model would spend
+                                   // the whole token budget thinking and return empty content.
+                                   "reasoning_effort": "none"]
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
         return request
     }

@@ -1,14 +1,16 @@
 <p align="center">
-  <img src="docs/assets/banner.png" alt="Tessera: mission control for AI work" width="100%">
+  <img src="docs/assets/banner.png" alt="Tessera: the control plane for agent work" width="100%">
 </p>
 
 # Tessera
 
-A mission-control board for AI work. Every running thing — terminals with Claude Code, Codex, Grok,
-omp or a plain shell; conversations inside the Claude and Codex desktop apps; any web page — is a
-live tile on one full-screen grid. Tiles animate as their content changes and light up when
-something finishes or needs you. Click one and it opens full-size right where it was; click outside
-and you are back on the board.
+The control plane for agent work on your Mac, and a mission-control board for it. Any agent you run
+— Claude Code, Codex, Grok, omp, ZCode, the DeepSeek Harness, a plain shell — talks to Tessera, and
+through it to the other agents: it can see the board, message another agent, and ask you a question
+with one-tap answers. What needs you collects in one queue, whatever raised it, and every running
+thing — terminals, agent conversations, web pages — is a live tile on one full-screen grid. Tiles
+animate as their content changes and light up when something finishes or needs you. Click one and it
+opens full-size right where it was; click outside and you are back on the board.
 
 Native macOS app, with a focused iOS companion built on the same core.
 
@@ -18,117 +20,6 @@ Native macOS app, with a focused iOS companion built on the same core.
 
 ## What it does
 
-- **Live terminal tiles.** Real PTYs (SwiftTerm). Thumbnails redraw from the terminal buffer at up
-  to 10 fps: the whole screen when it fits readably, otherwise its latest output. Any CLI works.
-- **Paste and drop.** ⌘V and Edit → Paste send text, URLs, rich text as plain text, and copied files
-  into the terminal. Image and other non-text clipboard pastes in command tiles reach the harness's
-  native Ctrl+V handler; the harness decides which formats it supports. Ctrl+V and Alt+V keep their
-  normal bindings. Drop files or images into a terminal to insert their paths. Images dropped on
-  the Mac, or pasted into a plain shell, are saved privately as PNGs. Paths are quoted, and text
-  respects bracketed paste. Local files are not uploaded to SSH hosts.
-- **Desktop-app sessions as tiles.** Claude desktop Code sessions and Codex desktop threads appear
-  automatically, each as its own card with the latest exchange, tool calls and a typing indicator.
-  Opening one goes straight to the app, deep-linked to that conversation
-  (`claude://code/continue?session=…`, `codex://threads/…`) and snapped where the opened tile would
-  sit (Accessibility permission); nothing opens on the board, so you can come back and pick the next
-  one. Right-click for Tessera's own transcript (⌘O there goes to the app), or "Continue in Terminal"
-  to fork it into a CLI tile.
-- **DeepSeek Harness (dsh) sessions as tiles.** Each recent top-level dsh conversation in
-  `~/.dsh/sessions` (or `$DSH_HOME`) is its own live card — title, latest messages and tool calls,
-  working while a turn runs, *Asking* on a pending approval (with its reason). Opening one starts
-  Tessera's own `dsh web` using the Mac app's bundled CLI, or an installed `dsh` command, on a
-  free port with `--no-open`,
-  signs the web tile in with its one-time token, and selects that session. The server stops when
-  Tessera quits — or crashes. The launcher and transcript panel also offer Open DeepSeek Harness
-  to focus the installed Mac app.
-- **Enntity ZCode sessions as tiles.** Recent local tasks from the fork's task index appear with
-  their title, folder, status, and latest messages. Tessera reads the index and configured CLI
-  session database without changing them; archived, deleted, remote, and delegated sessions stay
-  off the board. The ZCode chip filters these tiles. Opening one shows its transcript, with an
-  Open ZCode action to focus Enntity ZCode. The app currently has no per-conversation deep link.
-- **Attention.** Output-then-silence → *Done*. Permission prompts, `(y/n)`, "Do you want to…",
-  OSC 9/777 notifications, Claude's own "needs action" turn summaries, and Codex approval events
-  → *Asking*, plus a Dock badge and system notifications while Tessera is in the background.
-  ⌘J goes to the next thing that needs you, in one order everywhere (the Needs-you lane, the
-  top-bar counters, ⌘K, the iPhone's queue): open questions first, then failures, then results you
-  haven't seen, the oldest first.
-- **Needs-you lane.** Down the left of the board (⌥⌘\, remembered): that queue as a list, each
-  row saying what waits and why — the question itself, `exit 1`, or that it finished — and for how
-  long. Click a row to open its tile. Hover a terminal that is asking and the row offers the phone's
-  one-tap answers (`1 2 3 y n ⏎`), typed into it without opening it; answered, the row leaves.
-  Empty, it says "All caught up".
-- **Filter.** Just type on the board (or ⌘F): the board narrows in place, as you type, to the tiles
-  whose title, folder, question or error, tab, state, or visible text (a terminal's screen, a
-  conversation's latest messages, a page's address) has every word, and lights the words up in
-  titles and folders. ⏎ opens the first one, the arrows move among them, Esc shows everything
-  again. Chips at the right of the tab strip narrow by state and kind — Needs you, Working,
-  Terminals, Claude, Codex, dsh, Web — each with how many tiles it would show; a chip appears only
-  while it has something to narrow. Chips of one sort widen each other (Claude or Codex), the two
-  sorts and the text narrow each other (Claude, working, "auth"), all within the tab you're on.
-- **Watch dock.** ⌘D keeps a tile open beside the board (up to two, stacked, in a column left of
-  the accounts): a terminal you can type into, a page, a dsh session's live page, a Claude or
-  Codex conversation's transcript, all live while the board carries on. Each has a compact header:
-  what it is, its state, its menu, open full size, undock. A terminal or page is in one place at a
-  time, so opening a docked tile (a click on it, ⏎, ⌘J, a row in the lane) puts the keyboard in
-  its dock panel, whose edge lights up; ⌘W or ⌘⏎ goes back to the board. Its tile on the board wears
-  a small mark. A docked terminal is drawn a little smaller, and the dock starts wide enough for
-  its 80 columns; drag the dock's edge to resize it. A third tile docked lets the oldest go;
-  closing a docked tile undocks it. What is docked and how wide are kept with the board. In a small
-  window the accounts, then the lane, make way for it.
-- **Tile size.** ⌘- shows more of a busy board at once, ⌘= makes tiles larger, ⌘0 is the standard
-  size again: the board scrolls only when tiles would get smaller than the size you chose.
-- **Tile states, the same at every size.** Colour means state and nothing else. *Idle*: nothing.
-  *Working*: a cyan pill, and a highlight sweeping the line under the header (or the progress the
-  program reports, a page's load included). *Asking*: an amber pill and edge with a glow, and
-  the question itself called out on the tile. *Done*, not yet seen: a mint dot after the title and
-  a faint edge, nothing moving. *Failed*: a coral pill and edge, and `exit 1` (or the error) in the
-  footer. The selected tile has a ring outside its edge, whatever its state. Every tile's footer
-  says where it lives (folder or site) and when it last did anything; hover for the full title.
-- **Web tiles.** Live, scaled WKWebViews; unread counts in titles (`(3) Inbox`) raise attention.
-  A page that doesn't load says why: in its tile's footer, and along the bottom of its open panel.
-- **Accounts sidebar.** Remaining balance / plan headroom with one-click top-up: OpenRouter,
-  DeepSeek, Moonshot, OpenAI and Anthropic (admin-key spend vs. budget), xAI, ChatGPT/Codex plan
-  limits (from local Codex logs), the Claude plan, and a custom provider for any JSON balance
-  endpoint. Keys live in the login Keychain. A card that needs something from you says what, and
-  clicking it does it.
-- **Claude plan.** Usage counted from your local transcripts, a limit Claude Code runs into shown
-  with when it resets, and — once you choose Show plan limits and agree — the official 5-hour and
-  weekly limits: every 10 minutes Tessera starts Claude Code out of sight in your home folder,
-  opens its `/usage` screen, reads the two limits and quits. No prompt is sent, no tokens are used
-  and no conversation is saved; your settings and hooks are left as they are. Stop Checking Plan
-  Limits (the card's menu) turns it off. Tessera never reads Claude Code's credentials. If Claude
-  Code's sign-in in terminals is missing or has run out (`claude auth status`, or a reply refused
-  with 401), the card offers Sign in to Claude Code, which runs `claude auth login`.
-- **Tabs.** All · your own tabs, in a strip over the board. Drag tiles onto a tab (or Move to
-  Tab); new tiles land in the tab you're viewing, as does a Claude or Codex app conversation
-  started there once its tile appears (a new tile drops the filter, so it always shows); each tab
-  shows a count and a dot in the colour of the most pressing thing waiting in it. ⌘1 and ⌘3…9
-  switch. The selection is always a tile the board shows. Board commands (Mark All Seen, Close
-  Exited, …) act on the tiles on show: the tab being viewed, as filtered.
-- **Close with Undo.** Closing a tile never silently destroys work. A toast offers Undo for a few
-  seconds, ⌘Z (Edit ▸ Undo Close Tile) brings it back later, and ⌘K lists the last 20 closed tiles
-  as "Reopen …", across restarts. A terminal comes back in its folder and, if it ran an agent, in
-  the same conversation; a web tile at its address; a hidden Claude or Codex conversation
-  reappears. Each returns to its place and tab. While anything is hidden or closed, "N put away"
-  at the end of the tab strip lists it all, one click to bring each back (or all of them).
-- **Machines.** Top-bar chips for this Mac and any SSH hosts (e.g. DGX Sparks): two labelled
-  bars — GPU (CPU where there is no GPU to read) and memory — mint with headroom, amber busy, coral flat out;
-  temperature and GPU watts under the name; hover for details, click a remote to open an ssh tile. A tile running
-  `ssh` is named after its machine and says so in its footer, in place of the local folder.
-- **Fleet: shared hardware and agents' jobs.** Point Settings → Fleet at a
-  [LLooM](https://github.com/Enntity/lloom) head and its leases appear in a band over the board:
-  one chip per resource, showing who holds it, how long they have left and who is waiting. Jobs
-  that agents report (`lloom job start`, `progress`, `done`) become tiles, with their latest note,
-  progress bar and metrics on the card and their notes as the transcript. A finished, failed or
-  silent job lands in the Needs-you lane and notifies you, and so does a lease that is running out
-  or whose restore failed. Opening a job goes to the agent's own conversation when it reported one
-  (`--session`). The Jobs chip filters them. The admin key stays in your Keychain.
-- **Steward (Settings → Agents).** Point it at any OpenAI-compatible endpoint, such as a LLooM
-  gateway with a local model, and it keeps a one-line summary of each tile on the card's footer.
-  At the head of the Needs-you lane it writes a brief: what is going on in a sentence, what
-  finished, failed or started asking since you last looked, what needs you, and what can be put
-  away (Close all, with Undo). Tile text is sent with credentials removed, and nothing is sent in
-  privacy mode. It only suggests.
 - **Agents talk to Tessera, and through it to each other.** A `tessera` command, also an MCP
   server (`tessera mcp`), lets any agent on the Mac see the board (`board`), read another tile
   (`read`), find itself (`whoami`), message another agent (`send`, `inbox`), ask you something
@@ -140,6 +31,69 @@ Native macOS app, with a focused iOS companion built on the same core.
   - It listens on 127.0.0.1 behind a token in a file only you can read; browser requests are refused.
   - Settings → Agents → Install puts `tessera` on your PATH, installs the skill
     (`skills/tessera`) for Claude Code and Codex, and registers the MCP server.
+
+- **Needs-you lane.** Down the left of the board (⌥⌘\, remembered): that queue as a list, each
+  row saying what waits and why — the question itself, `exit 1`, or that it finished — and for how
+  long. Click a row to open its tile. Hover a terminal that is asking and the row offers the phone's
+  one-tap answers (`1 2 3 y n ⏎`), typed into it without opening it; answered, the row leaves.
+  Empty, it says "All caught up".
+
+- **Attention.** Output-then-silence → *Done*. Permission prompts, `(y/n)`, "Do you want to…",
+  OSC 9/777 notifications, Claude's own "needs action" turn summaries, and Codex approval events
+  → *Asking*, plus a Dock badge and system notifications while Tessera is in the background.
+  ⌘J goes to the next thing that needs you, in one order everywhere (the Needs-you lane, the
+  top-bar counters, ⌘K, the iPhone's queue): open questions first, then failures, then results you
+  haven't seen, the oldest first.
+
+- **Steward (Settings → Agents).** Point it at any OpenAI-compatible endpoint, such as a LLooM
+  gateway with a local model, and it keeps a one-line summary of each tile on the card's footer.
+  At the head of the Needs-you lane it writes a brief: what is going on in a sentence, what
+  finished, failed or started asking since you last looked, what needs you, and what can be put
+  away (Close all, with Undo). Tile text is sent with credentials removed, and nothing is sent in
+  privacy mode. It only suggests.
+
+- **Fleet: shared hardware and agents' jobs.** Point Settings → Fleet at a
+  [LLooM](https://github.com/Enntity/lloom) head and its leases appear in a band over the board:
+  one chip per resource, showing who holds it, how long they have left and who is waiting. Jobs
+  that agents report (`lloom job start`, `progress`, `done`) become tiles, with their latest note,
+  progress bar and metrics on the card and their notes as the transcript. A finished, failed or
+  silent job lands in the Needs-you lane and notifies you, and so does a lease that is running out
+  or whose restore failed. Opening a job goes to the agent's own conversation when it reported one
+  (`--session`). The Jobs chip filters them. The admin key stays in your Keychain.
+
+- **Live terminal tiles.** Real PTYs (SwiftTerm). Thumbnails redraw from the terminal buffer at up
+  to 10 fps: the whole screen when it fits readably, otherwise its latest output. Any CLI works.
+
+- **Paste and drop.** ⌘V and Edit → Paste send text, URLs, rich text as plain text, and copied files
+  into the terminal. Image and other non-text clipboard pastes in command tiles reach the harness's
+  native Ctrl+V handler; the harness decides which formats it supports. Ctrl+V and Alt+V keep their
+  normal bindings. Drop files or images into a terminal to insert their paths. Images dropped on
+  the Mac, or pasted into a plain shell, are saved privately as PNGs. Paths are quoted, and text
+  respects bracketed paste. Local files are not uploaded to SSH hosts.
+
+- **Desktop-app sessions as tiles.** Claude desktop Code sessions and Codex desktop threads appear
+  automatically, each as its own card with the latest exchange, tool calls and a typing indicator.
+  Opening one goes straight to the app, deep-linked to that conversation
+  (`claude://code/continue?session=…`, `codex://threads/…`) and snapped where the opened tile would
+  sit (Accessibility permission); nothing opens on the board, so you can come back and pick the next
+  one. Right-click for Tessera's own transcript (⌘O there goes to the app), or "Continue in Terminal"
+  to fork it into a CLI tile.
+
+- **DeepSeek Harness (dsh) sessions as tiles.** Each recent top-level dsh conversation in
+  `~/.dsh/sessions` (or `$DSH_HOME`) is its own live card — title, latest messages and tool calls,
+  working while a turn runs, *Asking* on a pending approval (with its reason). Opening one starts
+  Tessera's own `dsh web` using the Mac app's bundled CLI, or an installed `dsh` command, on a
+  free port with `--no-open`,
+  signs the web tile in with its one-time token, and selects that session. The server stops when
+  Tessera quits — or crashes. The launcher and transcript panel also offer Open DeepSeek Harness
+  to focus the installed Mac app.
+
+- **Enntity ZCode sessions as tiles.** Recent local tasks from the fork's task index appear with
+  their title, folder, status, and latest messages. Tessera reads the index and configured CLI
+  session database without changing them; archived, deleted, remote, and delegated sessions stay
+  off the board. The ZCode chip filters these tiles. Opening one shows its transcript, with an
+  Open ZCode action to focus Enntity ZCode. The app currently has no per-conversation deep link.
+
 - **Shut down & resume.** Quit Tessera (or shut tiles down) and every agent comes back in the same
   conversation — including ones you typed into a shell yourself, and through your own launchers
   (`codex-work` resumes as `codex-work resume <id>`). A tile that is shut down, exited or failed
@@ -157,8 +111,78 @@ Native macOS app, with a focused iOS companion built on the same core.
   - Agents you exited come back as a shell in their last folder. bash tiles resume what Tessera
     launched but don't track commands typed into them; so do other login shells (tcsh, nu, …),
     whose launches run through zsh.
+
+- **Filter.** Just type on the board (or ⌘F): the board narrows in place, as you type, to the tiles
+  whose title, folder, question or error, tab, state, or visible text (a terminal's screen, a
+  conversation's latest messages, a page's address) has every word, and lights the words up in
+  titles and folders. ⏎ opens the first one, the arrows move among them, Esc shows everything
+  again. Chips at the right of the tab strip narrow by state and kind — Needs you, Working,
+  Terminals, Claude, Codex, dsh, Web — each with how many tiles it would show; a chip appears only
+  while it has something to narrow. Chips of one sort widen each other (Claude or Codex), the two
+  sorts and the text narrow each other (Claude, working, "auth"), all within the tab you're on.
+
+- **Watch dock.** ⌘D keeps a tile open beside the board (up to two, stacked, in a column left of
+  the accounts): a terminal you can type into, a page, a dsh session's live page, a Claude or
+  Codex conversation's transcript, all live while the board carries on. Each has a compact header:
+  what it is, its state, its menu, open full size, undock. A terminal or page is in one place at a
+  time, so opening a docked tile (a click on it, ⏎, ⌘J, a row in the lane) puts the keyboard in
+  its dock panel, whose edge lights up; ⌘W or ⌘⏎ goes back to the board. Its tile on the board wears
+  a small mark. A docked terminal is drawn a little smaller, and the dock starts wide enough for
+  its 80 columns; drag the dock's edge to resize it. A third tile docked lets the oldest go;
+  closing a docked tile undocks it. What is docked and how wide are kept with the board. In a small
+  window the accounts, then the lane, make way for it.
+
+- **Tile size.** ⌘- shows more of a busy board at once, ⌘= makes tiles larger, ⌘0 is the standard
+  size again: the board scrolls only when tiles would get smaller than the size you chose.
+
+- **Tile states, the same at every size.** Colour means state and nothing else. *Idle*: nothing.
+  *Working*: a cyan pill, and a highlight sweeping the line under the header (or the progress the
+  program reports, a page's load included). *Asking*: an amber pill and edge with a glow, and
+  the question itself called out on the tile. *Done*, not yet seen: a mint dot after the title and
+  a faint edge, nothing moving. *Failed*: a coral pill and edge, and `exit 1` (or the error) in the
+  footer. The selected tile has a ring outside its edge, whatever its state. Every tile's footer
+  says where it lives (folder or site) and when it last did anything; hover for the full title.
+
+- **Web tiles.** Live, scaled WKWebViews; unread counts in titles (`(3) Inbox`) raise attention.
+  A page that doesn't load says why: in its tile's footer, and along the bottom of its open panel.
+
+- **Accounts sidebar.** Remaining balance / plan headroom with one-click top-up: OpenRouter,
+  DeepSeek, Moonshot, OpenAI and Anthropic (admin-key spend vs. budget), xAI, ChatGPT/Codex plan
+  limits (from local Codex logs), the Claude plan, and a custom provider for any JSON balance
+  endpoint. Keys live in the login Keychain. A card that needs something from you says what, and
+  clicking it does it.
+
+- **Claude plan.** Usage counted from your local transcripts, a limit Claude Code runs into shown
+  with when it resets, and — once you choose Show plan limits and agree — the official 5-hour and
+  weekly limits: every 10 minutes Tessera starts Claude Code out of sight in your home folder,
+  opens its `/usage` screen, reads the two limits and quits. No prompt is sent, no tokens are used
+  and no conversation is saved; your settings and hooks are left as they are. Stop Checking Plan
+  Limits (the card's menu) turns it off. Tessera never reads Claude Code's credentials. If Claude
+  Code's sign-in in terminals is missing or has run out (`claude auth status`, or a reply refused
+  with 401), the card offers Sign in to Claude Code, which runs `claude auth login`.
+
+- **Tabs.** All · your own tabs, in a strip over the board. Drag tiles onto a tab (or Move to
+  Tab); new tiles land in the tab you're viewing, as does a Claude or Codex app conversation
+  started there once its tile appears (a new tile drops the filter, so it always shows); each tab
+  shows a count and a dot in the colour of the most pressing thing waiting in it. ⌘1 and ⌘3…9
+  switch. The selection is always a tile the board shows. Board commands (Mark All Seen, Close
+  Exited, …) act on the tiles on show: the tab being viewed, as filtered.
+
+- **Close with Undo.** Closing a tile never silently destroys work. A toast offers Undo for a few
+  seconds, ⌘Z (Edit ▸ Undo Close Tile) brings it back later, and ⌘K lists the last 20 closed tiles
+  as "Reopen …", across restarts. A terminal comes back in its folder and, if it ran an agent, in
+  the same conversation; a web tile at its address; a hidden Claude or Codex conversation
+  reappears. Each returns to its place and tab. While anything is hidden or closed, "N put away"
+  at the end of the tab strip lists it all, one click to bring each back (or all of them).
+
+- **Machines.** Top-bar chips for this Mac and any SSH hosts (e.g. DGX Sparks): two labelled
+  bars — GPU (CPU where there is no GPU to read) and memory — mint with headroom, amber busy, coral flat out;
+  temperature and GPU watts under the name; hover for details, click a remote to open an ssh tile. A tile running
+  `ssh` is named after its machine and says so in its footer, in place of the local folder.
+
 - **Privacy mode (⇧⌘P).** For screenshots and video: terminal and conversation text become
   word-length bars in place, web pages a coarse mosaic. Everything keeps moving.
+
 - **iPhone / iPad.** Pair by scanning the QR code in Settings → iPhone with the Camera. The phone
   gets a "Needs you" queue (in ⌘J's order), live mini tiles, a terminal view (reader mode that
   re-wraps text, or the exact screen with pinch-zoom), one-tap answers (`1 2 3 y n ⏎`, esc, ^C,
