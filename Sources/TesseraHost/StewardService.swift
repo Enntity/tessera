@@ -55,13 +55,17 @@ public final class StewardService {
     @ObservationIgnored private var briefedState: Int?
     @ObservationIgnored private var lastBriefAt = Date.distantPast
     @ObservationIgnored private var retryAt = Date.distantPast
-    @ObservationIgnored private let session: URLSession = {
+    @ObservationIgnored private var generation = UUID()
+    @ObservationIgnored private let session: URLSession
+    @ObservationIgnored private let readKey: @Sendable () -> String?
+
+    private static func makeSession() -> URLSession {
         let c = URLSessionConfiguration.ephemeral
         c.timeoutIntervalForRequest = 120
         return URLSession(configuration: c)
-    }()
+    }
 
-    static let account = "steward.key"
+    nonisolated static let account = "steward.key"
     /// A tile must show the same thing this long before it is summarized (a busy terminal isn't
     /// summarized on every line it prints).
     static let settle: TimeInterval = 20
@@ -69,6 +73,16 @@ public final class StewardService {
     static let concurrency = 2
 
     public init(directory: URL) {
+        self.session = Self.makeSession()
+        self.readKey = { Keychain.get(account: Self.account) }
+        store = directory.appendingPathComponent("steward.json")
+        feedback = directory.appendingPathComponent("steward-feedback.ndjson")
+        config = StateFile.load(Config.self, from: store) ?? Config()
+    }
+
+    init(directory: URL, session: URLSession, readKey: @escaping @Sendable () -> String?) {
+        self.session = session
+        self.readKey = readKey
         store = directory.appendingPathComponent("steward.json")
         feedback = directory.appendingPathComponent("steward-feedback.ndjson")
         config = StateFile.load(Config.self, from: store) ?? Config()
@@ -90,6 +104,11 @@ public final class StewardService {
     @discardableResult
     public func configure(_ next: Config, key: String?) -> Bool {
         guard !next.enabled || (Self.baseURL(next.url) != nil && !next.model.isEmpty) else { return false }
+        generation = UUID()
+        summarized = [:]
+        brief = nil
+        summaries = [:]
+        lastBriefAt = .distantPast
         config = next
         StateFile.save(config, to: store)
         if let key, !key.isEmpty { Keychain.set(key, account: Self.account) }
@@ -195,12 +214,14 @@ public final class StewardService {
     /// backs off for a minute).
     private func call(base: URL, messages: [[String: String]], maxTokens: Int, done: @escaping @MainActor (Data?) -> Void) {
         let model = config.model
-        let account = Self.account
-        Task { [session] in
-            let key = await Task.detached(priority: .utility) { Keychain.get(account: account) }.value
+        let generation = self.generation
+        Task { [session, readKey] in
+            let key = await Task.detached(priority: .utility) { readKey() }.value
+            guard self.acceptsResponse(generation: generation) else { done(nil); return }
             do {
                 let request = try Steward.request(base: base, key: key, model: model, messages: messages, maxTokens: maxTokens)
                 let (data, response) = try await session.data(for: request)
+                guard self.acceptsResponse(generation: generation) else { done(nil); return }
                 let code = (response as? HTTPURLResponse)?.statusCode ?? 0
                 guard (200..<300).contains(code) else {
                     throw Steward.Failure.unreadable(code == 401 || code == 403 ? "the endpoint refused the key (HTTP \(code))" : "HTTP \(code)")
@@ -209,10 +230,15 @@ public final class StewardService {
                 if case .failed = self.status { self.status = .idle }
                 done(data)
             } catch {
+                guard self.acceptsResponse(generation: generation) else { done(nil); return }
                 self.retryAt = Date().addingTimeInterval(60)
                 self.status = .failed(error.localizedDescription)
                 done(nil)
             }
         }
+    }
+
+    private func acceptsResponse(generation: UUID) -> Bool {
+        self.generation == generation && config.enabled && paused?() != true
     }
 }

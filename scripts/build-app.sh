@@ -7,10 +7,11 @@ root=$(cd "$(dirname "$0")/.." && pwd)
 configuration=${CONFIGURATION:-release}
 app="${TESSERA_APP_PATH:-$root/.build/app/Tessera.app}"
 contents="$app/Contents"
+scratch="${TESSERA_SCRATCH_PATH:-$root/.build}"
 
-swift build --package-path "$root" -c "$configuration" --product Tessera >&2
-swift build --package-path "$root" -c "$configuration" --product tessera-cli >&2
-bin_dir=$(swift build --package-path "$root" -c "$configuration" --show-bin-path)
+swift build --package-path "$root" --scratch-path "$scratch" -c "$configuration" --product Tessera >&2
+swift build --package-path "$root" --scratch-path "$scratch" -c "$configuration" --product tessera-cli >&2
+bin_dir=$(swift build --package-path "$root" --scratch-path "$scratch" -c "$configuration" --show-bin-path)
 
 /bin/rm -rf "$app"
 mkdir -p "$contents/MacOS" "$contents/Resources" "$contents/Helpers"
@@ -39,6 +40,11 @@ if [[ -z "$identity" ]]; then
   echo "warning: no code-signing identity; Accessibility permission will need re-granting after each build" >&2
 fi
 echo "signing with: $(/usr/bin/security find-identity -v -p codesigning 2>/dev/null | /usr/bin/grep -F "$identity" | /usr/bin/sed -nE 's/.*"(.*)"$/\1/p' | /usr/bin/head -n 1 || true) ($identity)" >&2
-/usr/bin/codesign --force --sign "$identity" "$contents/Helpers/tessera-cli"
-/usr/bin/codesign --force --sign "$identity" "$app"
+sign_options=(--force --sign "$identity")
+if [[ "${TESSERA_DISTRIBUTION:-0}" == 1 ]]; then
+  sign_options+=(--options runtime --timestamp)
+fi
+/usr/bin/codesign "${sign_options[@]}" "$contents/Helpers/tessera-cli"
+/usr/bin/codesign "${sign_options[@]}" "$app"
+/usr/bin/codesign --verify --deep --strict "$app"
 echo "$app"

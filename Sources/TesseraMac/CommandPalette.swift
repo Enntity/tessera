@@ -185,6 +185,16 @@ extension AppModel {
         let search = PaletteItem(id: "search", symbol: "magnifyingglass", color: Style.dim, title: "Search the web for “\(q)”", subtitle: "New web tile") {
             self.create { $0.openBrowser(q) }
         }
-        return tiles + (looksLikeURL ? [openURL] : []) + presets + commands + reopen + [run] + apps + (looksLikeURL ? [] : [search])
+        // Keep each append explicit: Xcode 26.0 cannot type-check the chained overloads in
+        // reasonable time on the release CI runner.
+        var results = tiles
+        if looksLikeURL { results.append(openURL) }
+        results.append(contentsOf: presets)
+        results.append(contentsOf: commands)
+        results.append(contentsOf: reopen)
+        results.append(run)
+        results.append(contentsOf: apps)
+        if !looksLikeURL { results.append(search) }
+        return results
     }
 }

@@ -8,6 +8,7 @@ let usage = """
     tessera — talk to the Tessera board running on this Mac
 
       tessera board [--waiting]                 Every tile (id, title, state, summary) and the brief
+      tessera resources                         Fleet holders, queues, expiry and snapshot freshness
       tessera whoami                            Which tile you are
       tessera read <tile> [--lines N]           What a tile shows now
       tessera send <tile> <text…> [--type]      Message another agent (--type: into its terminal)
@@ -120,9 +121,24 @@ func serveMCP() -> Never {
             let id = message["id"]
             let method = message["method"] as? String ?? ""
             if method == "tools/call" { message["params"] = withCaller(message["params"] as? [String: Any] ?? [:]) }
+            if let id, method == "initialize" {
+                let version = (message["params"] as? [String: Any])?["protocolVersion"] as? String ?? "2025-06-18"
+                write(["jsonrpc": "2.0", "id": id, "result": ["protocolVersion": version, "capabilities": ["tools": [:]],
+                      "serverInfo": ["name": "tessera", "version": AgentToolCatalog.version], "instructions": AgentToolCatalog.instructions]])
+                return
+            }
+            if let id, method == "tools/list" {
+                let list: [[String: Any]] = AgentToolCatalog.tools.map {
+                    ["name": $0.name, "description": $0.description,
+                     "inputSchema": ["type": "object", "properties": $0.properties, "required": $0.required]]
+                }
+                write(["jsonrpc": "2.0", "id": id, "result": ["tools": list]])
+                return
+            }
             do {
                 let (status, data) = try rpc(message)
                 guard id != nil, status != 202, !data.isEmpty else { return }
+                guard status == 200 else { throw Failure("Tessera answered HTTP \(status)") }
                 if let reply = try? JSONSerialization.jsonObject(with: data) as? [String: Any] { write(reply) }
             } catch {
                 guard let id else { return }
@@ -156,6 +172,8 @@ do {
         serveMCP()
     case "board":
         print(try callTool("board", ["waiting_only": has("--waiting")]))
+    case "resources":
+        print(try callTool("resources", [:]))
     case "whoami":
         print(try callTool("whoami", [:]))
     case "read":

@@ -24,6 +24,28 @@ final class RedactorTests: XCTestCase {
 }
 
 final class StewardTests: XCTestCase {
+    func testCleanupSuggestionIsRecheckedAgainstLiveState() {
+        var tile = TileInfo(id: "t", kind: .terminal, flavor: .shell, title: "demo", activity: .idle)
+        XCTAssertTrue(Steward.canSuggestClosing(tile))
+        for state in [TileActivity.working, .starting, .needsInput, .failed] {
+            tile.activity = state
+            XCTAssertFalse(Steward.canSuggestClosing(tile))
+        }
+        tile.activity = .done
+        tile.attention = true
+        XCTAssertFalse(Steward.canSuggestClosing(tile))
+    }
+
+    func testTitlesFoldersAndChangeNotesAreRedacted() {
+        let tile = TileInfo(id: "t", kind: .terminal, flavor: .shell, title: "password=hunter2hunter2", subtitle: "token=abcdefghi", activity: .idle)
+        let d = Steward.Digest(tile, text: "safe", unseen: false)
+        let messages = Steward.tileMessages(d) + Steward.briefMessages([d], changes: [tile.title])
+        for message in messages {
+            XCTAssertFalse(message["content"]!.contains("hunter2"))
+            XCTAssertFalse(message["content"]!.contains("abcdefghi"))
+        }
+    }
+
     private func completion(_ content: String) -> Data {
         try! JSONSerialization.data(withJSONObject: ["choices": [["message": ["role": "assistant", "content": content]]]])
     }
@@ -128,9 +150,11 @@ final class AgentAPITests: XCTestCase {
         XCTAssertEqual((result["serverInfo"] as? [String: Any])?["name"] as? String, "tessera")
         let list = try await call(workspace, "tools/list")
         let names = ((list["result"] as? [String: Any])?["tools"] as? [[String: Any]])?.compactMap { $0["name"] as? String }
-        XCTAssertEqual(names, ["board", "read_tile", "whoami", "send_message", "inbox", "ask_human", "get_answer", "notify_human"])
+        XCTAssertEqual(names, ["board", "resources", "read_tile", "whoami", "send_message", "inbox", "ask_human", "get_answer", "notify_human"])
         let unknown = try await call(workspace, "nope")
         XCTAssertNotNil(unknown["error"])
+        let malformedCaller = try await call(workspace, "tools/call", ["name": "whoami", "_meta": ["tessera/caller": "invalid scalar"]])
+        XCTAssertNotNil(malformedCaller["result"])
         let (status, _) = await workspace.agentTools.handle(try JSONSerialization.data(withJSONObject: ["jsonrpc": "2.0", "method": "notifications/initialized"]))
         XCTAssertEqual(status, 202)
     }
@@ -162,6 +186,7 @@ final class AgentAPITests: XCTestCase {
         XCTAssertTrue(sent.contains("inbox"), sent)
         let (typed, refused) = try await tool(workspace, "send_message", ["to": b, "text": "x", "type": true], tile: a)
         XCTAssertTrue(refused, typed)
+        XCTAssertTrue(typed.contains("Nothing was sent"))
         let (inbox, _) = try await tool(workspace, "inbox", [:], tile: b)
         let title = try XCTUnwrap(workspace.info(a)?.title)
         XCTAssertTrue(inbox.contains("from \(title) (\(a)): tests are red"), inbox)
@@ -175,6 +200,11 @@ final class AgentAPITests: XCTestCase {
         workspace.agentTools.privacy = { true }
         let (_, privateError) = try await tool(workspace, "read_tile", ["tile": a])
         XCTAssertTrue(privateError)
+        for name in ["board", "resources", "whoami", "inbox", "get_answer"] {
+            let (text, error) = try await tool(workspace, name, [:], tile: a)
+            XCTAssertTrue(error, name)
+            XCTAssertTrue(text.contains("privacy"), text)
+        }
 
         // A note is a tile until seen.
         _ = try await tool(workspace, "notify_human", ["text": "Decode A/B done"], tile: a)
@@ -259,5 +289,81 @@ final class AgentAPITests: XCTestCase {
         workspace.agentServer.stop()
         let (gone, _) = await run(["board"])
         XCTAssertEqual(gone, 3)
+        let offline = await run(["mcp"], stdin: "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/list\"}\n")
+        XCTAssertEqual(offline.0, 0)
+        XCTAssertTrue(offline.1.contains("resources"), offline.1)
+    }
+
+    func testResourceReportDistinguishesUnconfiguredFreshAndStale() throws {
+        let workspace = try board()
+        XCTAssertTrue(workspace.fleet.agentReport().contains("not configured"))
+        try #"{"url":"http://127.0.0.1:1"}"#.write(to: dir.appendingPathComponent("lloom.json"), atomically: true, encoding: .utf8)
+        let fleet = FleetService(directory: dir)
+        XCTAssertTrue(fleet.agentReport().contains("no schedule"))
+        let fixture = #"{"now":1000,"resources":[{"id":"gpu","capacity":1,"holders":["r1"],"queue":["r2"]}],"reservations":[{"id":"r1","resource":"gpu","owner":"builder","state":"active","expiresAt":2000},{"id":"r2","resource":"gpu","owner":"reviewer","state":"queued"}],"jobs":[]}"#
+        fleet.apply(try LLoomSchedule.parse(Data(fixture.utf8)))
+        let report = fleet.agentReport()
+        for value in ["fresh", "builder", "reviewer", "r1", "r2", "expires", "not a reservation"] { XCTAssertTrue(report.contains(value), report) }
+        XCTAssertTrue(fleet.agentReport(now: Date().addingTimeInterval(60)).contains("STALE"))
+    }
+}
+
+final class AgentRequestValidationTests: XCTestCase {
+    func testMalformedLengthsNeverFormUnsafeRanges() {
+        for length in ["-1", "-9223372036854775808", "999999999999999999999999", "abc", "1048577"] {
+            let request = "POST /rpc HTTP/1.1\r\nContent-Length: \(length)\r\n\r\n{}"
+            XCTAssertNil(HTTPRequest(Data(request.utf8)), length)
+        }
+        XCTAssertNotNil(HTTPRequest(Data("POST /rpc HTTP/1.1\r\nContent-Length: 2\r\n\r\n{}".utf8)))
+        XCTAssertNil(HTTPRequest(Data("POST /rpc HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n".utf8)))
+    }
+
+    @MainActor func testUntrustedNumericArgumentsCannotTrap() {
+        XCTAssertNil(AgentTools.int(Double.infinity))
+        XCTAssertNil(AgentTools.int(Double.nan))
+        XCTAssertNil(AgentTools.int(1e100))
+        XCTAssertEqual(AgentTools.wait(-10, default: 0), 0)
+        XCTAssertEqual(AgentTools.wait(100, default: 0), 55)
+    }
+}
+
+/// Controlled endpoint: hold a real URLSession completion until configuration changes.
+private final class HeldStewardProtocol: URLProtocol, @unchecked Sendable {
+    static var started: ((HeldStewardProtocol) -> Void)?
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+    override func startLoading() { Self.started?(self) }
+    override func stopLoading() {}
+    func complete() {
+        let content = #"{"headline":"Old endpoint response","attention":[],"closable":[]}"#
+        let data = try! JSONSerialization.data(withJSONObject: ["choices": [["message": ["content": content]]]])
+        client?.urlProtocol(self, didReceive: HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: data)
+        client?.urlProtocolDidFinishLoading(self)
+    }
+}
+
+@MainActor
+final class StewardLifecycleTests: XCTestCase {
+    func testLateResponseCannotRestoreDisabledSteward() async throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [HeldStewardProtocol.self]
+        let session = URLSession(configuration: configuration)
+        defer { session.invalidateAndCancel(); HeldStewardProtocol.started = nil }
+        let service = StewardService(directory: dir, session: session, readKey: { nil })
+        service.digests = { [] }
+        let began = expectation(description: "request reached endpoint")
+        var held: HeldStewardProtocol?
+        HeldStewardProtocol.started = { request in held = request; began.fulfill() }
+        XCTAssertTrue(service.configure(.init(enabled: true, url: "http://steward.test/v1", model: "test"), key: nil))
+        await fulfillment(of: [began], timeout: 3)
+        XCTAssertTrue(service.configure(.init(enabled: false), key: nil))
+        held?.complete()
+        try await Task.sleep(nanoseconds: 150_000_000)
+        XCTAssertNil(service.brief)
+        XCTAssertTrue(service.summaries.isEmpty)
+        XCTAssertEqual(service.status, .off)
     }
 }

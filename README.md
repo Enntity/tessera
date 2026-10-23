@@ -4,15 +4,29 @@
 
 # Tessera
 
-The control plane for agent work on your Mac, and a mission-control board for it. Any agent you run
-— Claude Code, Codex, Grok, omp, ZCode, the DeepSeek Harness, a plain shell — talks to Tessera, and
-through it to the other agents: it can see the board, message another agent, and ask you a question
-with one-tap answers. What needs you collects in one queue, whatever raised it, and every running
-thing — terminals, agent conversations, web pages — is a live tile on one full-screen grid. Tiles
-animate as their content changes and light up when something finishes or needs you. Click one and it
-opens full-size right where it was; click outside and you are back on the board.
+Tessera gives agents on your Mac a shared control and communication plane. They can discover
+other sessions, read their current state, exchange messages, check shared resource leases, and
+ask you for a decision through one queue. The **Steward** turns the board into a short brief of
+what changed and what needs your attention. Live terminal and session tiles let you inspect and
+act on that work.
 
-Native macOS app, with a focused iOS companion built on the same core.
+The macOS app is the host. The iOS companion is an optional source-built client; Linux support is
+future work.
+
+## Start here
+
+- [Install Tessera and connect your agents](docs/install.md)
+- [Control plane: messaging, identity, resource coordination, and Steward](docs/control-plane.md)
+- [Five-minute demo for a first run or presentation](docs/demo.md)
+- [Release and verification procedure](docs/releasing.md)
+
+| Capability | What you can do |
+| --- | --- |
+| Communication | Discover agents, inspect a tile, send a message, and receive replies through CLI or MCP |
+| Human decisions | Ask a question with answer choices; retrieve the answer later without blocking other tools |
+| Resource coordination | Inspect LLooM holders, queues, and expiry with `tessera resources`; reserve through LLooM before running work |
+| Steward | Read model-generated tile summaries and a board brief, with suggested cleanup that requires your action |
+| Session workspace | Run terminals, view conversations, resume sessions, and keep selected work visible in a dock |
 
 ![Tessera: a board of agent sessions, terminals and a web page, with the Needs-you lane on the left, a docked terminal and the accounts sidebar](docs/tessera.png)
 
@@ -23,7 +37,8 @@ Native macOS app, with a focused iOS companion built on the same core.
 - **Agents talk to Tessera, and through it to each other.** A `tessera` command, also an MCP
   server (`tessera mcp`), lets any agent on the Mac see the board (`board`), read another tile
   (`read`), find itself (`whoami`), message another agent (`send`, `inbox`), ask you something
-  (`ask`) and leave you a note (`notify`).
+  (`ask`) and leave you a note (`notify`). `resources` exposes the connected Fleet schedule,
+  including holders, queues, lease expiry, and whether the snapshot is stale.
   - Questions land in the Needs-you lane, as alerts and on the phone, with the agent's options as
     one-tap answers and a reply field.
   - A message is typed into a terminal agent's prompt only with your OK, unless you allow it
@@ -49,8 +64,8 @@ Native macOS app, with a focused iOS companion built on the same core.
   gateway with a local model, and it keeps a one-line summary of each tile on the card's footer.
   At the head of the Needs-you lane it writes a brief: what is going on in a sentence, what
   finished, failed or started asking since you last looked, what needs you, and what can be put
-  away (Close all, with Undo). Tile text is sent with credentials removed, and nothing is sent in
-  privacy mode. It only suggests.
+  away (Close all, with Undo). Common credential patterns are redacted before tile text is sent. Privacy mode pauses new
+  requests and hides API reads; it cannot retract requests already sent. It only suggests.
 
 - **Fleet: shared hardware and agents' jobs.** Point Settings → Fleet at a
   [LLooM](https://github.com/Enntity/lloom) head and its leases appear in a band over the board:
@@ -316,6 +331,9 @@ ask first.
 - Opening a Claude desktop session relies on its `claude://code/continue?session=` deep link.
 - The phone reflects the Mac's terminal size; there is no phone-sized re-layout of TUIs.
 - No forward secrecy on the remote link yet (see above).
+- [Linux support](https://github.com/Enntity/tessera/issues/7) is planned separately; this release requires macOS 15+.
+- Inbox delivery requires the recipient to check its inbox; desktop apps do not receive injected prompts.
+- Steward is advisory, and Fleet is a read-only view of LLooM. Tessera does not schedule work itself.
 - If you scroll back in a Mac terminal, the phone's snapshot and prompt detection follow the scrolled view.
 - No push notifications to the phone yet (needs an APNs relay); the phone updates while open.
 - Tiles are one size, stepped for the whole board (⌘= ⌘-); a tile can be docked, not pinned in place.

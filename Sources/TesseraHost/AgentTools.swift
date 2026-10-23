@@ -7,58 +7,9 @@ import TesseraKit
 /// Everything read goes out with credentials removed; nothing is read while privacy mode is on.
 @MainActor
 public final class AgentTools {
-    struct Tool {
-        let name: String
-        let description: String
-        let properties: [String: [String: Any]]
-        let required: [String]
-    }
-
-    static let version = "1"
-    static let instructions = """
-        Tessera is the developer's mission-control board on this Mac: every terminal, AI agent session (Claude, \
-        Codex, dsh, …) and LLooM job is a tile. Use it to see what else is running, read another tile, message \
-        another agent, or ask the developer something without blocking in a window they may not be watching. \
-        Call whoami first to learn your own tile id. Ask the developer only what you genuinely can't decide.
-        """
-
-    static let tools: [Tool] = [
-        Tool(name: "board",
-             description: "Everything on the board: each tile's id, title, kind, state and a one-line summary, plus the steward's brief of what needs the developer. Start here to discover other agents.",
-             properties: ["waiting_only": ["type": "boolean", "description": "Only tiles waiting on the developer."]], required: []),
-        Tool(name: "read_tile",
-             description: "What a tile shows now: a terminal's screen, a conversation's latest messages, a job's notes. Credentials are removed.",
-             properties: ["tile": ["type": "string", "description": "Tile id or exact title (from board)."],
-                          "lines": ["type": "integer", "description": "How many lines or messages, default 60."]],
-             required: ["tile"]),
-        Tool(name: "whoami",
-             description: "Which tile you are, as far as Tessera can tell (from TESSERA_TILE_ID or your working folder).",
-             properties: [:], required: []),
-        Tool(name: "send_message",
-             description: "Message another tile's agent. It lands in their inbox; with type=true it is also typed into a terminal agent's prompt (after the developer approves, unless they allow it outright).",
-             properties: ["to": ["type": "string", "description": "Tile id or exact title."],
-                          "text": ["type": "string"],
-                          "type": ["type": "boolean", "description": "Also type it into the recipient's terminal (terminal agents only)."]],
-             required: ["to", "text"]),
-        Tool(name: "inbox",
-             description: "Messages other agents sent you. Waits up to wait_seconds for one to arrive if there are none.",
-             properties: ["wait_seconds": ["type": "integer", "description": "0-55, default 0."],
-                          "all": ["type": "boolean", "description": "Include ones already read."]],
-             required: []),
-        Tool(name: "ask_human",
-             description: "Ask the developer a question. It appears in Tessera's Needs-you lane, on their phone and as an alert, with your options as one-tap answers. Returns the answer if given within wait_seconds, else an id for get_answer.",
-             properties: ["question": ["type": "string"],
-                          "options": ["type": "array", "items": ["type": "string"], "description": "Up to 6 short answers."],
-                          "wait_seconds": ["type": "integer", "description": "0-55, default 50."]],
-             required: ["question"]),
-        Tool(name: "get_answer",
-             description: "The developer's answer to an ask_human question, waiting up to wait_seconds.",
-             properties: ["id": ["type": "string"], "wait_seconds": ["type": "integer", "description": "0-55, default 50."]],
-             required: ["id"]),
-        Tool(name: "notify_human",
-             description: "Leave the developer a short note (a result, a heads-up). It shows in the Needs-you lane until seen. Don't use it for progress chatter.",
-             properties: ["text": ["type": "string"]], required: ["text"])
-    ]
+    static let version = AgentToolCatalog.version
+    static let instructions = AgentToolCatalog.instructions
+    static let tools = AgentToolCatalog.tools
 
     private weak var workspace: Workspace?
     /// Privacy mode: the user is showing their screen; nothing is read out.
@@ -96,7 +47,7 @@ public final class AgentTools {
             let name = params["name"] as? String ?? ""
             let args = params["arguments"] as? [String: Any] ?? [:]
             let meta = params["_meta"] as? [String: Any]
-            let caller = (meta?["tessera/caller"]).flatMap { try? JSONSerialization.data(withJSONObject: $0) }
+            let caller = (meta?["tessera/caller"] as? [String: Any]).flatMap { try? JSONSerialization.data(withJSONObject: $0) }
                 .flatMap { try? JSONDecoder().decode(AgentCaller.self, from: $0) } ?? AgentCaller()
             do {
                 let text = try await call(name, args, caller: caller)
@@ -124,26 +75,31 @@ public final class AgentTools {
     func call(_ name: String, _ args: [String: Any], caller: AgentCaller) async throws -> String {
         guard let workspace else { throw Refusal("Tessera is starting up; try again in a moment.") }
         let me = workspace.agentCaller(caller)
+        if privacy(), ["board", "resources", "read_tile", "whoami", "inbox", "get_answer"].contains(name) {
+            throw Refusal("The developer has privacy mode on; board content can't be read right now.")
+        }
         switch name {
         case "board":
             return board(workspace, waitingOnly: args["waiting_only"] as? Bool ?? false, me: me.tile)
+        case "resources":
+            return workspace.fleet.agentReport()
         case "read_tile":
             guard !privacy() else { throw Refusal("The developer has privacy mode on; tiles can't be read right now.") }
             let id = try workspace.resolveTile(args["tile"] as? String ?? "")
             return workspace.readTile(id, lines: max(1, min(400, Self.int(args["lines"]) ?? 60)))
         case "whoami":
             guard let tile = me.tile, let info = workspace.info(tile) else {
-                return "Tessera can't tell which tile you are (\(me.reason)). You are \"\(me.label)\". "
-                    + "Pass --as NAME (or set TESSERA_AS) to name yourself; others can still message you by tile id once you know it."
+                return Redactor.redact("Tessera can't tell which tile you are (\(me.reason)). You are \"\(me.label)\". "
+                    + "Use board to find your tile, then set TESSERA_TILE_ID to that exact id for inbox access. --as NAME only sets your display name.")
             }
-            return "You are tile \(tile): \(info.title) (\(info.flavor.displayName), \(info.subtitle))."
+            return Redactor.redact("You are tile \(tile): \(info.title) (\(info.flavor.displayName), \(info.subtitle)).")
         case "send_message":
             let to = try workspace.resolveTile(args["to"] as? String ?? "")
             let text = (args["text"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
             guard !text.isEmpty else { throw Refusal("text is empty") }
             guard to != me.tile else { throw Refusal("That is you.") }
             let wantsTyping = args["type"] as? Bool ?? false
-            if wantsTyping, workspace.terminals[to] == nil { throw Refusal("Only terminal agents can have messages typed in; it is in their inbox instead.") }
+            if wantsTyping, workspace.terminals[to] == nil { throw Refusal("Only terminal agents can have messages typed in. Nothing was sent; retry without --type for inbox delivery.") }
             let title = workspace.info(to)?.title ?? to
             let message = workspace.desk.send(text, from: me.label, fromTile: me.tile, to: to, toTitle: title, type: wantsTyping)
             switch message.delivery {
@@ -159,12 +115,13 @@ public final class AgentTools {
             let deadline = Date().addingTimeInterval(wait)
             while found.isEmpty, Date() < deadline {
                 try await Task.sleep(nanoseconds: 500_000_000)
+                guard !privacy() else { throw Refusal("Privacy mode is on; inbox reading paused.") }
                 found = workspace.desk.inbox(for: tile, unreadOnly: !all, markRead: true)
             }
             guard !found.isEmpty else { return "No messages." }
-            return found.map { m in
+            return Redactor.redact(found.map { m in
                 "[\(m.sentAt.formatted(date: .omitted, time: .shortened))] from \(m.from)\(m.fromTile.map { " (\($0))" } ?? ""): \(m.text)"
-            }.joined(separator: "\n")
+            }.joined(separator: "\n"))
         case "ask_human":
             let text = (args["question"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
             guard !text.isEmpty else { throw Refusal("question is empty") }
@@ -186,9 +143,10 @@ public final class AgentTools {
     private func answer(_ id: String, wait: TimeInterval, _ workspace: Workspace) async throws -> String {
         let deadline = Date().addingTimeInterval(wait)
         while true {
+            guard !privacy() else { throw Refusal("Privacy mode is on; answer reading paused.") }
             guard let q = workspace.desk.question(id) else { throw Refusal("no question \(id)") }
-            if let answer = q.answer { return "Answer: \(answer)" }
-            if q.dismissed { return "The developer set the question aside without answering. Decide yourself, or ask again later." }
+            if let answer = q.answer { return Redactor.redact("Answer: \(answer)") }
+            if q.dismissed { return "The developer set the question aside without answering. This is not approval; leave any action requiring approval pending." }
             if Date() >= deadline { return "Not answered yet. Question id: \(id). Call get_answer with this id to keep waiting." }
             try await Task.sleep(nanoseconds: 500_000_000)
         }
@@ -207,11 +165,13 @@ public final class AgentTools {
             lines.append("- \(t.id)\(t.id == me ? " (you)" : "") | \(t.title) | \(t.flavor.displayName) | \(t.activity.label.lowercased())"
                 + "\(t.needsUser ? ", waiting on the developer" : "") | \(t.subtitle)\(what.isEmpty ? "" : " | \(Redactor.redact(what).preview(140))")")
         }
-        return lines.joined(separator: "\n")
+        return Redactor.redact(lines.joined(separator: "\n"))
     }
 
     static func int(_ value: Any?) -> Int? {
-        (value as? Int) ?? (value as? Double).map(Int.init) ?? (value as? String).flatMap { Int($0) }
+        if let value = value as? Int { return value }
+        if let value = value as? Double { return Int(exactly: value) }
+        return (value as? String).flatMap(Int.init)
     }
 
     /// Waits stay under a minute: some agent harnesses time a tool call out at 60 s.

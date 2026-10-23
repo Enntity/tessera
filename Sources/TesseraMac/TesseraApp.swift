@@ -6,7 +6,7 @@ import TesseraKit
 @main
 struct TesseraApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
-    @State private var model = AppModel()
+    private var model: AppModel { appDelegate.model }
 
     var body: some Scene {
         WindowGroup("Tessera", id: "board") {
@@ -14,7 +14,6 @@ struct TesseraApp: App {
                 .environment(model)
                 .frame(minWidth: 900, minHeight: 560)
                 .preferredColorScheme(.dark)
-                .onAppear { model.start() }
         }
         .windowStyle(.hiddenTitleBar)
         .defaultSize(width: 1680, height: 1000)
@@ -37,10 +36,16 @@ extension Scene {
     }
 }
 
+@MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    let model = AppModel()
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Launched as a bare SwiftPM binary during development, AppKit needs telling we're a real app.
         NSApp.setActivationPolicy(.regular)
+        // Agent coordination must start even if macOS delays presenting the board (for example
+        // at login or while the screen is locked). A view's onAppear is not an app lifecycle event.
+        model.start()
         NSApp.activate()
     }
 
