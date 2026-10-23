@@ -20,6 +20,7 @@ Status: **development candidate prepared; public distribution not yet qualified*
 | Agent setup | Installation could replace customized skills, silently retain an unrelated executable, and block the UI | Preserve backups, report conflicts/failures, drain subprocess output, install off the UI thread |
 | Presentation | Coordination features had no focused setup/reference/demo guide | Added control-plane, install, release, and demo guides plus launch copy; README leads with coordination |
 | Distribution | No packaged release or CI workflow | Added macOS CI, isolated installer tests, ZIP/checksum packaging, and a gated notarization path |
+| Build portability | Xcode 26.0 CI could not type-check a long command-palette array expression | Split it into explicit appends while retaining ordering |
 
 ## Verification
 
