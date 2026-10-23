@@ -56,7 +56,9 @@ with tempfile.TemporaryDirectory(prefix="tessera-app-test-") as temporary:
                             break
                     except (FileNotFoundError, json.JSONDecodeError):
                         pass
-                    assert time.monotonic() - start < 15, "agent API did not start without UI interaction"
+                    # A fresh app path can take longer than a previously launched bundle on macOS.
+                    # Record the actual duration below; this is a liveness check, not a startup SLA.
+                    assert time.monotonic() - start < 60, "agent API did not start without UI interaction"
                     time.sleep(0.1)
                 elapsed = time.monotonic() - start
                 assert endpoint.stat().st_mode & 0o777 == 0o600

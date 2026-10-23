@@ -43,6 +43,11 @@ Status: **development candidate prepared; public distribution not yet qualified*
   `scripts/test-packaged-app.py` checks both launches, restored terminals, caller identity,
   durable/read-once inbox delivery, endpoint credential replacement and mode 0600, unconfigured
   resources, a question, and a note.
+- A first run from a fresh extraction path exceeded the initial 15-second test deadline. With a
+  longer observation window, that exact archive passed without UI interaction: 26.3 seconds on
+  cold launch, 2.5 seconds on restart. The smoke test now allows 60 seconds and prints the actual
+  duration. This establishes liveness, not consistently fast startup; the cause of the cold-path
+  delay remains unconfirmed and timing must be checked again on the signed download.
 - Interactive packaged-app checks passed in a disposable home: two terminal tiles, a question
   answered in the Needs-you lane and retrieved by CLI, approval-gated `--type` delivery verified
   in the terminal, privacy refusing a board read, and the Settings installer completing without
@@ -67,6 +72,7 @@ and fixed Bash 3.2's empty-array behavior under `set -u`.
 2. Repeat installation from the final signed/notarized download on a clean user/Mac. Local
    packaged launch, UI, installer, and state-preserving update checks now pass in an isolated
    home on this Mac. They do not establish downloaded Gatekeeper behavior or another OS version.
+   Check cold-launch latency as well as eventual startup.
 3. Qualify the particular Fleet head and Steward model used for a live presentation. Existing
    read-only live-board inspection confirmed these integrations are in use locally, but did not
    establish candidate behavior against a new head/model. No live reservations were changed.
