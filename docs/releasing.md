@@ -28,6 +28,18 @@ This produces `.build/releases/Tessera-<version>-macos-<arch>-development.zip` a
 It is ad-hoc signed for local testing. It is not a notarized public download and may be rejected
 by Gatekeeper after download. Do not tell users to disable Gatekeeper to hide that release gap.
 
+On a logged-in Mac desktop, extract the ZIP and run:
+
+```sh
+python3 scripts/test-packaged-app.py /absolute/path/to/extracted/Tessera.app
+```
+
+This launches only the supplied app in a disposable home and verifies startup without UI
+interaction, a restart, restored terminals, and durable inbox delivery. It never activates a
+window to make startup pass. It also checks questions, notes, resource setup status, and endpoint
+permissions. Follow with the interactive checks below; this script does not exercise Gatekeeper
+or provide credentials for Fleet and Steward.
+
 ## Public download
 
 Use a Developer ID Application signing identity and an existing notarytool Keychain profile:

@@ -21,6 +21,7 @@ Status: **development candidate prepared; public distribution not yet qualified*
 | Presentation | Coordination features had no focused setup/reference/demo guide | Added control-plane, install, release, and demo guides plus launch copy; README leads with coordination |
 | Distribution | No packaged release or CI workflow | Added macOS CI, isolated installer tests, ZIP/checksum packaging, and a gated notarization path |
 | Build portability | Xcode 26.0 CI could not type-check a long command-palette array expression | Split it into explicit appends while retaining ordering |
+| Startup | Agent services started from the board's `onAppear`; an unlocked launch could stay idle until the UI appeared | Start from `applicationDidFinishLaunching`, with the model owned by the app delegate; add a packaged startup/restart regression |
 
 ## Verification
 
@@ -35,9 +36,22 @@ Status: **development candidate prepared; public distribution not yet qualified*
   refusal. The bundled command also passed this test after ZIP extraction.
 - Release app and bundled CLI built; the extracted app passed `codesign --verify --deep --strict`.
 - Shell syntax and `git diff --check` passed.
-- A packaged-app first-launch attempt in an isolated home did not expose an API endpoint before
-  its timeout. UI inspection was blocked because the Mac was locked. The cause of that launch
-  timeout is not yet established; it is not counted as a passing GUI/onboarding check.
+- The startup delay reproduced on the unlocked desktop. A process sample showed an idle main
+  run loop; activating the board brought up the API. Startup had been tied to the board's
+  `onAppear` callback. After moving it to the app launch event, the packaged app exposed its API
+  in 5.1 seconds on first launch and 2.2 seconds on restart, without UI interaction. The added
+  `scripts/test-packaged-app.py` checks both launches, restored terminals, caller identity,
+  durable/read-once inbox delivery, endpoint credential replacement and mode 0600, unconfigured
+  resources, a question, and a note.
+- Interactive packaged-app checks passed in a disposable home: two terminal tiles, a question
+  answered in the Needs-you lane and retrieved by CLI, approval-gated `--type` delivery verified
+  in the terminal, privacy refusing a board read, and the Settings installer completing without
+  blocking the UI. The installed command, skill, and Codex MCP configuration were verified;
+  Claude registration used a stub to protect the user's existing client setup. A normal app quit
+  saved both tiles, and the updated build restored them with the unread inbox message intact.
+- The candidate reached the configured live Fleet and Steward endpoints, which returned 401
+  because the disposable home could not locate the user's saved keys. This verifies visible
+  failure handling, not a successful live integration. No keys or reservations were changed.
 - Existing running Tessera sessions were not restarted or upgraded.
 
 The first baseline build encountered stale compiler paths from a relocated checkout. A fresh
@@ -50,9 +64,9 @@ and fixed Bash 3.2's empty-array behavior under `set -u`.
    Apple Development identities. The local ZIP is explicitly named `development`; it is not
    notarized. The public packaging path refuses to produce an asset unless signing, notarization,
    ticket validation, and Gatekeeper checks pass.
-2. Unlock the Mac and finish the packaged-app launch investigation and interactive demo checks.
-   Test the exact download on a clean user/Mac, including first launch, integration setup, and an
-   upgrade preserving state. Automated API tests do not substitute for that installation check.
+2. Repeat installation from the final signed/notarized download on a clean user/Mac. Local
+   packaged launch, UI, installer, and state-preserving update checks now pass in an isolated
+   home on this Mac. They do not establish downloaded Gatekeeper behavior or another OS version.
 3. Qualify the particular Fleet head and Steward model used for a live presentation. Existing
    read-only live-board inspection confirmed these integrations are in use locally, but did not
    establish candidate behavior against a new head/model. No live reservations were changed.
