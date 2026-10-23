@@ -27,9 +27,11 @@ struct BriefCard: View {
                         .font(Style.ui(.label, .medium)).foregroundStyle(Style.ink)
                         .fixedSize(horizontal: false, vertical: true)
                     ForEach(brief.changes, id: \.self) { change in
-                        Text("· " + change).font(Style.caption).foregroundStyle(Style.dim).lineLimit(2)
+                        Text(("· " + change).obscured(privacy)).font(Style.caption).foregroundStyle(Style.dim).lineLimit(2)
                     }
-                    let closable = brief.closable.filter { model.workspace.exists($0.id) && !steward.dismissed.contains($0.id) }
+                    let closable = brief.closable.filter { item in
+                        !privacy && !steward.dismissed.contains(item.id) && canClose(item.id)
+                    }
                     if !closable.isEmpty { closableList(closable) }
                 } else if case .failed = steward.status {
                     EmptyView()
@@ -61,8 +63,9 @@ struct BriefCard: View {
                 .buttonStyle(.plain)
                 Spacer()
                 Button("Close all") {
-                    for item in items { model.workspace.steward.record("closed", tile: item.id, why: item.why) }
-                    model.close(items.map(\.id))
+                    let current = items.filter { canClose($0.id) }
+                    for item in current { model.workspace.steward.record("closed", tile: item.id, why: item.why) }
+                    model.close(current.map(\.id))
                 }
                 .font(Style.caption).buttonStyle(.borderless)
                 .help("Close or hide these tiles (Undo brings them back)")
@@ -79,6 +82,7 @@ struct BriefCard: View {
                         Button { model.workspace.steward.record("kept", tile: item.id, why: item.why) } label: { Image(systemName: "xmark") }
                             .buttonStyle(.plain).foregroundStyle(Style.muted).help("Keep it; don't suggest it again")
                         Button {
+                            guard canClose(item.id) else { return }
                             model.workspace.steward.record("closed", tile: item.id, why: item.why)
                             model.close(item.id)
                         } label: { Image(systemName: "archivebox") }
@@ -89,6 +93,11 @@ struct BriefCard: View {
                 }
             }
         }
+    }
+
+    private func canClose(_ id: String) -> Bool {
+        guard let tile = model.workspace.info(id) else { return false }
+        return Steward.canSuggestClosing(tile)
     }
 }
 
@@ -140,6 +149,7 @@ struct AgentsSettings: View {
     @State private var modelName = ""
     @State private var key = ""
     @State private var installOutput: String?
+    @State private var installing = false
 
     var body: some View {
         let steward = model.workspace.steward
@@ -169,7 +179,14 @@ struct AgentsSettings: View {
                 Text("Agents see the board, read tiles, message each other and ask you questions through the `tessera` command or its MCP server. Off: each typed delivery waits for your OK in the lane.").note()
                 HStack {
                     Spacer()
-                    Button("Install Command, Skill & MCP…") { installOutput = Self.install() }
+                    Button(installing ? "Installing…" : "Install Command, Skill & MCP…") {
+                        installing = true
+                        Task {
+                            installOutput = await Task.detached { Self.install() }.value
+                            installing = false
+                        }
+                    }
+                        .disabled(installing)
                         .help("Puts `tessera` on your PATH, installs its skill for Claude Code and Codex, and registers its MCP server")
                 }
                 if let installOutput { Text(installOutput).font(Style.mono(.caption)).textSelection(.enabled) }
@@ -193,7 +210,7 @@ struct AgentsSettings: View {
     }
 
     /// Runs the bundled `tessera` command's installer and returns what it said.
-    static func install() -> String {
+    nonisolated static func install() -> String {
         let candidates = [Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers/tessera-cli"),
                           Bundle.main.executableURL?.deletingLastPathComponent().appendingPathComponent("tessera-cli")].compactMap { $0 }
         guard let cli = candidates.first(where: { FileManager.default.isExecutableFile(atPath: $0.path) }) else {
@@ -206,8 +223,10 @@ struct AgentsSettings: View {
         process.standardOutput = pipe
         process.standardError = pipe
         do { try process.run() } catch { return error.localizedDescription }
+        let output = pipe.fileHandleForReading.readDataToEndOfFile()
         process.waitUntilExit()
-        return String(decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+        let text = String(decoding: output, as: UTF8.self)
+        return process.terminationStatus == 0 ? text : "Installation incomplete (exit \(process.terminationStatus)):\n\(text)"
     }
 }
 

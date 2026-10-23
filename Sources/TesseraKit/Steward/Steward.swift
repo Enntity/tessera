@@ -4,6 +4,10 @@ import Foundation
 /// the user and what can be put away. It only reports and suggests; nothing it says acts on its own.
 /// Building its inputs, its requests and reading its answers are pure, so they are tested offline.
 public enum Steward {
+    /// Recheck at display and click time: a suggestion may outlive the idle state it described.
+    public static func canSuggestClosing(_ tile: TileInfo) -> Bool {
+        !tile.needsUser && !tile.isUnseen && [.idle, .done, .exited].contains(tile.activity)
+    }
     /// One tile as the steward sees it: its state, and what it shows (credentials taken out).
     public struct Digest: Codable, Equatable, Sendable {
         public var id: String
@@ -43,8 +47,8 @@ public enum Steward {
 
         /// A tile as the steward is given it: its text bounded to its end and with credentials out.
         public init(_ tile: TileInfo, text: String, unseen: Bool, now: Date = Date()) {
-            self.init(id: tile.id, title: tile.title, kind: tile.kind.rawValue, flavor: tile.flavor.rawValue,
-                      subtitle: tile.subtitle, state: tile.activity.rawValue, waiting: tile.needsUser, unseen: unseen,
+            self.init(id: tile.id, title: Redactor.redact(tile.title), kind: tile.kind.rawValue, flavor: tile.flavor.rawValue,
+                      subtitle: Redactor.redact(tile.subtitle), state: tile.activity.rawValue, waiting: tile.needsUser, unseen: unseen,
                       idleMinutes: max(0, Int(now.timeIntervalSince(tile.lastActivityAt) / 60)),
                       detail: tile.detail.map(Redactor.redact), text: Steward.tail(Redactor.redact(text), 1500))
         }
@@ -140,7 +144,7 @@ public enum Steward {
             \(digest.text)
             </tile>
             """
-        return [["role": "system", "content": tileSystemPrompt], ["role": "user", "content": body]]
+        return [["role": "system", "content": tileSystemPrompt], ["role": "user", "content": Redactor.redact(body)]]
     }
 
     public static func briefMessages(_ digests: [Digest], changes: [String]) -> [[String: String]] {
@@ -151,7 +155,7 @@ public enum Steward {
         }
         let body = (changes.isEmpty ? "Nothing new since the developer last looked." : "Since the developer last looked: " + changes.joined(separator: "; "))
             + "\n\nTiles:\n" + lines.joined(separator: "\n")
-        return [["role": "system", "content": briefSystemPrompt], ["role": "user", "content": body]]
+        return [["role": "system", "content": briefSystemPrompt], ["role": "user", "content": Redactor.redact(body)]]
     }
 
     /// An OpenAI-compatible chat completion asking for a JSON object.

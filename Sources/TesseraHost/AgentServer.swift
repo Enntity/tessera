@@ -48,7 +48,7 @@ public final class AgentServer {
             l.stateUpdateHandler = { [weak self] state in
                 DispatchQueue.main.async {
                     MainActor.assumeIsolated {
-                        guard let self else { return }
+                        guard let self, self.listener === l else { return }
                         switch state {
                         case .ready:
                             guard let port = l.port?.rawValue else { return }
@@ -93,6 +93,8 @@ public final class AgentServer {
 
     private func accept(_ connection: NWConnection) {
         connection.start(queue: .main)
+        // Bound incomplete requests and long polls, including unauthenticated local clients.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 70) { connection.cancel() }
         receive(connection, buffer: Data())
     }
 
@@ -159,8 +161,9 @@ struct HTTPRequest {
             headers[line[..<colon].lowercased()] = line[line.index(after: colon)...].trimmingCharacters(in: .whitespaces)
         }
         self.headers = headers
-        let length = Int(headers["content-length"] ?? "0") ?? 0
-        guard length <= AgentServer.maxBody else { return nil }
+        guard headers["transfer-encoding"] == nil,
+              let length = Int(headers["content-length"] ?? "0"),
+              length >= 0, length <= AgentServer.maxBody else { return nil }
         let bodyStart = end.upperBound
         guard data.count - bodyStart >= length else { return nil }
         body = data.subdata(in: bodyStart..<(bodyStart + length))
