@@ -37,7 +37,8 @@ let package = Package(
             dependencies: ["TesseraKit", "TesseraHost", .product(name: "SwiftTerm", package: "SwiftTerm")]
         ),
         .testTarget(name: "TesseraKitTests", dependencies: ["TesseraKit", "TesseraHost", "TesseraAPI",
-                                                            .product(name: "libzstd", package: "zstd")])
+                                                            .product(name: "libzstd", package: "zstd")],
+                    resources: [.process("Fixtures")])
     ],
     swiftLanguageModes: [.v5]
 )

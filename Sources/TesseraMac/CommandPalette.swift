@@ -161,6 +161,11 @@ extension AppModel {
                 self.run(command)
             }
         }
+        // ⇧⌘J's overlay, findable here too.
+        let triage = workspace.state.queue.isEmpty || !matches("Triage Needs You") ? []
+            : [PaletteItem(id: "triage", symbol: "rectangle.stack", color: Style.dim, title: "Triage Needs You",
+                           subtitle: "\(workspace.state.queue.count) waiting · ⇧⌘J") { self.openTriage() }]
+
         // Hidden conversations are found as tiles, above.
         let reopen = workspace.recentlyClosed.tiles.filter { $0.kind != .agentSession && (matches("Reopen " + $0.title) || matches($0.subtitle)) }.map { closed in
             PaletteItem(id: "reopen-\(closed.id)", symbol: "arrow.uturn.backward", color: Style.dim,
@@ -176,7 +181,7 @@ extension AppModel {
                     self.showPalette = true
                 }
             }
-            return apps + presets + [urlMode] + tiles + commands + reopen
+            return apps + presets + [urlMode] + tiles + triage + commands + reopen
         }
         let looksLikeURL = WebAddress.looksLikeAddress(q)
         let run = PaletteItem(id: "run", symbol: "play.fill", color: Style.dim, title: "Run \(q)", subtitle: "New terminal tile in " + folder) {
@@ -185,6 +190,17 @@ extension AppModel {
         let search = PaletteItem(id: "search", symbol: "magnifyingglass", color: Style.dim, title: "Search the web for “\(q)”", subtitle: "New web tile") {
             self.create { $0.openBrowser(q) }
         }
-        return tiles + (looksLikeURL ? [openURL] : []) + presets + commands + reopen + [run] + apps + (looksLikeURL ? [] : [search])
+        // Keep each append explicit: Xcode 26.0 cannot type-check the chained overloads in
+        // reasonable time on the release CI runner.
+        var results = tiles
+        if looksLikeURL { results.append(openURL) }
+        results.append(contentsOf: presets)
+        results.append(contentsOf: triage)
+        results.append(contentsOf: commands)
+        results.append(contentsOf: reopen)
+        results.append(run)
+        results.append(contentsOf: apps)
+        if !looksLikeURL { results.append(search) }
+        return results
     }
 }

@@ -7,6 +7,7 @@ public enum LaunchCatalog {
         LaunchPreset(name: "Shell", command: nil, flavor: .shell),
         LaunchPreset(name: "Claude Code", command: "claude", flavor: .claude),
         LaunchPreset(name: "Codex", command: "codex", flavor: .codex),
+        LaunchPreset(name: "Devin", command: "devin", flavor: .devin),
         LaunchPreset(name: "Grok", command: "grok", flavor: .grok),
         LaunchPreset(name: "Gemini", command: "gemini", flavor: .gemini),
         LaunchPreset(name: "omp", command: "omp", flavor: .omp),

@@ -159,6 +159,8 @@ public final class Workspace {
             return nil
         }
         info.summary = steward.summaries[id]?.summary
+        info.needs = steward.summaries[id]?.needs ?? steward.brief?.attention.first { $0.id == id }?.why
+        if info.needs?.isEmpty == true { info.needs = nil }
         return info
     }
 
@@ -417,14 +419,20 @@ public final class Workspace {
         reconcileSelection()
     }
 
+    /// What tile `id` shows, as text: a terminal's last `lines` of screen, a conversation's last
+    /// `lines` messages, a page's address. nil where there is nothing to read.
+    public func shownText(_ id: String, lines: Int) -> String? {
+        if let t = terminals[id] { return t.terminal.screenTail(lines).joined(separator: "\n") }
+        if let url = browsers[id]?.info.url, !url.isEmpty { return url }
+        return agents.session(id)?.snapshot.items.suffix(lines).map(\.text).joined(separator: "\n")
+    }
+
     /// What each tile shows: a terminal's screen, a conversation's latest messages, a page's address.
     private func readShownText() -> [String: String] {
         var text: [String: String] = [:]
-        for (id, session) in terminals { text[id] = session.terminal.screenTail(session.terminal.rows).joined(separator: "\n") }
+        for (id, session) in terminals { text[id] = shownText(id, lines: session.terminal.rows) }
         for (id, page) in browsers { text[id] = page.info.url }
-        for id in order where id.contains(":") {
-            text[id] = agents.session(id)?.snapshot.items.suffix(20).map(\.text).joined(separator: "\n")
-        }
+        for id in order where id.contains(":") { text[id] = shownText(id, lines: 20) }
         return text
     }
 
@@ -684,7 +692,7 @@ public final class Workspace {
     }
 
     private func fleetChanged() {
-        agents.setExternal(fleet.items(lookback: agents.lookback).map(FleetService.session), source: "fleet")
+        agents.setExternal(fleet.items(lookback: agents.lookback).filter { fleet.showJobs || $0.wantsUser }.map(FleetService.session), source: "fleet")
     }
 
     private func deskChanged() {
@@ -793,17 +801,41 @@ public final class Workspace {
                 .filter { now.timeIntervalSince($0.launchedAt) < 600 || bindPasses % 12 == 0 }
         }
         let codex = candidates(.codex), claude = candidates(.claude)
-        guard !codex.isEmpty || !claude.isEmpty else { return }
+        // Devin's session locks name the session its foreground `devin acp` belongs to, so a tile
+        // running one binds exactly — no folder or time to match on, and nothing to guess.
+        let devin = terminals.values.compactMap { t -> (tileId: String, pgid: pid_t)? in
+            guard t.isRunning, !t.isSuspended, t.command.flatMap(SessionResume.conversationTool(for:)) == .devin,
+                  let pgid = t.foregroundProcessGroup else { return nil }
+            return (t.id, pgid)
+        }
+        guard !codex.isEmpty || !claude.isEmpty || !devin.isEmpty else { return }
         let claimed = Set(terminals.values.compactMap(\.sessionId))
         binding = true
         DispatchQueue.global(qos: .utility).async {
             var found = codex.isEmpty ? [:] : CodexRollouts.bind(codex, claimed: claimed)
             if !claude.isEmpty { found.merge(ClaudeSessions.bind(claude, claimed: claimed.union(found.values))) { a, _ in a } }
+            var devinFound: [String: String] = [:]
+            var held = claimed
+            for (tileId, pgid) in devin {
+                guard let id = DevinSessions.session(forProcessGroup: pgid), !held.contains(id) else { continue }
+                devinFound[tileId] = id
+                held.insert(id)
+            }
             DispatchQueue.main.async {
                 MainActor.assumeIsolated {
                     self.binding = false
-                    for (tile, session) in found { self.terminals[tile]?.bind(sessionId: session) }
-                    if !found.isEmpty { self.save() }
+                    var changed = false
+                    for (tile, session) in found {
+                        self.terminals[tile]?.bind(sessionId: session)
+                        changed = true
+                    }
+                    // The lock says which session this tile's Devin is in now, even replacing one
+                    // the command line had named (the REPL may have moved between sessions).
+                    for (tile, session) in devinFound where self.terminals[tile]?.sessionId != session {
+                        self.terminals[tile]?.bind(sessionId: session, replacing: true)
+                        changed = true
+                    }
+                    if changed { self.save() }
                 }
             }
         }

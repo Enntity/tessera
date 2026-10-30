@@ -1,4 +1,5 @@
 import Foundation
+import Darwin
 
 /// Where a running Tessera listens for agents on this Mac, and the token they must show. Tessera
 /// writes it (readable by this user only) when its agent API starts; the `tessera` command reads it.
@@ -38,8 +39,14 @@ public struct AgentEndpoint: Codable, Equatable, Sendable {
     public func write(to directory: URL) throws {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let url = Self.file(in: directory)
-        try JSONEncoder().encode(self).write(to: url, options: [.atomic])
-        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+        let temporary = directory.appendingPathComponent(".agent-api-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: temporary) }
+        // Restrict permissions at creation, before any credential bytes become visible.
+        guard FileManager.default.createFile(atPath: temporary.path, contents: try JSONEncoder().encode(self),
+                                             attributes: [.posixPermissions: 0o600]) else {
+            throw CocoaError(.fileWriteUnknown)
+        }
+        guard rename(temporary.path, url.path) == 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
     }
 
     public static func remove(from directory: URL, ifPid pid: Int32) {

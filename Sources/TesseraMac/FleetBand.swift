@@ -115,6 +115,10 @@ struct FleetSettings: View {
                 .keyboardShortcut(.defaultAction)
                 .disabled(LLoomSchedule.baseURL(url) == nil || (key.isEmpty && !fleet.hasKey))
             }
+            Toggle("Show agents' jobs as tiles", isOn: Binding(get: { fleet.showJobs }, set: { fleet.showJobs = $0 }))
+                .toggleStyle(.switch)
+            Text("Off: only jobs that fail and leases that need you appear, in Needs you.")
+                .font(Style.ui(.label)).foregroundStyle(Style.dim)
             Text("Agents lease shared machines and report long-running jobs to a LLooM head (lloom reserve, lloom job). Jobs show up as tiles, and the band over the board shows who holds what. The key is stored in your login Keychain and only sent to this address.")
                 .font(Style.ui(.label)).foregroundStyle(Style.dim)
             Spacer()

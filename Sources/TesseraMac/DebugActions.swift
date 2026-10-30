@@ -73,6 +73,7 @@ extension AppModel {
                 pace = Double(arg) ?? 1
                 next = pace
             case "select": if let id = debugTile(arg) { workspace.select(id) }
+            case "triage": openTriage()
             case "open":
                 // Opening an app conversation would drive the real Claude or Codex app.
                 if let id = arg.isEmpty ? workspace.selectedId : debugTile(arg) ?? arg, !workspace.opensInApp(id) { open(id) }
@@ -134,6 +135,9 @@ extension AppModel {
                 }
                 debugMouse(.leftMouseUp, at: to)
             case "dump": debugDump(to: arg)
+            // A fully covered window's backing store is recycled after a while and can't be
+            // captured; this puts it in front for the shot.
+            case "front": window?.orderFrontRegardless()
             case "shot":
                 let target = arg.split(separator: "?", maxSplits: 1).map(String.init)
                 writeSnapshot(of: target.count > 1 ? NSApp.windows.first { $0.title == target[1] } : window, to: target[0])
@@ -234,6 +238,9 @@ extension AppModel {
             "scroll": boardScroll,
             "suspended": workspace.order.filter(workspace.isSuspended).map(title),
             "activity": workspace.allTiles.map { "\($0.title): \($0.activity.rawValue)\($0.attention ? " unseen" : "")" },
+            "steward": ["status": "\(workspace.steward.status)"]
+                .merging(Dictionary(uniqueKeysWithValues: workspace.steward.summaries
+                    .map { (title($0.key), "\($0.value.summary) — needs: \($0.value.needs ?? "-")") })) { $1 },
             "queue": board.queue.map(title),
             "counts": ["needsInput": board.needsInput.count, "failed": board.failed.count, "done": board.done.count, "working": board.working.count],
             "closed": workspace.recentlyClosed.tiles.map(\.title), "hidden": workspace.hiddenTiles.map(\.title),

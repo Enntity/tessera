@@ -2,10 +2,11 @@ import Foundation
 
 /// `tessera install`: makes Tessera reachable from every agent on this Mac.
 /// - `~/.local/bin/tessera` points at this command;
-/// - the skills shipped beside it go to `~/.agents/skills` (read by Codex and other agents), linked
-///   from `~/.claude/skills` for Claude Code;
-/// - `tessera mcp` is registered as an MCP server with Claude Code (`claude mcp add --scope user`)
-///   and Codex (`[mcp_servers.tessera]` in `~/.codex/config.toml`, backed up first).
+/// - the skills shipped beside it go to `~/.agents/skills` (read by Codex, Devin and other agents),
+///   linked from `~/.claude/skills` for Claude Code;
+/// - `tessera mcp` is registered as an MCP server with Claude Code (`claude mcp add --scope user`),
+///   Codex (`[mcp_servers.tessera]` in `~/.codex/config.toml`, backed up first) and Devin
+///   (`devin mcp add --scope user`, `~/.config/devin/mcp_config.json`).
 /// Each step says what it did; `--dry-run` only says what it would do.
 struct Installer {
     let dryRun: Bool
@@ -41,7 +42,11 @@ struct Installer {
                 say("install skill \(name) → \(target.path)")
                 if !dryRun {
                     try fm.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
-                    if fm.fileExists(atPath: target.path) { try fm.removeItem(at: target) }
+                    if fm.fileExists(atPath: target.path) || (try? fm.destinationOfSymbolicLink(atPath: target.path)) != nil {
+                        let backup = target.appendingPathExtension("backup-\(UUID().uuidString)")
+                        try fm.moveItem(at: target, to: backup)
+                        print("  kept previous skill at \(backup.path)")
+                    }
                     try fm.copyItem(at: source.appendingPathComponent(name), to: target)
                 }
                 try link(home.appendingPathComponent(".claude/skills/\(name)"), to: target, relative: "../../.agents/skills/\(name)")
@@ -51,31 +56,61 @@ struct Installer {
         }
 
         if let claude = Self.which("claude") {
-            say("register MCP server \"tessera\" with Claude Code (user scope)")
-            if !dryRun {
-                _ = Self.run(claude, ["mcp", "remove", "--scope", "user", "tessera"])
-                let (status, output) = Self.run(claude, ["mcp", "add", "--scope", "user", "tessera", "--", bin.path, "mcp"])
-                if status != 0 { print("  claude mcp add failed: \(output.trimmingCharacters(in: .whitespacesAndNewlines))") }
+            let (has, _) = Self.run(claude, ["mcp", "get", "tessera"])
+            if has == 0 {
+                say("leave Claude Code's tessera MCP server as it is")
+            } else {
+                say("register MCP server \"tessera\" with Claude Code (user scope)")
+                if !dryRun {
+                    let (status, output) = Self.run(claude, ["mcp", "add", "--scope", "user", "tessera", "--", bin.path, "mcp"])
+                    if status != 0 { throw Failure("claude mcp add failed: \(output.trimmingCharacters(in: .whitespacesAndNewlines))") }
+                }
             }
         } else {
             say("skip Claude Code: `claude` not found")
         }
 
         let codex = home.appendingPathComponent(".codex/config.toml")
-        if let config = try? String(contentsOf: codex, encoding: .utf8) {
+        if fm.fileExists(atPath: codex.deletingLastPathComponent().path) {
+            let exists = fm.fileExists(atPath: codex.path)
+            let config = exists ? try String(contentsOf: codex, encoding: .utf8) : ""
             if config.contains("[mcp_servers.tessera]") {
                 say("leave Codex's [mcp_servers.tessera] as it is")
             } else {
                 say("add [mcp_servers.tessera] to \(codex.path) (backup: config.toml.bak-tessera)")
                 if !dryRun {
-                    try? fm.removeItem(at: codex.appendingPathExtension("bak-tessera"))
-                    try fm.copyItem(at: codex, to: URL(fileURLWithPath: codex.path + ".bak-tessera"))
-                    let block = "\n[mcp_servers.tessera]\ncommand = \"\(bin.path)\"\nargs = [\"mcp\"]\ntool_timeout_sec = 70\n"
+                    if exists {
+                        let backup = codex.appendingPathExtension("bak-tessera-\(UUID().uuidString)")
+                        try fm.copyItem(at: codex, to: backup)
+                        print("  saved config backup: \(backup.path)")
+                    }
+                    let quotedPath = bin.path.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"")
+                    let block = "\n[mcp_servers.tessera]\ncommand = \"\(quotedPath)\"\nargs = [\"mcp\"]\ntool_timeout_sec = 70\n"
                     try (config + (config.hasSuffix("\n") ? "" : "\n") + block).write(to: codex, atomically: true, encoding: .utf8)
                 }
             }
         } else {
             say("skip Codex: no ~/.codex/config.toml")
+        }
+
+        if let devin = Self.which("devin") {
+            // Devin already reads ~/.agents/skills, so only the MCP server is its own step.
+            // `mcp get` is a read: it answers under --dry-run too, so the plan it prints is real.
+            let (has, _) = Self.run(devin, ["mcp", "get", "tessera"])
+            if has == 0 {
+                say("leave Devin's tessera MCP server as it is")
+            } else {
+                say("register MCP server \"tessera\" with Devin (user scope)")
+                if !dryRun {
+                    let (status, output) = Self.run(devin, ["mcp", "add", "--scope", "user", "tessera", "--", bin.path, "mcp"])
+                    if status != 0 { throw Failure("devin mcp add failed: \(output.trimmingCharacters(in: .whitespacesAndNewlines))") }
+                }
+            }
+        } else {
+            say("skip Devin: `devin` not found")
+        }
+        if !(ProcessInfo.processInfo.environment["PATH"] ?? "").split(separator: ":").contains(Substring(bin.deletingLastPathComponent().path)) {
+            print("For shell use, add ~/.local/bin to PATH in your shell configuration. MCP uses the absolute path and needs no PATH change.")
         }
         print(dryRun ? "Nothing changed." : "Done. Restart agent sessions to pick up the MCP server and skills.")
     }
@@ -88,7 +123,7 @@ struct Installer {
             say("relink \(path.path) → \(destination)")
             if !dryRun { try fm.removeItem(at: path) }
         } else if fm.fileExists(atPath: path.path) {
-            return say("leave \(path.path): it is a real file, not a link Tessera made")
+            throw Failure("Cannot install at \(path.path): an existing file is there. Move it aside yourself or use manual MCP setup; nothing was overwritten at that path.")
         } else {
             say("link \(path.path) → \(destination)")
         }
@@ -111,7 +146,8 @@ struct Installer {
         process.standardOutput = pipe
         process.standardError = pipe
         do { try process.run() } catch { return (-1, error.localizedDescription) }
+        let output = pipe.fileHandleForReading.readDataToEndOfFile()
         process.waitUntilExit()
-        return (process.terminationStatus, String(decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self))
+        return (process.terminationStatus, String(decoding: output, as: UTF8.self))
     }
 }

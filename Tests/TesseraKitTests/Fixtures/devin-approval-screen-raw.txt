@@ -1,0 +1,40 @@
+
+ ✱ Do you trust the authors of this directory?
+   For security, devin should not be run in directories with untrusted content.
+
+ /private/tmp/devin-probe-dir
+
+ ❭ 1 Yes, trust
+   2 No, exit
+
+ ↑↓ select · ↵ confirm · esc cancel
+ ✓ Trust /private/tmp/devin-probe-dir?
+
+⠀⣴⣾⣶⡄⠀⠀⠀⠀
+⠀⠛⠿⠟⠻⣶⣾⣶⡄  Devin CLI
+⠀⣤⣶⣦⣴⠿⢿⠿⠃  v3000.11.205
+⠀⠻⢿⠿⠃⠀⠀⠀⠀
+
+
+ ⏺ /private/tmp/devin-probe-dir
+───────────────────────────────────────────────────────── Run this shell command: touch /tmp/tess… ─
+❭ Ask Devin to build features, fix bugs, or work on your code
+────────────────────────────────────────────────────────────────────────────────────────────────────
+Fusion · Claude Opus 5.5 ◆ SWE-2 Medium                                            Starting session…
+⠀⣴⣾⣶⡄⠀⠀⠀⠀
+⠀⠛⠿⠟⠻⣶⣾⣶⡄  Devin CLI
+⠀⣤⣶⣦⣴⠿⢿⠿⠃  v3000.11.205
+⠀⠻⢿⠿⠃⠀⠀⠀⠀
+
+ Demo account · example usage status
+
+❭ Run this shell command: touch /tmp/tessera-devin-probe
+
+⡜⢣ Thinking · 0s (esc twice to interrupt)
+───────────────────────────────────────────────────────── Run this shell command: touch /tmp/tess… ─
+❭ Guide Devin while it works
+────────────────────────────────────────────────────────────────────────────────────────────────────
+Fusion · Claude Opus 5.5 ◆ SWE-2 Medium                           ctrl+v to paste image in clipboard⡜⢣⡜⢣⡎⢱⡎⢱⡎⢱⢎⡱⢎⡱⢎⡱⢇⡸⢇⡸⢇⡸⢣⡜⢣⡜⢣⡜⡣⢜⡣⢜⡣⢜⡱⢎⡱⢎⡱⢎⡕⢪⡕⢪⡕⢪⡜⢣⡜⢣⡜⢣⡎⢱⡎⢱⡎⢱⢎⡱⢎⡱⢎⡱⢇⡸⢇⡸⢇⡸1⢣⡜⢣⡜⢣⡜⡣⢜⡣⢜⡣⢜⡱⢎⡱⢎⡱⢎⡕⢪⡕⢪⡕⢪⡜⢣⡜⢣⡜⢣⡎⢱⡎⢱⡎⢱⢎⡱⢎⡱⢎⡱⢇⡸⢇⡸⢇⡸⢣⡜⢣⡜⢣⡜⡣⢜⡣⢜⡣⢜⡱⢎⡱⢎⡱⢎2⡕⢪⡕⢪⡕⢪⡜⢣⡜⢣⡜⢣⡎⢱⡎⢱⡎⢱ ⏺ Running command                                                                                                                           ⢎⡱ Running tools · 2s (esc twice to interrupt) Run this shell command: touch /tmp/tess… ❭ Guide Devin while it works
+────────────────────────────────────────────────────────────────────────────────────────────────────
+Fusion · Claude Opus 5.5 ◆ SWE-2 Medium                           ctrl+v to paste image in clipboard⢎⡱Claude Opus 5.5⢎⡱touch /tmp     ⢇⡸Claude Opus 5.5⏺ Running command└$touch/tmp/tessera-devin-probe                                              ❭ Allow       ← ◼◼◼◼ → Once                                                                          Bypass mode                 Deny
+↑↓ [38;2;124;124

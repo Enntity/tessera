@@ -4,6 +4,10 @@ import Foundation
 /// the user and what can be put away. It only reports and suggests; nothing it says acts on its own.
 /// Building its inputs, its requests and reading its answers are pure, so they are tested offline.
 public enum Steward {
+    /// Recheck at display and click time: a suggestion may outlive the idle state it described.
+    public static func canSuggestClosing(_ tile: TileInfo) -> Bool {
+        !tile.needsUser && !tile.isUnseen && [.idle, .done, .exited].contains(tile.activity)
+    }
     /// One tile as the steward sees it: its state, and what it shows (credentials taken out).
     public struct Digest: Codable, Equatable, Sendable {
         public var id: String
@@ -43,8 +47,8 @@ public enum Steward {
 
         /// A tile as the steward is given it: its text bounded to its end and with credentials out.
         public init(_ tile: TileInfo, text: String, unseen: Bool, now: Date = Date()) {
-            self.init(id: tile.id, title: tile.title, kind: tile.kind.rawValue, flavor: tile.flavor.rawValue,
-                      subtitle: tile.subtitle, state: tile.activity.rawValue, waiting: tile.needsUser, unseen: unseen,
+            self.init(id: tile.id, title: Redactor.redact(tile.title), kind: tile.kind.rawValue, flavor: tile.flavor.rawValue,
+                      subtitle: Redactor.redact(tile.subtitle), state: tile.activity.rawValue, waiting: tile.needsUser, unseen: unseen,
                       idleMinutes: max(0, Int(now.timeIntervalSince(tile.lastActivityAt) / 60)),
                       detail: tile.detail.map(Redactor.redact), text: Steward.tail(Redactor.redact(text), 1500))
         }
@@ -120,7 +124,9 @@ public enum Steward {
         You are Tessera's steward. You keep an eye on everything running on a developer's machine (terminals, \
         AI agents, background jobs) so the developer doesn't have to. Your job is to lower their cognitive load: \
         say what matters in as few words as possible, and point out what can be put away. \(guardrail)
-        Reply with JSON only: {"headline": "one sentence, at most 25 words, on the state of things", \
+        Reply with JSON only: {"headline": "at most 25 words on what the tiles themselves don't show: how running work is \
+        going, when it should finish, what looks stuck or risky. Don't count or list what finished, failed or is waiting; \
+        the developer already sees that. Empty string if there is nothing to add.", \
         "attention": [{"id": "<tile id>", "why": "at most 12 words"}], \
         "closable": [{"id": "<tile id>", "why": "at most 10 words"}]}.
         attention: at most 5 tiles the developer must act on, most pressing first; leave out what can wait.
@@ -140,7 +146,7 @@ public enum Steward {
             \(digest.text)
             </tile>
             """
-        return [["role": "system", "content": tileSystemPrompt], ["role": "user", "content": body]]
+        return [["role": "system", "content": tileSystemPrompt], ["role": "user", "content": Redactor.redact(body)]]
     }
 
     public static func briefMessages(_ digests: [Digest], changes: [String]) -> [[String: String]] {
@@ -151,7 +157,7 @@ public enum Steward {
         }
         let body = (changes.isEmpty ? "Nothing new since the developer last looked." : "Since the developer last looked: " + changes.joined(separator: "; "))
             + "\n\nTiles:\n" + lines.joined(separator: "\n")
-        return [["role": "system", "content": briefSystemPrompt], ["role": "user", "content": body]]
+        return [["role": "system", "content": briefSystemPrompt], ["role": "user", "content": Redactor.redact(body)]]
     }
 
     /// An OpenAI-compatible chat completion asking for a JSON object.
@@ -194,8 +200,10 @@ public enum Steward {
         guard let summary = (object["summary"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines), !summary.isEmpty
         else { throw Failure.unreadable("no summary") }
         let needs = (object["needs"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
-        return TileSummary(summary: summary.preview(120), blocked: object["blocked"] as? Bool ?? false,
-                           needs: needs?.isEmpty == false ? needs!.preview(120) : nil)
+        // "none", "nothing" and their kin mean the tile wants nothing: no line, not the word.
+        let empty = needs.map { $0.trimmingCharacters(in: CharacterSet(charactersIn: ".")).lowercased() }
+        let wants = needs.flatMap { $0.isEmpty || ["none", "nothing", "n/a", "no action", "-"].contains(empty ?? "") ? nil : $0.preview(120) }
+        return TileSummary(summary: summary.preview(120), blocked: object["blocked"] as? Bool ?? false, needs: wants)
     }
 
     /// The brief, kept to what the board can stand behind: only ids it was given, nothing suggested
@@ -211,7 +219,7 @@ public enum Steward {
             }.prefix(limit).map { $0 }
         }
         let headline = ((object["headline"] as? String) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        return Brief(headline: headline.isEmpty ? "Nothing to report." : headline.preview(200), changes: changes,
+        return Brief(headline: headline.preview(200), changes: changes,
                      attention: items("attention", limit: 5) { _ in true },
                      closable: items("closable", limit: 12) { !["working", "needsInput", "starting"].contains($0.state) && !$0.waiting },
                      at: at)

@@ -4,15 +4,48 @@
 
 # Tessera
 
-The control plane for agent work on your Mac, and a mission-control board for it. Any agent you run
-— Claude Code, Codex, Grok, omp, ZCode, the DeepSeek Harness, a plain shell — talks to Tessera, and
-through it to the other agents: it can see the board, message another agent, and ask you a question
-with one-tap answers. What needs you collects in one queue, whatever raised it, and every running
-thing — terminals, agent conversations, web pages — is a live tile on one full-screen grid. Tiles
-animate as their content changes and light up when something finishes or needs you. Click one and it
-opens full-size right where it was; click outside and you are back on the board.
+Tessera gives agents on your Mac a shared control and communication plane. They can discover
+other sessions, read their current state, exchange messages, check shared resource leases, and
+ask you for a decision through one queue. The **Steward** turns the board into a short brief of
+what changed and what needs your attention. Live terminal and session tiles let you inspect and
+act on that work.
 
-Native macOS app, with a focused iOS companion built on the same core.
+The macOS app is the host. The iOS companion is an optional source-built client; Linux support is
+future work.
+
+## Start here
+
+**Install from source today:** on macOS 15+ with Xcode 26 or newer, run:
+
+```sh
+git clone https://github.com/Enntity/tessera.git
+cd tessera
+scripts/build-app.sh
+open .build/app
+```
+
+Drag `Tessera.app` from that Finder window into Applications, then open it. In Settings → Agents,
+choose **Install Command, Skill & MCP**, and restart your agent sessions. No Tessera account or
+cloud service is required. See the [first-run setup](docs/install.md#first-run-setup) to connect
+agents, enable Steward, and try a question in the Needs-you lane.
+
+A notarized download is not yet available. Source builds use local signing; CI artifacts are
+explicitly development candidates. The source includes the complete macOS feature set.
+
+- [Install Tessera and connect your agents](docs/install.md)
+- [Control plane: messaging, identity, resource coordination, and Steward](docs/control-plane.md)
+- [Five-minute demo for a first run or presentation](docs/demo.md)
+- [Release and verification procedure](docs/releasing.md)
+- [Contributing and development setup](CONTRIBUTING.md)
+- [Changes in 0.2.0](CHANGELOG.md)
+
+| Capability | What you can do |
+| --- | --- |
+| Communication | Discover agents, inspect a tile, send a message, and receive replies through CLI or MCP |
+| Human decisions | Ask a question with answer choices; retrieve the answer later without blocking other tools |
+| Resource coordination | Inspect LLooM holders, queues, and expiry with `tessera resources`; reserve through LLooM before running work |
+| Steward | Read model-generated tile summaries and a board brief, with suggested cleanup that requires your action |
+| Session workspace | Run terminals, view conversations, resume sessions, and keep selected work visible in a dock |
 
 ![Tessera: a board of agent sessions, terminals and a web page, with the Needs-you lane on the left, a docked terminal and the accounts sidebar](docs/tessera.png)
 
@@ -23,20 +56,24 @@ Native macOS app, with a focused iOS companion built on the same core.
 - **Agents talk to Tessera, and through it to each other.** A `tessera` command, also an MCP
   server (`tessera mcp`), lets any agent on the Mac see the board (`board`), read another tile
   (`read`), find itself (`whoami`), message another agent (`send`, `inbox`), ask you something
-  (`ask`) and leave you a note (`notify`).
+  (`ask`) and leave you a note (`notify`). `resources` exposes the connected Fleet schedule,
+  including holders, queues, lease expiry, and whether the snapshot is stale.
   - Questions land in the Needs-you lane, as alerts and on the phone, with the agent's options as
     one-tap answers and a reply field.
   - A message is typed into a terminal agent's prompt only with your OK, unless you allow it
     outright.
   - It listens on 127.0.0.1 behind a token in a file only you can read; browser requests are refused.
   - Settings → Agents → Install puts `tessera` on your PATH, installs the skill
-    (`skills/tessera`) for Claude Code and Codex, and registers the MCP server.
+    (`skills/tessera`) for Claude Code, Codex and Devin, and registers the MCP server.
 
-- **Needs-you lane.** Down the left of the board (⌥⌘\, remembered): that queue as a list, each
-  row saying what waits and why — the question itself, `exit 1`, or that it finished — and for how
-  long. Click a row to open its tile. Hover a terminal that is asking and the row offers the phone's
-  one-tap answers (`1 2 3 y n ⏎`), typed into it without opening it; answered, the row leaves.
-  Empty, it says "All caught up".
+- **Needs-you lane.** Down the left of the board (⌥⌘\, remembered): that queue in sections —
+  *Asking* cards with the question itself and the answers right there (the phone's one-tap keys for
+  a terminal, the agent's own options for a desk question); *Failed* with why, in coral, and
+  Restart / Mark as Seen without opening it; *To review*, one line each of what the steward says to
+  do with the result or what it did, and Mark all seen; and what the steward says *can be put away*
+  behind a chevron, with Close all (Undo brings them back). Click a row to open its tile.
+  ⇧⌘J opens the queue one item at a time — answer with its keys (`1 2 3 y n ⏎`, `E` seen,
+  `R` restart, `O` open, `←`/`→` move, esc close). Empty, it says "All caught up".
 
 - **Attention.** Output-then-silence → *Done*. Permission prompts, `(y/n)`, "Do you want to…",
   OSC 9/777 notifications, Claude's own "needs action" turn summaries, and Codex approval events
@@ -47,18 +84,17 @@ Native macOS app, with a focused iOS companion built on the same core.
 
 - **Steward (Settings → Agents).** Point it at any OpenAI-compatible endpoint, such as a LLooM
   gateway with a local model, and it keeps a one-line summary of each tile on the card's footer.
-  At the head of the Needs-you lane it writes a brief: what is going on in a sentence, what
-  finished, failed or started asking since you last looked, what needs you, and what can be put
-  away (Close all, with Undo). Tile text is sent with credentials removed, and nothing is sent in
-  privacy mode. It only suggests.
+  At the head of the Needs-you lane it writes a headline on what the tiles don't show — how running
+  work is going, what looks stuck or risky — and per tile a line on what you have to do about it,
+  plus what can be put away (Close all, with Undo). Common credential patterns are redacted before tile text is sent. Privacy mode pauses new
+  requests and hides API reads; it cannot retract requests already sent. It only suggests.
 
 - **Fleet: shared hardware and agents' jobs.** Point Settings → Fleet at a
   [LLooM](https://github.com/Enntity/lloom) head and its leases appear in a band over the board:
-  one chip per resource, showing who holds it, how long they have left and who is waiting. Jobs
-  that agents report (`lloom job start`, `progress`, `done`) become tiles, with their latest note,
-  progress bar and metrics on the card and their notes as the transcript. A finished, failed or
-  silent job lands in the Needs-you lane and notifies you, and so does a lease that is running out
-  or whose restore failed. Opening a job goes to the agent's own conversation when it reported one
+  one chip per resource, showing who holds it, how long they have left and who is waiting.
+  By default, job tiles appear only for failures, stalled work, or leases needing attention.
+  Turn on **Show agents’ jobs as tiles** in Settings → Fleet to see all reported jobs, their
+  progress and metrics. Opening a job goes to the agent's conversation when it reported one
   (`--session`). The Jobs chip filters them. The admin key stays in your Keychain.
 
 - **Live terminal tiles.** Real PTYs (SwiftTerm). Thumbnails redraw from the terminal buffer at up
@@ -104,6 +140,8 @@ Native macOS app, with a focused iOS companion built on the same core.
   - Claude Code / Grok started directly get an assigned `--session-id`; otherwise the session file
     the tool writes (same folder, just after start) is matched to the tile. Two agents started in the
     same folder within a minute aren't guessed at.
+  - Devin sessions bind through the live session lock whose process belongs to that terminal,
+    then resume with `devin -r <id>`. Animated approval choosers still count as waiting for you.
   - If a resume fails fast (deleted session, older CLI, a launcher with its own session store), the
     tile says so and starts a fresh session instead — you never land on a dead error. If the tool
     isn't found at all (say, after a toolchain switch), the tile shuts down and keeps its
@@ -215,6 +253,7 @@ Every gesture means the same thing on every kind of tile.
 | ⌘K | Find or do anything. Typing finds tiles first — by title, folder, question or error, tab or state (`failed`, `asking`), hidden conversations included — and ⏎ goes to the top one. Below them: Open a URL, New …, the board commands, Reopen … (closed tiles), Run …, Ask Claude / Codex app …, web search. With nothing typed: what can be started, what needs you, and the commands that have something to do |
 | ⌘T / ⇧⌘T / ⌥⌘T | New shell / Claude Code / Codex (in the selected tile's folder) |
 | ⌘L | New web tile; with a web tile open, its address field |
+| ⇧⌘J | Triage the queue one item at a time: answer, mark seen, restart, open, or skip |
 | ⌘J | The next thing that needs you: questions, then failures, then unseen results, oldest first. Pressed again it moves on from the tile you're on once you have seen it, also when that one opened in its app |
 | Asking · Failed · Done · Working (top bar) | Open the next tile in that state, oldest first (a counter shows only while something is in its state) |
 | ⌘1 / ⌘3…9 | All / your tabs |
@@ -316,6 +355,9 @@ ask first.
 - Opening a Claude desktop session relies on its `claude://code/continue?session=` deep link.
 - The phone reflects the Mac's terminal size; there is no phone-sized re-layout of TUIs.
 - No forward secrecy on the remote link yet (see above).
+- [Linux support](https://github.com/Enntity/tessera/issues/7) is planned separately; this release requires macOS 15+.
+- Inbox delivery requires the recipient to check its inbox; desktop apps do not receive injected prompts.
+- Steward is advisory, and Fleet is a read-only view of LLooM. Tessera does not schedule work itself.
 - If you scroll back in a Mac terminal, the phone's snapshot and prompt detection follow the scrolled view.
 - No push notifications to the phone yet (needs an APNs relay); the phone updates while open.
 - Tiles are one size, stepped for the whole board (⌘= ⌘-); a tile can be docked, not pinned in place.

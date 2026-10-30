@@ -24,6 +24,14 @@ public final class FleetService {
     public private(set) var updatedAt: Date?
     /// Called when the jobs or leases the board shows may have changed.
     @ObservationIgnored public var onChange: (() -> Void)?
+    /// Whether every reported job becomes a tile. Off, only what wants the user does (a failed or
+    /// stalled job, a lease running out): the rest stay on the head and in the Fleet band.
+    public var showJobs = Preferences.store.bool(forKey: "tessera.fleetJobTiles") {
+        didSet {
+            Preferences.store.set(showJobs, forKey: "tessera.fleetJobTiles")
+            onChange?()
+        }
+    }
 
     @ObservationIgnored public private(set) var board: LLoomSchedule.Board?
     @ObservationIgnored private let store: URL
@@ -87,6 +95,27 @@ public final class FleetService {
         board.map { LLoomSchedule.items($0, lookback: lookback) } ?? []
     }
 
+    /// A timestamped observation, never a grant to use hardware. Failed polls retain the last
+    /// schedule in the UI, so agents must also see that it is stale.
+    func agentReport(now: Date = Date()) -> String {
+        guard config != nil else { return "Fleet is not configured. Connect a LLooM head in Settings → Fleet. Resource availability is unknown." }
+        guard let board, let updatedAt else { return "Fleet has no schedule yet. Resource availability is unknown; check Settings → Fleet." }
+        let age = max(0, now.timeIntervalSince(updatedAt))
+        let fresh = status == .ok && age <= 30
+        var lines = ["Fleet snapshot: \(fresh ? "fresh" : "STALE — availability unknown"), fetched \(ISO8601DateFormatter().string(from: updatedAt)).",
+                     "Read-only observation. Use LLooM to reserve before work; a free snapshot is not a reservation."]
+        if case .failed(let reason) = status { lines.append("Last poll failed: \(reason)") }
+        for resource in board.resources {
+            lines.append("- \(resource.id) | capacity \(resource.capacity ?? 1) | holders: \((resource.holders ?? []).joined(separator: ", ")) | queue: \((resource.queue ?? []).joined(separator: ", "))")
+            if let error = resource.error { lines.append("  unavailable: \(error)") }
+            for lease in board.reservations where lease.resource == resource.id && !["released", "failed"].contains(lease.state) {
+                let expiry = lease.expiresAt.map { ISO8601DateFormatter().string(from: Date(timeIntervalSince1970: $0 / 1000)) } ?? "no expiry reported"
+                lines.append("  \(lease.id) | \(lease.owner) | \(lease.state) | expires \(expiry)\(lease.purpose.map { " | \($0)" } ?? "")")
+            }
+        }
+        return Redactor.redact(lines.joined(separator: "\n"))
+    }
+
     /// A job or lease as an app-session tile, so it joins the board, the Needs-you lane, alerts and
     /// the phone like any conversation. Its notes read as its transcript.
     public nonisolated static func session(_ item: LLoomSchedule.Item) -> AgentAppSession {
@@ -130,7 +159,7 @@ public final class FleetService {
 
     /// Writes only what changed, so an unchanged poll re-renders nothing (the tiles' own writes are
     /// diffed by `AgentAppWatcher`; ages in their text move on with every poll).
-    private func apply(_ next: LLoomSchedule.Board) {
+    func apply(_ next: LLoomSchedule.Board) {
         board = next
         updatedAt = Date()
         if status != .ok { status = .ok }
