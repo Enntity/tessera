@@ -8,6 +8,7 @@ not create a universal binary. Do not advertise Intel support from an Apple sili
 
 ```sh
 swift test --scratch-path .build/release-audit
+gitleaks git --redact --config .gitleaks.toml .
 git diff --check
 bash -n scripts/build-app.sh scripts/package-release.sh
 python3 scripts/test-installer.py .build/release-audit/debug/tessera-cli
@@ -17,6 +18,10 @@ The suite includes CLI/MCP round trips against a loopback server, token and brow
 message exchange, questions and answers, privacy, schedule parsing, Steward response handling,
 PTY behavior, persistence, and remote-channel checks. A clean build directory avoids caches
 containing another checkout's absolute path.
+
+See [CONTRIBUTING.md](../CONTRIBUTING.md) for the scanner setup and fixture policy. Source merges
+are independent of public binary releases; keep installation docs explicit about which path is
+available. Do not substitute CI development artifacts for a signed download.
 
 ## Local candidate
 
@@ -43,6 +48,22 @@ or provide credentials for Fleet and Steward.
 ## Public download
 
 Use a Developer ID Application signing identity and an existing notarytool Keychain profile:
+
+If this is the first distribution from this Mac:
+
+1. Sign in to Xcode with the Apple Developer Program account that will publish the app. Create
+   a **Developer ID Application** certificate in Xcode's account/certificate settings, or have
+   the team's Account Holder provision it. Apple Development certificates used for local builds
+   are a different certificate type. Follow [Apple's Developer ID guide](https://developer.apple.com/developer-id/).
+2. Run `security find-identity -v -p codesigning` and copy the full Developer ID Application
+   identity name. Keep its private key in Keychain.
+3. Run `xcrun notarytool store-credentials tessera-notary` interactively. Supply the developer
+   account, team ID, and app-specific password when prompted. This saves a Keychain profile;
+   do not put the password in shell history, chat, or repository files. Apple also supports
+   API-key authentication; see [the notarization workflow](https://developer.apple.com/documentation/security/customizing-the-notarization-workflow).
+4. Set `TESSERA_NOTARY_PROFILE=tessera-notary` and use the identity name from step 2 below.
+
+This setup is for the release maintainer. People building Tessera locally do not need it.
 
 ```sh
 export TESSERA_CODESIGN_IDENTITY='Developer ID Application: <organization> (<team>)'

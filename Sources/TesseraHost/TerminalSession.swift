@@ -286,9 +286,20 @@ public final class TerminalSession: NSObject {
     }
 
     /// Adopt the session a tool reported after launch (e.g. the Codex rollout this tile started).
-    public func bind(sessionId: String) {
-        guard self.sessionId == nil, SessionResume.isSafeId(sessionId) else { return }
+    /// `replacing` is for tools whose binding is exact (Devin's lock names the running session),
+    /// so it supersedes an id the command line named — say `-r` on a conversation the REPL left.
+    public func bind(sessionId: String, replacing: Bool = false) {
+        guard replacing ? self.sessionId != sessionId : self.sessionId == nil,
+              SessionResume.isSafeId(sessionId) else { return }
         self.sessionId = sessionId
+    }
+
+    /// The process group the tile's pty has in the foreground (the program the user is typing
+    /// into), nil when it isn't running or can't be read.
+    public var foregroundProcessGroup: pid_t? {
+        guard isRunning, let process, process.childfd >= 0 else { return nil }
+        let pgid = tcgetpgrp(process.childfd)
+        return pgid > 0 ? pgid : nil
     }
 
     /// The shell's working directory right now (follows `cd`), read from the kernel.

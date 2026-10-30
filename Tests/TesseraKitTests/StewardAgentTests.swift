@@ -62,6 +62,21 @@ final class StewardTests: XCTestCase {
         XCTAssertThrowsError(try Steward.tileSummary(fromCompletion: completion("I think it is compiling.")))
     }
 
+    func testAWantsNothingReadsAsNoNeeds() throws {
+        for word in ["None.", "nothing", "n/a", "no action", "-", "NONE"] {
+            let data = completion("{\"summary\": \"idling\", \"blocked\": false, \"needs\": \"\(word)\"}")
+            XCTAssertNil(try Steward.tileSummary(fromCompletion: data).needs, word)
+        }
+        let data = completion("{\"summary\": \"idling\", \"blocked\": false, \"needs\": \"Merge when green\"}")
+        XCTAssertEqual(try Steward.tileSummary(fromCompletion: data).needs, "Merge when green")
+    }
+
+    func testAnEmptyHeadlineStaysEmpty() throws {
+        let data = completion("{\"headline\": \"\", \"attention\": [], \"closable\": []}")
+        let brief = try Steward.brief(fromCompletion: data, digests: [digest("a", state: "idle")], changes: [])
+        XCTAssertEqual(brief.headline, "")
+    }
+
     func testTheBriefKeepsToWhatTheBoardCanStandBehind() throws {
         let digests = [digest("a", state: "idle"), digest("b", state: "working"), digest("c", state: "needsInput", waiting: true)]
         let data = completion("""

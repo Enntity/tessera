@@ -24,6 +24,14 @@ public final class FleetService {
     public private(set) var updatedAt: Date?
     /// Called when the jobs or leases the board shows may have changed.
     @ObservationIgnored public var onChange: (() -> Void)?
+    /// Whether every reported job becomes a tile. Off, only what wants the user does (a failed or
+    /// stalled job, a lease running out): the rest stay on the head and in the Fleet band.
+    public var showJobs = Preferences.store.bool(forKey: "tessera.fleetJobTiles") {
+        didSet {
+            Preferences.store.set(showJobs, forKey: "tessera.fleetJobTiles")
+            onChange?()
+        }
+    }
 
     @ObservationIgnored public private(set) var board: LLoomSchedule.Board?
     @ObservationIgnored private let store: URL

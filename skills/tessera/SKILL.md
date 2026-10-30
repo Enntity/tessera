@@ -2,7 +2,7 @@
 name: tessera
 description: >-
   Use Tessera, the developer's mission-control board on this Mac, to see every
-  other terminal, AI agent session (Claude, Codex, dsh, omp…) and LLooM job
+  other terminal, AI agent session (Claude, Codex, Devin, dsh, omp…) and LLooM job
   that is running, read what another one shows, message another agent, or ask
   the developer a question without blocking in a window they may not be
   watching. Use when the task says "ask the developer/user", "check what the

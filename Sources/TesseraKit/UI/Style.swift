@@ -50,6 +50,7 @@ public enum Style {
         switch flavor {
         case .claude, .claudeDesktop: Color(red: 0.85, green: 0.47, blue: 0.34)
         case .codex, .codexDesktop: Color(red: 0.62, green: 0.78, blue: 1.00)
+        case .devin: Color(red: 0.22, green: 0.55, blue: 0.88)
         case .grok: Color(red: 0.80, green: 0.82, blue: 0.86)
         case .gemini: Color(red: 0.40, green: 0.66, blue: 1.00)
         case .dsh: Color(red: 0.36, green: 0.49, blue: 1.00)
@@ -172,7 +173,7 @@ public enum Style {
         public static let panelHeader: CGFloat = 40
         public static let sidebar: CGFloat = 290
         /// The Needs-you lane.
-        public static let lane: CGFloat = 220
+        public static let lane: CGFloat = 300
         /// The watch dock: as wide as it starts (a docked terminal is 80 columns then), as narrow as
         /// it gets, and the least it leaves the board.
         public static let dock: CGFloat = 540

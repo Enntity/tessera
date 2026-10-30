@@ -155,7 +155,7 @@ public final class AgentTools {
     private func board(_ workspace: Workspace, waitingOnly: Bool, me: String?) -> String {
         var lines: [String] = []
         if let brief = workspace.steward.brief, workspace.steward.config.enabled {
-            lines.append("Brief: \(brief.headline)")
+            if !brief.headline.isEmpty { lines.append("Brief: \(brief.headline)") }
             for item in brief.attention { lines.append("  needs the developer: \(item.id) — \(item.why)") }
         }
         let tiles = workspace.allTiles.filter { !waitingOnly || $0.needsUser }

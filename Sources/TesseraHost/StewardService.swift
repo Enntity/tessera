@@ -159,7 +159,8 @@ public final class StewardService {
         let now = Date()
         let ids = Set(digests.map(\.id))
         for id in seen.keys where !ids.contains(id) { (seen[id], summarized[id], summaries[id]) = (nil, nil, nil) }
-        for d in digests {
+        // What waits on the user is summarized first: the lane and triage read those lines.
+        for d in digests.filter(\.waiting) + digests.filter({ !$0.waiting }) {
             let fp = d.fingerprint
             if seen[d.id]?.fingerprint != fp {
                 seen[d.id] = (fp, now)

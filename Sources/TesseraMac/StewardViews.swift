@@ -2,105 +2,6 @@ import SwiftUI
 import TesseraHost
 import TesseraKit
 
-/// The steward's brief, at the head of the Needs-you lane: what is going on in a sentence, what
-/// happened since the user last looked, and what could be put away, closed in one go (with Undo).
-struct BriefCard: View {
-    @Environment(AppModel.self) private var model
-    @Environment(\.tesseraPrivacy) private var privacy
-    @State private var showClosable = false
-
-    var body: some View {
-        let steward = model.workspace.steward
-        if steward.config.enabled {
-            VStack(alignment: .leading, spacing: Style.Space.s) {
-                HStack(spacing: Style.Space.xs) {
-                    Image(systemName: "sparkles").foregroundStyle(Style.accent(.agentDesk))
-                    Text("Brief").micro().foregroundStyle(Style.dim)
-                    Spacer()
-                    status(steward)
-                    Button { steward.refresh() } label: { Image(systemName: "arrow.clockwise") }
-                        .buttonStyle(.plain).foregroundStyle(Style.muted).help("Brief again now")
-                }
-                if let brief = steward.brief {
-                    // Plain text: the model read untrusted screens, so nothing it writes becomes a link.
-                    Text(brief.headline.obscured(privacy))
-                        .font(Style.ui(.label, .medium)).foregroundStyle(Style.ink)
-                        .fixedSize(horizontal: false, vertical: true)
-                    ForEach(brief.changes, id: \.self) { change in
-                        Text(("· " + change).obscured(privacy)).font(Style.caption).foregroundStyle(Style.dim).lineLimit(2)
-                    }
-                    let closable = brief.closable.filter { item in
-                        !privacy && !steward.dismissed.contains(item.id) && canClose(item.id)
-                    }
-                    if !closable.isEmpty { closableList(closable) }
-                } else if case .failed = steward.status {
-                    EmptyView()
-                } else {
-                    Text("Reading the board…").font(Style.caption).foregroundStyle(Style.muted)
-                }
-            }
-            .padding(Style.Space.m)
-            .cardSurface()
-        }
-    }
-
-    @ViewBuilder private func status(_ steward: StewardService) -> some View {
-        switch steward.status {
-        case .thinking: ProgressView().controlSize(.mini)
-        case .failed(let why):
-            Image(systemName: "exclamationmark.triangle").foregroundStyle(Style.coral).help(why)
-        default: EmptyView()
-        }
-    }
-
-    private func closableList(_ items: [Steward.Brief.Item]) -> some View {
-        VStack(alignment: .leading, spacing: Style.Space.xs) {
-            HStack {
-                Button { withAnimation(Style.Motion.quick) { showClosable.toggle() } } label: {
-                    Label("\(items.count) can be put away", systemImage: showClosable ? "chevron.down" : "chevron.right")
-                        .font(Style.caption).foregroundStyle(Style.dim)
-                }
-                .buttonStyle(.plain)
-                Spacer()
-                Button("Close all") {
-                    let current = items.filter { canClose($0.id) }
-                    for item in current { model.workspace.steward.record("closed", tile: item.id, why: item.why) }
-                    model.close(current.map(\.id))
-                }
-                .font(Style.caption).buttonStyle(.borderless)
-                .help("Close or hide these tiles (Undo brings them back)")
-            }
-            if showClosable {
-                ForEach(items) { item in
-                    HStack(spacing: Style.Space.xs) {
-                        if let info = model.workspace.info(item.id) { FlavorGlyph(info.flavor) }
-                        VStack(alignment: .leading, spacing: 0) {
-                            Text(model.workspace.info(item.id)?.title ?? item.id).font(Style.caption).foregroundStyle(Style.ink).lineLimit(1)
-                            Text(item.why).font(Style.caption).foregroundStyle(Style.muted).lineLimit(1)
-                        }
-                        Spacer(minLength: 0)
-                        Button { model.workspace.steward.record("kept", tile: item.id, why: item.why) } label: { Image(systemName: "xmark") }
-                            .buttonStyle(.plain).foregroundStyle(Style.muted).help("Keep it; don't suggest it again")
-                        Button {
-                            guard canClose(item.id) else { return }
-                            model.workspace.steward.record("closed", tile: item.id, why: item.why)
-                            model.close(item.id)
-                        } label: { Image(systemName: "archivebox") }
-                            .buttonStyle(.plain).foregroundStyle(Style.dim).help("Close or hide it")
-                    }
-                    .contentShape(Rectangle())
-                    .onTapGesture { model.open(item.id) }
-                }
-            }
-        }
-    }
-
-    private func canClose(_ id: String) -> Bool {
-        guard let tile = model.workspace.info(id) else { return false }
-        return Steward.canSuggestClosing(tile)
-    }
-}
-
 /// The answers an agent's question offers, and a reply of the user's own, under its lane row.
 struct DeskAnswers: View {
     @Environment(AppModel.self) private var model
@@ -187,7 +88,7 @@ struct AgentsSettings: View {
                         }
                     }
                         .disabled(installing)
-                        .help("Puts `tessera` on your PATH, installs its skill for Claude Code and Codex, and registers its MCP server")
+                        .help("Installs the `tessera` command, shared skill, and MCP setup for Claude Code, Codex and Devin")
                 }
                 if let installOutput { Text(installOutput).font(Style.mono(.caption)).textSelection(.enabled) }
             }

@@ -2,10 +2,11 @@ import Foundation
 
 /// `tessera install`: makes Tessera reachable from every agent on this Mac.
 /// - `~/.local/bin/tessera` points at this command;
-/// - the skills shipped beside it go to `~/.agents/skills` (read by Codex and other agents), linked
-///   from `~/.claude/skills` for Claude Code;
-/// - `tessera mcp` is registered as an MCP server with Claude Code (`claude mcp add --scope user`)
-///   and Codex (`[mcp_servers.tessera]` in `~/.codex/config.toml`, backed up first).
+/// - the skills shipped beside it go to `~/.agents/skills` (read by Codex, Devin and other agents),
+///   linked from `~/.claude/skills` for Claude Code;
+/// - `tessera mcp` is registered as an MCP server with Claude Code (`claude mcp add --scope user`),
+///   Codex (`[mcp_servers.tessera]` in `~/.codex/config.toml`, backed up first) and Devin
+///   (`devin mcp add --scope user`, `~/.config/devin/mcp_config.json`).
 /// Each step says what it did; `--dry-run` only says what it would do.
 struct Installer {
     let dryRun: Bool
@@ -55,11 +56,15 @@ struct Installer {
         }
 
         if let claude = Self.which("claude") {
-            say("register MCP server \"tessera\" with Claude Code (user scope)")
-            if !dryRun {
-                _ = Self.run(claude, ["mcp", "remove", "--scope", "user", "tessera"])
-                let (status, output) = Self.run(claude, ["mcp", "add", "--scope", "user", "tessera", "--", bin.path, "mcp"])
-                if status != 0 { throw Failure("claude mcp add failed: \(output.trimmingCharacters(in: .whitespacesAndNewlines))") }
+            let (has, _) = Self.run(claude, ["mcp", "get", "tessera"])
+            if has == 0 {
+                say("leave Claude Code's tessera MCP server as it is")
+            } else {
+                say("register MCP server \"tessera\" with Claude Code (user scope)")
+                if !dryRun {
+                    let (status, output) = Self.run(claude, ["mcp", "add", "--scope", "user", "tessera", "--", bin.path, "mcp"])
+                    if status != 0 { throw Failure("claude mcp add failed: \(output.trimmingCharacters(in: .whitespacesAndNewlines))") }
+                }
             }
         } else {
             say("skip Claude Code: `claude` not found")
@@ -86,6 +91,23 @@ struct Installer {
             }
         } else {
             say("skip Codex: no ~/.codex/config.toml")
+        }
+
+        if let devin = Self.which("devin") {
+            // Devin already reads ~/.agents/skills, so only the MCP server is its own step.
+            // `mcp get` is a read: it answers under --dry-run too, so the plan it prints is real.
+            let (has, _) = Self.run(devin, ["mcp", "get", "tessera"])
+            if has == 0 {
+                say("leave Devin's tessera MCP server as it is")
+            } else {
+                say("register MCP server \"tessera\" with Devin (user scope)")
+                if !dryRun {
+                    let (status, output) = Self.run(devin, ["mcp", "add", "--scope", "user", "tessera", "--", bin.path, "mcp"])
+                    if status != 0 { throw Failure("devin mcp add failed: \(output.trimmingCharacters(in: .whitespacesAndNewlines))") }
+                }
+            }
+        } else {
+            say("skip Devin: `devin` not found")
         }
         if !(ProcessInfo.processInfo.environment["PATH"] ?? "").split(separator: ":").contains(Substring(bin.deletingLastPathComponent().path)) {
             print("For shell use, add ~/.local/bin to PATH in your shell configuration. MCP uses the absolute path and needs no PATH change.")

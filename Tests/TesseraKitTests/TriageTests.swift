@@ -51,6 +51,46 @@ final class AttentionQueueTests: XCTestCase {
         XCTAssertEqual(tile("d", .done, attention: true).reason, "Finished")
     }
 
+    func testTheLaneLinePrefersTheTilesOwnWordsForQuestionsAndFailures() {
+        // A question or failure speaks for itself even where the steward has more to say.
+        var ask = tile("q", .needsInput, detail: "Allow rm -rf build/ ?")
+        ask.needs = "Approve or deny the cleanup"
+        ask.summary = "cleaning up build products"
+        XCTAssertEqual(ask.laneLine, "Allow rm -rf build/ ?")
+        var failed = tile("f", .failed, detail: "exit 1")
+        failed.needs = "Restart the tests"
+        XCTAssertEqual(failed.laneLine, "exit 1")
+        XCTAssertEqual(tile("q2", .needsInput).laneLine, "Waiting for an answer")
+
+        // A result reads: what to do with it, then what it did, then its own last line.
+        var done = tile("d", .done, attention: true, detail: "132 tests passed")
+        done.summary = "finished the suite"
+        done.needs = "Read the failures before merging"
+        XCTAssertEqual(done.laneLine, "Read the failures before merging")
+        done.needs = nil
+        XCTAssertEqual(done.laneLine, "finished the suite")
+        done.summary = nil
+        XCTAssertEqual(done.laneLine, "132 tests passed")
+        XCTAssertEqual(tile("d2", .done, attention: true).laneLine, "Finished")
+        // With the tile's own text at hand, a quiet result still says what it ended on.
+        let quiet = tile("d3", .done, attention: true)
+        XCTAssertEqual(quiet.laneLine(shown: "All 132 tests passed in 3.1s\n \n"), "All 132 tests passed in 3.1s")
+        XCTAssertEqual(quiet.laneLine(shown: "  \n"), "Finished")
+    }
+
+    func testTriageStandsWhereTheLeavingItemWas() {
+        // The item being looked at left mid-list: the one now in its place is next.
+        XCTAssertEqual(["a", "b", "c"].triageIndex(afterLeaving: 1), 1)
+        // It was last: clamp to the new end.
+        XCTAssertEqual(["a", "b"].triageIndex(afterLeaving: 2), 1)
+        // The queue emptied: nothing to look at.
+        XCTAssertNil([String]().triageIndex(afterLeaving: 0))
+        // Stepping by hand wraps at both ends.
+        XCTAssertEqual(["a", "b", "c"].triageIndex(from: 2, by: 1), 0)
+        XCTAssertEqual(["a", "b", "c"].triageIndex(from: 0, by: -1), 2)
+        XCTAssertEqual(["a", "b", "c"].triageIndex(from: 1, by: -1), 0)
+    }
+
     func testBoardStateCountsEachTileUnderItsOwnState() {
         let state = BoardState([tile("w", .working, attention: true), tile("q", .needsInput, attention: true, age: 9),
                                 tile("seen", .needsInput, age: 5), tile("d", .done, attention: true), tile("f", .failed, attention: true),

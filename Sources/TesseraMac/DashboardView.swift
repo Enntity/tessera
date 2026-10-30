@@ -52,6 +52,11 @@ struct DashboardView: View {
                     .transition(.opacity)
                     .zIndex(20)
             }
+            if model.showTriage {
+                TriageView()
+                    .transition(.opacity)
+                    .zIndex(20)
+            }
         }
         .environment(\.tesseraPrivacy, model.privacyMode)
         .tint(Style.control)
@@ -59,7 +64,9 @@ struct DashboardView: View {
         .background(WindowAccessor { model.window = $0 })
         .ignoresSafeArea()
         .animation(Style.Motion.quick, value: model.showPalette)
+        .animation(Style.Motion.quick, value: model.showTriage)
         .onChange(of: model.showPalette) { _, shown in if !shown { model.restoreFocus() } }
+        .onChange(of: model.showTriage) { _, shown in if !shown { model.restoreFocus() } }
     }
 }
 

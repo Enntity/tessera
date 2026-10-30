@@ -124,7 +124,9 @@ public enum Steward {
         You are Tessera's steward. You keep an eye on everything running on a developer's machine (terminals, \
         AI agents, background jobs) so the developer doesn't have to. Your job is to lower their cognitive load: \
         say what matters in as few words as possible, and point out what can be put away. \(guardrail)
-        Reply with JSON only: {"headline": "one sentence, at most 25 words, on the state of things", \
+        Reply with JSON only: {"headline": "at most 25 words on what the tiles themselves don't show: how running work is \
+        going, when it should finish, what looks stuck or risky. Don't count or list what finished, failed or is waiting; \
+        the developer already sees that. Empty string if there is nothing to add.", \
         "attention": [{"id": "<tile id>", "why": "at most 12 words"}], \
         "closable": [{"id": "<tile id>", "why": "at most 10 words"}]}.
         attention: at most 5 tiles the developer must act on, most pressing first; leave out what can wait.
@@ -198,8 +200,10 @@ public enum Steward {
         guard let summary = (object["summary"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines), !summary.isEmpty
         else { throw Failure.unreadable("no summary") }
         let needs = (object["needs"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
-        return TileSummary(summary: summary.preview(120), blocked: object["blocked"] as? Bool ?? false,
-                           needs: needs?.isEmpty == false ? needs!.preview(120) : nil)
+        // "none", "nothing" and their kin mean the tile wants nothing: no line, not the word.
+        let empty = needs.map { $0.trimmingCharacters(in: CharacterSet(charactersIn: ".")).lowercased() }
+        let wants = needs.flatMap { $0.isEmpty || ["none", "nothing", "n/a", "no action", "-"].contains(empty ?? "") ? nil : $0.preview(120) }
+        return TileSummary(summary: summary.preview(120), blocked: object["blocked"] as? Bool ?? false, needs: wants)
     }
 
     /// The brief, kept to what the board can stand behind: only ids it was given, nothing suggested
@@ -215,7 +219,7 @@ public enum Steward {
             }.prefix(limit).map { $0 }
         }
         let headline = ((object["headline"] as? String) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        return Brief(headline: headline.isEmpty ? "Nothing to report." : headline.preview(200), changes: changes,
+        return Brief(headline: headline.preview(200), changes: changes,
                      attention: items("attention", limit: 5) { _ in true },
                      closable: items("closable", limit: 12) { !["working", "needsInput", "starting"].contains($0.state) && !$0.waiting },
                      at: at)

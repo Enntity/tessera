@@ -1,0 +1,16 @@
+title = "Tessera public source"
+
+[extend]
+useDefault = true
+
+# These exact, invented strings exercise credential redaction. Keep scanning the rest
+# of this test file, including any new token strings. AND requires both path and value.
+[[allowlists]]
+description = "Synthetic redaction-test credentials"
+condition = "AND"
+paths = ['''^Tests/TesseraKitTests/StewardAgentTests\.swift$''']
+regexTarget = "secret"
+regexes = [
+  '''^ghp_0123456789abcdefghijABCDEFGHIJklmnop$''',
+  '''^lloom_admin_0123456789abcdef0123456789abcdef$''',
+]

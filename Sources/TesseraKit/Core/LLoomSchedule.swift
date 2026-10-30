@@ -123,6 +123,10 @@ public enum LLoomSchedule {
         public var notes: [ConversationItem]
         /// The reporting agent's conversation (`claude:<id>`, `codex:<id>`), when it said.
         public var session: String?
+
+        /// Whether the item wants the user's attention: a failed or stalled job, a lease that is
+        /// overdue or whose restore failed.
+        public var wantsUser: Bool { activity == .needsInput || activity == .failed }
     }
 
     /// Tile ids are `lloom:` and the job or reservation id, so they never collide with other tiles.

@@ -5,3 +5,14 @@ xcuserdata/
 *.xcuserstate
 Package.resolved.bak
 .DS_Store
+
+# Local credentials and application state do not belong in a source checkout.
+.env
+.env.*
+!.env.example
+*.p12
+*.p8
+*.keychain-db
+agent-api.json
+workspace.json
+steward-feedback.ndjson

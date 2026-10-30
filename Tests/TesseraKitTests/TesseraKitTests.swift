@@ -279,6 +279,94 @@ final class TerminalActivityTrackerTests: XCTestCase {
         XCTAssertEqual(t.activity, .working)
     }
 
+    /// Devin's working line reads "Running tools · 9m 48s (esc twice to interrupt)" — the spinner
+    /// hint keeps a quiet screen working. From the real screen: Fixtures/devin-working-line.txt.
+    func testDevinSpinnerKeepsWorking() {
+        var t = TerminalActivityTracker()
+        t.noteOutput(bytes: 500, at: t0)
+        t.tick(now: t0.addingTimeInterval(5), screenTail: ["⡜⢣ Running tools · 9m 48s (esc twice to interrupt)"])
+        XCTAssertEqual(t.activity, .working)
+    }
+
+    /// Devin's command-approval chooser (Fixtures/devin-approval-screen.txt) asks while its
+    /// spinner hint may still be on screen: the question wins.
+    func testDevinApprovalPromptWinsOverItsSpinner() {
+        var t = TerminalActivityTracker()
+        t.noteOutput(bytes: 500, at: t0)
+        let screen = [" ⏺ Running command", " └$ touch /tmp/tessera-devin-probe",
+                      " ❭ Allow       ← ◼◼◼◼ → Once", "                        Bypass mode",
+                      "                                 Deny", " ↑↓ select · → cycle · ↵ confirm · esc cancel",
+                      "⡜⢣ Running tools · 9m 48s (esc twice to interrupt)"]
+        t.tick(now: t0.addingTimeInterval(5), screenTail: screen)
+        XCTAssertEqual(t.activity, .needsInput)
+        XCTAssertTrue(t.attention)
+        XCTAssertEqual(t.detail?.hasPrefix("❭ Allow"), true)
+    }
+
+    /// Interactive choosers animate while they wait: Devin's approval chooser emits ~350–800 B
+    /// per 0.5 s (measured), so the screen never goes quiet. Once the chooser line has been up
+    /// for settleTime it is the question anyway.
+    func testChooserNeedsInputWhileOutputFlows() {
+        var t = TerminalActivityTracker()
+        let screen = [" ❭ Allow       ← ◼◼◼◼ → Once", "                        Bypass mode",
+                      "                                 Deny"]
+        for i in 0..<12 {
+            let now = t0.addingTimeInterval(Double(i) * 0.1)
+            t.noteOutput(bytes: 400, at: now)
+            t.tick(now: now, screenTail: screen)
+            if now.timeIntervalSince(t0) < 0.8 { XCTAssertEqual(t.activity, .working) }
+        }
+        XCTAssertEqual(t.activity, .needsInput)
+        XCTAssertTrue(t.attention)
+        XCTAssertEqual(t.detail?.hasPrefix("❭ Allow"), true)
+    }
+
+    /// A prose-style prompt still only counts once output settles: under a live spinner it is
+    /// scrolled transcript text, not a question.
+    func testProsePromptStaysWorkingWhileOutputFlows() {
+        var t = TerminalActivityTracker()
+        let screen = ["Do you want to proceed? (y/n)"]
+        for i in 0..<12 {
+            let now = t0.addingTimeInterval(Double(i) * 0.1)
+            t.noteOutput(bytes: 400, at: now)
+            t.tick(now: now, screenTail: screen)
+        }
+        XCTAssertEqual(t.activity, .working)
+    }
+
+    /// An answered chooser left on screen (kept animating) is not asked again.
+    func testAnsweredChooserDoesNotReRaiseWhileOutputFlows() {
+        var t = TerminalActivityTracker()
+        let screen = [" ❭ Allow       ← ◼◼◼◼ → Once", "                        Bypass mode",
+                      "                                 Deny"]
+        for i in 0..<12 {
+            let now = t0.addingTimeInterval(Double(i) * 0.1)
+            t.noteOutput(bytes: 400, at: now)
+            t.tick(now: now, screenTail: screen)
+        }
+        XCTAssertEqual(t.activity, .needsInput)
+        t.noteInput(at: t0.addingTimeInterval(1.2))
+        for i in 12..<25 {
+            let now = t0.addingTimeInterval(Double(i) * 0.1)
+            t.noteOutput(bytes: 400, at: now)
+            t.tick(now: now, screenTail: screen)
+        }
+        XCTAssertNotEqual(t.activity, .needsInput)
+    }
+
+    /// Devin's first-run trust prompt (Fixtures/devin-trust-screen.txt) is a question too.
+    func testDevinTrustPromptIsNeedsInput() {
+        var t = TerminalActivityTracker()
+        t.noteOutput(bytes: 500, at: t0)
+        let screen = [" ✱ Do you trust the authors of this directory?",
+                      "   For security, devin should not be run in directories with untrusted content.",
+                      " /private/tmp/devin-probe-dir", " ❭ 1 Yes, trust", "   2 No, exit",
+                      " ↑↓ select · ↵ confirm · esc cancel"]
+        t.tick(now: t0.addingTimeInterval(5), screenTail: screen)
+        XCTAssertEqual(t.activity, .needsInput)
+        XCTAssertEqual(t.detail, "❭ 1 Yes, trust")
+    }
+
     func testEchoDoesNotCountAsWork() {
         var t = TerminalActivityTracker()
         t.noteOutput(bytes: 10, at: t0)
@@ -884,6 +972,43 @@ final class SessionResumeTests: XCTestCase {
         XCTAssertNil(SessionResume.tool(for: "ls -la"))
     }
 
+    /// `devin` before `--` is flags and their values; a bare word that isn't a value is a
+    /// subcommand or a Desktop path, and `-p` never runs a conversation.
+    func testDevinConversations() {
+        XCTAssertEqual(SessionResume.tool(for: "devin"), .devin)
+        XCTAssertEqual(SessionResume.tool(for: "devin-work"), .devin)
+        for command in ["devin", "devin --model x", "devin -r abc", "devin -c", "devin -- fix it"] {
+            XCTAssertEqual(SessionResume.conversationTool(for: command), .devin, command)
+        }
+        for command in ["devin .", "devin list", "devin -p hi", "devin mcp list", "devin /tmp/x",
+                        "devin --model x /tmp/y"] {
+            XCTAssertNil(SessionResume.conversationTool(for: command), command)
+        }
+    }
+
+    func testDevinResumeAndSessionId() {
+        XCTAssertEqual(SessionResume.prepareLaunch("devin").command, "devin")
+        XCTAssertNil(SessionResume.prepareLaunch("devin").sessionId)
+        XCTAssertEqual(SessionResume.sessionId(in: "devin -r abc-1"), "abc-1")
+        XCTAssertEqual(SessionResume.sessionId(in: "devin --resume hammerhead-cookie"), "hammerhead-cookie")
+        // After `--` is the prompt; an `-r` there is the prompt's own text.
+        XCTAssertNil(SessionResume.sessionId(in: "devin -- -r abc"))
+        XCTAssertNil(SessionResume.sessionId(in: "devin -r"))
+        XCTAssertEqual(SessionResume.resumeCommand(original: "devin --model m", sessionId: "abc-1"), "devin --model m -r abc-1")
+        XCTAssertEqual(SessionResume.resumeCommand(original: "devin", sessionId: nil), "devin -c")
+        // A resumed conversation must not send its first prompt again.
+        XCTAssertEqual(SessionResume.resumeCommand(original: "devin -r old -- fix it", sessionId: "new-1"), "devin -r new-1")
+        XCTAssertEqual(SessionResume.resumeCommand(original: "devin --prompt-file f.txt -- do X", sessionId: "s1"), "devin -r s1")
+        XCTAssertEqual(SessionResume.freshLaunch(original: "devin --model m -c -- do X"), "devin --model m")
+    }
+
+    func testDevinContinuesLatest() {
+        XCTAssertTrue(SessionResume.continuesLatest("devin -c"))
+        XCTAssertTrue(SessionResume.continuesLatest("devin --continue"))
+        XCTAssertFalse(SessionResume.continuesLatest("devin -r abc"))
+        XCTAssertFalse(SessionResume.continuesLatest("devin -- -c"))
+    }
+
     func testShellEventParsing() {
         let n = "abc123"
         let b64 = Data("codex-work --yolo".utf8).base64EncodedString()
@@ -1023,6 +1148,19 @@ final class RestorePlanTests: XCTestCase {
         XCTAssertEqual(plan["g1"]?.mayContinueLatest, true)
         XCTAssertEqual(plan["o1"]?.mayContinueLatest, false)
         XCTAssertEqual(plan["o2"]?.mayContinueLatest, false)
+    }
+
+    /// Devin's session lock names the running session exactly, so "continue latest" is only ever
+    /// a launcher with no way to bind — never a real Devin tile.
+    func testUnboundDevinNeverContinuesLatest() {
+        let plan = RestorePlan.plan([
+            .init(id: "bound", command: "devin", cwd: "/w", sessionId: "hammerhead-cookie"),
+            .init(id: "unbound", command: "devin -c", cwd: "/w", sessionId: nil),
+            .init(id: "solo", command: "devin", cwd: "/x", sessionId: nil)
+        ])
+        XCTAssertEqual(plan["bound"]?.sessionId, "hammerhead-cookie")
+        XCTAssertEqual(plan["unbound"], .init(sessionId: nil, mayContinueLatest: false))
+        XCTAssertEqual(plan["solo"], .init(sessionId: nil, mayContinueLatest: false))
     }
 
     func testContinuesLatestDetection() {

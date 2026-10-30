@@ -4,7 +4,7 @@ import Foundation
 /// conversation.
 ///
 /// - A session id belongs to one tile: the first keeps it, any duplicate starts fresh.
-/// - Tools whose sessions Tessera can bind exactly (Claude Code, Codex) never fall back to
+/// - Tools whose sessions Tessera can bind exactly (Claude Code, Codex, Devin) never fall back to
 ///   "continue the latest": an unbound tile means no conversation was recorded, and "latest" could
 ///   be another tile's.
 /// - Other tools (Grok via launchers, opencode, omp) may continue their latest session only when no
@@ -56,6 +56,6 @@ public enum RestorePlan {
 
     /// Tools whose conversations Tessera matches to tiles from their own session files.
     public static func bindable(_ tool: SessionResume.Tool) -> Bool {
-        tool == .claude || tool == .codex
+        tool == .claude || tool == .codex || tool == .devin
     }
 }

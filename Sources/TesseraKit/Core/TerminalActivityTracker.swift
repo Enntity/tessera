@@ -21,6 +21,8 @@ public struct TerminalActivityTracker: Sendable {
     /// The prompt the user last responded to; it can linger on screen but is no longer a question.
     private var answeredPrompt: String?
     private var visiblePrompt: String?
+    /// When the line now showing as the prompt first appeared (drives `chooserGrace`).
+    private var promptSince: Date?
 
     /// Output this long after a keystroke is treated as echo, not work.
     static let echoWindow: TimeInterval = 0.35
@@ -113,12 +115,25 @@ public struct TerminalActivityTracker: Sendable {
 
         let quietFor = lastOutputAt.map { now.timeIntervalSince($0) } ?? .infinity
         let tail = screenTail.suffix(24)
-        let spinnerVisible = tail.contains { $0.range(of: "esc to interrupt", options: .caseInsensitive) != nil }
+        let prompt = openPrompt(in: Array(tail.suffix(14)), at: now)
+        // A question wins over a spinner hint that may still be on screen (Devin keeps its
+        // "esc twice to interrupt" line up while its approval chooser waits).
+        let spinnerVisible = prompt == nil && tail.contains { line in
+            let l = line.lowercased()
+            return l.contains("esc to interrupt") || l.contains("esc twice to interrupt")
+        }
+        // Interactive choosers animate while they wait (measured: Devin emits ~350–800 B per 0.5 s
+        // with its approval chooser up), so "quiet for a while" never comes for them. Once the
+        // same chooser line has been on screen for settleTime, it is the question, output or not.
+        let chooserWaiting = prompt != nil && Self.isChooser(prompt!)
+            && promptSince.map { now.timeIntervalSince($0) >= Self.settleTime } == true
 
-        if quietFor < Self.workingWindow || spinnerVisible {
+        if chooserWaiting {
+            if activity != .needsInput { raise(needsInput: true, detail: prompt) }
+        } else if quietFor < Self.workingWindow || spinnerVisible {
             if activity != .working { detail = nil }
             activity = .working
-        } else if quietFor >= Self.settleTime, let prompt = openPrompt(in: Array(tail.suffix(14))) {
+        } else if quietFor >= Self.settleTime, let prompt {
             if activity != .needsInput { raise(needsInput: true, detail: prompt) }
         } else if activity == .working {
             let burst = (lastOutputAt ?? now).timeIntervalSince(burstStartedAt ?? now)
@@ -142,8 +157,11 @@ public struct TerminalActivityTracker: Sendable {
     }
 
     /// A prompt on screen that hasn't already been answered.
-    private mutating func openPrompt(in lines: [String]) -> String? {
-        visiblePrompt = Self.promptLine(in: lines)
+    private mutating func openPrompt(in lines: [String], at now: Date = Date()) -> String? {
+        let found = Self.promptLine(in: lines)
+        // A different line (or none) restarts the "how long has this chooser been up" clock.
+        if found != visiblePrompt { promptSince = found == nil ? nil : now }
+        visiblePrompt = found
         guard let prompt = visiblePrompt else {
             answeredPrompt = nil
             return nil
@@ -164,12 +182,27 @@ public struct TerminalActivityTracker: Sendable {
     static let promptMarkers = [
         "do you want to", "would you like to", "allow command", "allow once", "always allow",
         "(y/n)", "[y/n]", "[y/n]:", "y/n?", "press enter to continue", "waiting for approval",
-        "waiting for your input", "needs your permission", "needs your attention", "❯ 1. yes", "› 1. yes",
-        "yes, and don't ask again", "continue? ", "proceed?"
+        "waiting for your input", "needs your permission", "needs your attention",
+        "continue? ", "proceed?",
+        // Devin's other approval phrasings.
+        "yes, allow", "yes, always allow", "yes, and allow all"
+    ] + chooserMarkers
+
+    /// Markers that only occur in an interactive chooser, never in prose: they may keep being
+    /// asked while output still flows, so a settled one needs input even without a quiet screen.
+    static let chooserMarkers = [
+        "❯ 1. yes", "› 1. yes", "allow once", "yes, and don't ask again",
+        // Devin's workspace-trust prompt and command-approval chooser.
+        "❭ allow", "yes, trust"
     ]
 
     static func matchesPrompt(_ lowered: String) -> Bool {
         promptMarkers.contains { lowered.contains($0) }
+    }
+
+    static func isChooser(_ promptLine: String) -> Bool {
+        let lowered = promptLine.lowercased()
+        return chooserMarkers.contains { lowered.contains($0) }
     }
 
     /// The most recent on-screen line that looks like a question aimed at the user.

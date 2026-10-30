@@ -360,6 +360,17 @@ final class LLoomScheduleTests: XCTestCase {
         XCTAssertEqual(items.filter { $0.subtitle.hasSuffix("· lease") }.count, 2)
     }
 
+    /// Job tiles are opt-in; off, only what wants the user is published as a tile.
+    func testWantsUserKeepsOnlyWhatNeedsSomeone() throws {
+        let items = LLoomSchedule.items(try parsed(), lookback: 36 * 3600)
+        XCTAssertEqual(item("decode A/B", in: items)?.wantsUser, false)        // running
+        XCTAssertEqual(item("kernel sweep", in: items)?.wantsUser, false)      // done
+        XCTAssertEqual(item("NLL receipts", in: items)?.wantsUser, true)       // stalled
+        XCTAssertEqual(item("image build", in: items)?.wantsUser, true)        // failed
+        XCTAssertEqual(item("pair lease expiring", in: items)?.wantsUser, true)   // warned lease
+        XCTAssertEqual(item("bench restore failed", in: items)?.wantsUser, true)  // stuck lease
+    }
+
     func testLanesSayWhoHoldsWhat() throws {
         let lanes = LLoomSchedule.lanes(try parsed())
         XCTAssertEqual(lanes.map(\.id), ["pair", "bench", "builds", "broken"])

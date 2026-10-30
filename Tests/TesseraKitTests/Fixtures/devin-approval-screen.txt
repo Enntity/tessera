@@ -1,0 +1,7 @@
+ ⏺ Running command
+ └$ touch /tmp/tessera-devin-probe
+
+ ❭ Allow       ← ◼◼◼◼ → Once
+                        Bypass mode
+                                 Deny
+ ↑↓ select · → cycle · ↵ confirm · esc cancel

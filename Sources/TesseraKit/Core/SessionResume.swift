@@ -7,8 +7,10 @@ import Foundation
 ///   so Tessera assigns the id up front.
 /// - Codex has no launch-time id; the host binds the rollout it writes, then uses `codex resume <id>`.
 /// - opencode (`-s`) and omp (`-r`) resume by id when known, else continue their latest session.
+/// - Devin has no launch-time id either; the host binds it exactly from the session lock its
+///   `devin acp` child leaves, then uses `-r <id>` (or `-c` for the latest).
 public enum SessionResume {
-    public enum Tool: String, Codable, Sendable { case claude, grok, codex, opencode, omp }
+    public enum Tool: String, Codable, Sendable { case claude, grok, codex, opencode, omp, devin }
 
     /// A simple command line split into what precedes the program (`FOO=1`, `env`, `command`, …)
     /// and the program with its arguments. Compound lines (pipes, `&&`, `;`, redirections,
@@ -57,7 +59,7 @@ public enum SessionResume {
 
     static func tool(named name: String) -> Tool? {
         if let exact = Tool(rawValue: name) { return exact }
-        return [Tool.claude, .codex, .grok, .opencode, .omp].first { name.hasPrefix($0.rawValue + "-") || name.hasPrefix($0.rawValue + "_") }
+        return [Tool.claude, .codex, .grok, .opencode, .omp, .devin].first { name.hasPrefix($0.rawValue + "-") || name.hasPrefix($0.rawValue + "_") }
     }
 
     /// True when the command runs the tool's own binary (not a launcher that might not forward
@@ -70,11 +72,30 @@ public enum SessionResume {
         .claude: ["auth", "mcp", "config", "doctor", "update", "upgrade", "install", "setup-token", "plugin", "plugins",
                   "migrate-installer", "gateway", "agents"],
         .grok: ["auth", "login", "logout", "config", "update", "mcp"],
+        .devin: ["auth", "mcp", "models", "doctor", "rules", "skills", "plugins", "cloud", "desktop", "list", "ls",
+                 "rm", "ssh", "forward", "update", "version", "migrate", "sandbox", "setup", "uninstall", "acp", "help"],
     ]
 
     static func isConversation(_ tool: Tool, _ inv: Invocation) -> Bool {
+        if tool == .devin { return isDevinConversation(inv) }
         guard let first = inv.words.dropFirst().first(where: { !$0.hasPrefix("-") }) else { return true }
         return !(subcommands[tool]?.contains(first) ?? false)
+    }
+
+    /// `devin` is a conversation unless it's one of its subcommands, a one-shot print, or names a
+    /// path to open in Devin Desktop. Its prompt comes after `--`; everything before it is flags
+    /// and their values, so a bare word that isn't a flag's value is a subcommand or a PATH.
+    private static func isDevinConversation(_ inv: Invocation) -> Bool {
+        let args = Array(inv.words.dropFirst().prefix { $0 != "--" })
+        if args.contains("-p") || args.contains("--print") { return false }
+        var previous: String? = nil
+        for word in args {
+            defer { previous = word }
+            guard !word.hasPrefix("-") else { continue }
+            // A bare word is only allowed as a flag's value (`--model x`, `-r abc`).
+            if previous?.hasPrefix("-") != true { return false }
+        }
+        return true
     }
 
     /// The command to actually run for a fresh launch, and the session id assigned to it (if the tool
@@ -89,7 +110,7 @@ public enum SessionResume {
             guard isDirect(inv), !inv.words.contains(where: busy.contains) else { return (command, nil) }
             let id = newId()
             return (inv.joined(inv.words + ["--session-id", id]), id)
-        case .codex, .opencode, .omp:
+        case .codex, .opencode, .omp, .devin:
             return (command, nil)
         }
     }
@@ -112,6 +133,12 @@ public enum SessionResume {
             return value(after: ["-s", "--session"])
         case .omp:
             return value(after: ["-r", "--resume"])
+        case .devin:
+            // Flags end at `--` (the prompt); `-r` there is the prompt's own text.
+            let before = words.prefix { $0 != "--" }
+            guard let i = before.firstIndex(where: { ["-r", "--resume"].contains($0) }), i + 1 < before.count,
+                  !before[i + 1].hasPrefix("-") else { return nil }
+            return isSafeId(before[i + 1]) ? before[i + 1] : nil
         }
     }
 
@@ -129,6 +156,7 @@ public enum SessionResume {
         case .codex: return inv.joined([inv.exe, "resume"] + (id.map { [$0] } ?? ["--last"]) + words)
         case .opencode: return inv.joined([inv.exe] + words + (id.map { ["-s", $0] } ?? ["-c"]))
         case .omp: return inv.joined([inv.exe] + words + (id.map { ["-r", $0] } ?? ["-c"]))
+        case .devin: return inv.joined([inv.exe] + words + (id.map { ["-r", $0] } ?? ["-c"]))
         }
     }
 
@@ -148,6 +176,9 @@ public enum SessionResume {
         switch tool {
         case .claude, .grok, .opencode, .omp: return words.contains("-c") || words.contains("--continue")
         case .codex: return words.first == "resume" && words.contains("--last")
+        case .devin:
+            let before = words.prefix { $0 != "--" }
+            return before.contains("-c") || before.contains("--continue")
         }
     }
 
@@ -166,6 +197,10 @@ public enum SessionResume {
             return strip(words, flags: ["-s", "--session"], switches: ["-c", "--continue"])
         case .omp:
             return strip(words, flags: ["-r", "--resume"], switches: ["-c", "--continue"])
+        case .devin:
+            // Resuming must not send its first prompt again: `--` and everything after it go too.
+            return Array(strip(words, flags: ["-r", "--resume", "--prompt-file"], switches: ["-c", "--continue"])
+                .prefix { $0 != "--" })
         }
     }
 

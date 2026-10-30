@@ -16,7 +16,7 @@ public enum TileKind: String, Codable, Sendable {
 
 /// Which tool a tile belongs to. Drives accent color, glyph, and prompt heuristics.
 public enum AgentFlavor: String, Codable, Sendable, CaseIterable {
-    case shell, claude, codex, grok, gemini, omp, opencode, aider, custom
+    case shell, claude, codex, devin, grok, gemini, omp, opencode, aider, custom
     case claudeDesktop, codexDesktop, zcodeDesktop
     /// DeepSeek Harness (`dsh`) sessions.
     case dsh
@@ -31,6 +31,7 @@ public enum AgentFlavor: String, Codable, Sendable, CaseIterable {
         case .shell: "Shell"
         case .claude: "Claude Code"
         case .codex: "Codex"
+        case .devin: "Devin"
         case .grok: "Grok"
         case .gemini: "Gemini"
         case .omp: "omp"
@@ -53,6 +54,7 @@ public enum AgentFlavor: String, Codable, Sendable, CaseIterable {
         case .shell: "terminal"
         case .claude, .claudeDesktop: "sparkle"
         case .codex, .codexDesktop, .zcodeDesktop: "chevron.left.forwardslash.chevron.right"
+        case .devin: "infinity"
         case .grok: "bolt.horizontal"
         case .gemini: "diamond"
         case .omp: "circle.hexagongrid"
@@ -73,6 +75,7 @@ public enum AgentFlavor: String, Codable, Sendable, CaseIterable {
         switch SessionResume.tool(for: command) {
         case .claude: return .claude
         case .codex: return .codex
+        case .devin: return .devin
         case .grok: return .grok
         case .opencode: return .opencode
         case .omp: return .omp
@@ -82,6 +85,7 @@ public enum AgentFlavor: String, Codable, Sendable, CaseIterable {
         switch exe {
         case "claude": return .claude
         case "codex": return .codex
+        case "devin": return .devin
         case "grok": return .grok
         case "gemini": return .gemini
         case "omp": return .omp
@@ -157,6 +161,8 @@ public struct TileInfo: Codable, Identifiable, Hashable, Sendable {
     public var progress: Double?
     /// The steward's line on what the tile is doing.
     public var summary: String?
+    /// What the steward says the user has to do about it.
+    public var needs: String?
 
     /// Why the tile waits on the user, in a line: its question, its error, what it finished with.
     public var reason: String {
@@ -174,6 +180,21 @@ public struct TileInfo: Codable, Identifiable, Hashable, Sendable {
     public var needsUser: Bool { isUnseen || activity == .needsInput }
     /// What taking it out of the queue without answering is called.
     public var dismissLabel: String { activity == .needsInput ? "Dismiss Question" : "Mark as Seen" }
+
+    /// The line under a waiting tile's title in the lane: a question or a failure in its own words;
+    /// for a result, what the steward says to do with it, or what it did, else its own last line.
+    /// `shown` is what the tile shows (a screen tail, a transcript tail); a finished tile with
+    /// nothing else to say falls back to its own last line.
+    public func laneLine(shown: String?) -> String {
+        if activity == .needsInput || activity == .failed { return reason }
+        if let line = needs ?? summary ?? detail { return line }
+        return shown?.components(separatedBy: "\n").lazy
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .last { !$0.isEmpty } ?? "Finished"
+    }
+
+    /// The lane line when what the tile shows isn't at hand.
+    public var laneLine: String { laneLine(shown: nil) }
 
     public init(id: String, kind: TileKind, flavor: AgentFlavor, title: String, subtitle: String = "",
                 activity: TileActivity = .starting, attention: Bool = false, lastActivityAt: Date = Date(),
@@ -250,6 +271,21 @@ public extension Sequence where Element == TileInfo {
             return order[i].attention ? order.first?.id : order[(i + 1) % order.count].id
         }
         return (order.first { Self.place($0) > Self.place(current) } ?? order.first)?.id
+    }
+}
+
+public extension Array where Element == String {
+    /// Triage stands at `index` in this queue. When the item there leaves (answered, dismissed,
+    /// finished, closed), the one now in its place is looked at next — the last when it was last;
+    /// nil when nothing is left.
+    func triageIndex(afterLeaving index: Int) -> Int? {
+        isEmpty ? nil : Swift.min(Swift.max(index, 0), count - 1)
+    }
+
+    /// Moving through the queue by hand, wrapping at the ends (next/previous).
+    func triageIndex(from index: Int, by step: Int) -> Int {
+        guard !isEmpty else { return 0 }
+        return ((index + step) % count + count) % count
     }
 }
 

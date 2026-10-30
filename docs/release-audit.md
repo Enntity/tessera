@@ -1,5 +1,36 @@
 # Tessera 0.2.0 release-readiness audit
 
+## Public source handoff — 2026-10-30
+
+The public source includes the complete current macOS feature set: coordination tools, Needs-you
+sections and keyboard triage, Devin restart binding and approval detection, and opt-in Fleet job
+tiles. Installation starts from a public clone and needs no private service or maintainer account.
+Steward and Fleet still require the user's own optional endpoints.
+
+- Reviewed tracked source, configuration, docs, terminal fixtures, and public artwork. Removed
+  captured account-usage text from a controlled Devin probe fixture before publication. Screenshots
+  use the repository's invented demo data.
+- Gitleaks 8.30.1 found no unaccounted-for credentials in Git history or the clean source tree.
+  Two exact fake strings in the redaction test are narrowly allowlisted by path and value;
+  all other contents of that file remain scanned. CI repeats the history scan.
+- All 260 tests passed from a fresh source directory and build cache on Apple silicon,
+  macOS 27.0.1, Xcode 27.1 / Swift 6.4. The isolated installer test passed, including preservation
+  of custom skills, Codex configuration, existing Claude/Devin MCP registrations, and real-file
+  conflict refusal. Client registration uses stubs, not personal configurations.
+- Fixed the Claude installer path so it retains an existing registration rather than removing
+  it. Packaged installer checks now use the actual bundled skill, with no checkout fallback.
+- README, installation/first-run instructions, contributor guide and changelog explain the
+  available source build, optional integrations, and the separate binary-release requirements.
+  Relative documentation links and shell syntax checks passed.
+
+**Source installation is available; a notarized public download is not.** The signing Mac has
+Apple Development identities but no Developer ID Application identity. The signing setup is
+documented in [releasing.md](releasing.md#public-download). Downloaded Gatekeeper acceptance and
+clean-Mac testing remain binary-release gates. The earlier packaged/UI evidence below is dated
+2026-10-23; current package and CI results are recorded in the release pull request.
+
+## Earlier candidate audit — 2026-10-23
+
 Audited on 2026-10-23, starting from `b3b1e85`. The control/communication plane is useful for
 local agent coordination, with distinct boundaries: inboxes require polling, LLooM owns resource
 reservations, and Steward advises rather than dispatching work.

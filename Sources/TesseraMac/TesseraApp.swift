@@ -61,7 +61,12 @@ final class AppModel {
     let workspace = Workspace()
     @ObservationIgnored lazy var server = HostServer(workspace: workspace, open: { [weak self] in self?.open($0) },
                                                      close: { [weak self] in self?.close($0) })
-    var showPalette = false
+    var showPalette = false {
+        didSet { if showPalette { showTriage = false } }
+    }
+    /// ⇧⌘J: the Needs-you queue one item at a time, from the keyboard; `triageId` is the item shown.
+    var showTriage = false
+    var triageId: String?
     var showSidebar = true
     /// The Needs-you lane, as the user left it.
     var showLane = Preferences.store.object(forKey: "tessera.lane") as? Bool ?? true {
@@ -160,10 +165,23 @@ final class AppModel {
         restoreFocus()
     }
 
+    /// ⇧⌘J, the lane's triage button, Board ▸ Triage Needs You: the queue one at a time.
+    func openTriage() {
+        triageId = workspace.state.queue.first
+        guard triageId != nil else { return }
+        showTriage = true
+    }
+
+    func closeTriage() {
+        showTriage = false
+        triageId = nil
+    }
+
     /// Opens a tile: in place on the board, or for a Claude or Codex conversation, straight in its
     /// app, landing where the opened tile would have. `inApp: false` shows such a conversation's
-    /// transcript in Tessera instead.
+    /// transcript in Tessera instead. (Opening anything leaves triage.)
     func open(_ id: String, inApp: Bool = true) {
+        showTriage = false
         act(Style.Motion.zoom) {
             workspace.open(id, inApp: inApp, nativeAt: appRect(for: id))
             // A docked tile is open where it is: the keyboard goes to it there.
@@ -433,7 +451,9 @@ final class AppModel {
     /// the board itself the selected tile. `key` is the window with the keyboard.
     func closeFront(key: NSWindow?) {
         if let key, key !== window { return key.performClose(nil) }
-        if showPalette {
+        if showTriage {
+            closeTriage()
+        } else if showPalette {
             showPalette = false
         } else if workspace.expandedId != nil {
             collapse()

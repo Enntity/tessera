@@ -61,6 +61,9 @@ struct BoardCommands: Commands {
             .keyboardShortcut("d")
             Button("Next Tile Needing Me") { model.jump(to: workspace.state.needsUser) }
                 .keyboardShortcut("j")
+            Button("Triage Needs You") { model.openTriage() }
+                .keyboardShortcut("j", modifiers: [.command, .shift])
+                .disabled(workspace.state.queue.isEmpty)
             Button("Next Tile") { model.move(.next) }
                 .keyboardShortcut("]")
             Button("Previous Tile") { model.move(.previous) }
