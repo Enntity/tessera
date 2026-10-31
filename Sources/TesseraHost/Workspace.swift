@@ -16,6 +16,7 @@ public final class Workspace {
     public private(set) var terminals: [String: TerminalSession] = [:]
     public private(set) var browsers: [String: BrowserSession] = [:]
     public let agents = AgentAppWatcher()
+    public let accord: AccordBridge
     /// Shared local dsh web page used to select a live conversation from its sidebar.
     public let dsh = DshWebServer()
     public let usage: UsageService
@@ -93,13 +94,18 @@ public final class Workspace {
     @ObservationIgnored private var firstAgentScan = true
     @ObservationIgnored private let directory: URL
 
-    public init() {
+    public init(accordProfile: URL? = nil) {
+        var bridgeProfile = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".config/accord/connection.json")
         var dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("Tessera")
         #if DEBUG
         // Lets a development instance run beside the real one without sharing its board.
-        if let override = ProcessInfo.processInfo.environment["TESSERA_DATA_DIR"] { dir = URL(fileURLWithPath: override) }
+        if let override = ProcessInfo.processInfo.environment["TESSERA_DATA_DIR"] {
+            dir = URL(fileURLWithPath: override)
+            bridgeProfile = dir.appendingPathComponent("accord-connection.json")
+        }
         #endif
         directory = dir
+        accord = AccordBridge(profile: accordProfile ?? bridgeProfile)
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         boardHolder = BoardLock.take(in: directory)
         usage = UsageService(directory: directory)
@@ -134,7 +140,18 @@ public final class Workspace {
         deskChanged()
         steward.digests = { [weak self] in self?.stewardDigests() ?? [] }
         steward.changes = { [weak self] in self.map { Steward.changes($0.allTiles, since: $0.awaySince) } ?? [] }
+        steward.sharedSummaries = { [weak self] in self?.accord.summaries ?? [:] }
         steward.start()
+        accord.digests = { [weak self] in self?.stewardDigests().filter { !$0.id.hasPrefix("accord:") } ?? [] }
+        accord.sessions = { [weak self] values in self?.agents.setExternal(values, source: "accord") }
+        accord.paused = { [weak self] in self?.agentTools.privacy() ?? true }
+        accord.deliver = { [weak self] delivery, tile, sender, text, wantsTyping in
+            guard let self, let info = self.info(tile) else { return false }
+            return self.desk.importAccordMessage(id: delivery, text: text, from: sender, to: tile, title: info.title, wantsTyping: wantsTyping && self.terminals[tile] != nil)
+        }
+        accord.questions = { [weak self] questions in self?.desk.importAccordQuestions(questions) }
+        accord.answers = { [weak self] in self?.desk.accordAnswers() ?? [] }
+        accord.start()
         agentTools.attach(self)
         agentServer.start()
         DispatchQueue.global(qos: .utility).async {
@@ -158,7 +175,7 @@ public final class Workspace {
         } else {
             return nil
         }
-        info.summary = steward.summaries[id]?.summary
+        info.summary = accord.summaries[id] ?? steward.summaries[id]?.summary
         info.needs = steward.summaries[id]?.needs ?? steward.brief?.attention.first { $0.id == id }?.why
         if info.needs?.isEmpty == true { info.needs = nil }
         return info

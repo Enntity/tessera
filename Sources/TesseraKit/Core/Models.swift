@@ -25,6 +25,7 @@ public enum AgentFlavor: String, Codable, Sendable, CaseIterable {
     case lloom
     /// What agents leave for the user through Tessera: questions, notes, messages to approve.
     case agentDesk
+    case accord
 
     public var displayName: String {
         switch self {
@@ -45,6 +46,7 @@ public enum AgentFlavor: String, Codable, Sendable, CaseIterable {
         case .web: "Web"
         case .lloom: "LLooM"
         case .agentDesk: "Tessera"
+        case .accord: "Accord"
         }
     }
 
@@ -65,6 +67,7 @@ public enum AgentFlavor: String, Codable, Sendable, CaseIterable {
         case .web: "globe"
         case .lloom: "square.stack.3d.up"
         case .agentDesk: "bubble.left.and.bubble.right"
+        case .accord: "point.3.connected.trianglepath.dotted"
         }
     }
 

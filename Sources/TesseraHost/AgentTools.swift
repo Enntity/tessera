@@ -86,6 +86,7 @@ public final class AgentTools {
         case "read_tile":
             guard !privacy() else { throw Refusal("The developer has privacy mode on; tiles can't be read right now.") }
             let id = try workspace.resolveTile(args["tile"] as? String ?? "")
+            if id.hasPrefix("accord:") { return try await workspace.accord.read(id) }
             return workspace.readTile(id, lines: max(1, min(400, Self.int(args["lines"]) ?? 60)))
         case "whoami":
             guard let tile = me.tile, let info = workspace.info(tile) else {
@@ -101,6 +102,10 @@ public final class AgentTools {
             let wantsTyping = args["type"] as? Bool ?? false
             if wantsTyping, workspace.terminals[to] == nil { throw Refusal("Only terminal agents can have messages typed in. Nothing was sent; retry without --type for inbox delivery.") }
             let title = workspace.info(to)?.title ?? to
+            if workspace.accord.isConfigured, let tile = me.tile {
+                let result = try await workspace.accord.send(from: tile, to: to, text: text, type: wantsTyping)
+                return "Queued through Accord for \(title). Delivery id: \(result["id"] as? String ?? "unknown"). Typing, when requested, remains subject to Tessera approval."
+            }
             let message = workspace.desk.send(text, from: me.label, fromTile: me.tile, to: to, toTitle: title, type: wantsTyping)
             switch message.delivery {
             case "typed": return "Delivered to \(title): typed into its terminal, and in its inbox."
@@ -126,6 +131,10 @@ public final class AgentTools {
             let text = (args["question"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
             guard !text.isEmpty else { throw Refusal("question is empty") }
             let options = (args["options"] as? [String] ?? []).map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+            if workspace.accord.isConfigured, let tile = me.tile {
+                let id = try await workspace.accord.ask(from: tile, question: text, options: options)
+                return try await answer(id, wait: Self.wait(args["wait_seconds"], default: 50), workspace)
+            }
             let question = workspace.desk.ask(text, options: options, from: me.label, fromTile: me.tile)
             return try await answer(question.id, wait: Self.wait(args["wait_seconds"], default: 50), workspace)
         case "get_answer":
@@ -144,6 +153,14 @@ public final class AgentTools {
         let deadline = Date().addingTimeInterval(wait)
         while true {
             guard !privacy() else { throw Refusal("Privacy mode is on; answer reading paused.") }
+            if id.hasPrefix("accord:") {
+                let q = try await workspace.accord.question(id)
+                if q["state"] as? String == "answered" { return Redactor.redact("Answer: \(q["answer"] as? String ?? "")") }
+                if q["state"] as? String == "dismissed" { return "The developer set the question aside. This is not approval." }
+                if Date() >= deadline { return "Not answered yet. Question id: \(id). Call get_answer to keep waiting." }
+                try await Task.sleep(nanoseconds: 1_000_000_000)
+                continue
+            }
             guard let q = workspace.desk.question(id) else { throw Refusal("no question \(id)") }
             if let answer = q.answer { return Redactor.redact("Answer: \(answer)") }
             if q.dismissed { return "The developer set the question aside without answering. This is not approval; leave any action requiring approval pending." }
@@ -161,7 +178,7 @@ public final class AgentTools {
         let tiles = workspace.allTiles.filter { !waitingOnly || $0.needsUser }
         lines.append("Tiles (\(tiles.count)):")
         for t in tiles {
-            let what = workspace.steward.summaries[t.id]?.summary ?? t.detail ?? ""
+            let what = workspace.accord.summaries[t.id] ?? workspace.steward.summaries[t.id]?.summary ?? t.detail ?? ""
             lines.append("- \(t.id)\(t.id == me ? " (you)" : "") | \(t.title) | \(t.flavor.displayName) | \(t.activity.label.lowercased())"
                 + "\(t.needsUser ? ", waiting on the developer" : "") | \(t.subtitle)\(what.isEmpty ? "" : " | \(Redactor.redact(what).preview(140))")")
         }
@@ -191,7 +208,7 @@ extension Workspace {
         if let cwd = caller.cwd?.standardizedPath {
             let matches = order.filter { id in
                 if let t = terminals[id] { return t.isRunning && t.command != nil && (t.liveDirectory() ?? t.cwd).standardizedPath == cwd }
-                if let a = agents.session(id) { return a.flavor != .lloom && a.flavor != .agentDesk && a.cwd.standardizedPath == cwd }
+                if let a = agents.session(id) { return a.flavor != .lloom && a.flavor != .agentDesk && a.flavor != .accord && a.cwd.standardizedPath == cwd }
                 return false
             }
             if matches.count == 1, let info = info(matches[0]) { return (matches[0], caller.name ?? info.title, "") }

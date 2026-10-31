@@ -47,6 +47,7 @@ public final class AgentDesk {
         var questions: [Question]
         var messages: [Message]
         var notes: [Note]
+        var accordDeliveries: [String]?
     }
 
     public private(set) var questions: [Question] = []
@@ -67,10 +68,13 @@ public final class AgentDesk {
 
     @ObservationIgnored private let store: URL
 
+    private var accordDeliveries: Set<String> = []
+
     public init(directory: URL) {
         store = directory.appendingPathComponent("agent-desk.json")
         if let saved = StateFile.load(Saved.self, from: store) {
             (questions, messages, notes) = (saved.questions, saved.messages, saved.notes)
+            accordDeliveries = Set(saved.accordDeliveries ?? [])
         }
     }
 
@@ -92,6 +96,49 @@ public final class AgentDesk {
         questions[i].answer = answer.preview(4000)
         questions[i].answeredAt = Date()
         changed()
+    }
+
+    /// Accord delivery IDs are durable deduplication keys, including across app restart.
+    public func importAccordMessage(id: String, text: String, from: String, to: String, title: String, wantsTyping: Bool) -> Bool {
+        let key = "accord:" + id
+        if accordDeliveries.contains(key) { return true }
+        guard accordDeliveries.count < 10000 else { return false }
+        accordDeliveries.insert(key)
+        var message = Message(id: key, from: from, fromTile: nil, to: to, toTitle: title, text: Redactor.redact(text).preview(4000), sentAt: Date())
+        // Persist the delivery before optional native interaction. A crash cannot cause retyping.
+        if wantsTyping { message.delivery = "waiting" }
+        messages.append(message); changed()
+        guard let saved = StateFile.load(Saved.self, from: store), saved.accordDeliveries?.contains(key) == true else {
+            accordDeliveries.remove(key)
+            messages.removeAll { $0.id == key }
+            return false
+        }
+        if wantsTyping && typingAllowed { approveDelivery(key, true) }
+        return true
+    }
+    public func importAccordQuestions(_ values: [[String: Any]]) {
+        let pending = Set(values.compactMap { $0["id"] as? String }.map { "accord:" + $0 })
+        let before = questions.count
+        questions.removeAll { $0.id.hasPrefix("accord:") && $0.answer == nil && !$0.dismissed && !pending.contains($0.id) }
+        if questions.count != before { changed() }
+        for value in values {
+            guard let id = value["id"] as? String, let text = value["question"] as? String,
+                  !questions.contains(where: { $0.id == "accord:" + id }) else { continue }
+            let options: [String]
+            if let raw = value["options"] as? String, let data = raw.data(using: .utf8) {
+                options = (try? JSONDecoder().decode([String].self, from: data)) ?? []
+            } else { options = value["options"] as? [String] ?? [] }
+            questions.append(Question(id: "accord:" + id, from: "Accord", fromTile: nil, text: Redactor.redact(text), options: options, askedAt: Date()))
+            changed()
+        }
+    }
+    public func accordAnswers() -> [(String, String)] {
+        questions.compactMap { question in
+            guard question.id.hasPrefix("accord:") else { return nil }
+            if question.dismissed { return (String(question.id.dropFirst(7)), "__accord_dismissed__") }
+            guard let answer = question.answer else { return nil }
+            return (String(question.id.dropFirst(7)), answer)
+        }
     }
 
     // MARK: Messages
@@ -212,7 +259,7 @@ public final class AgentDesk {
         if questions.count > Self.limit { questions.removeFirst(questions.count - Self.limit) }
         if messages.count > Self.limit { messages.removeFirst(messages.count - Self.limit) }
         if notes.count > Self.limit { notes.removeFirst(notes.count - Self.limit) }
-        StateFile.save(Saved(questions: questions, messages: messages, notes: notes), to: store)
+        StateFile.save(Saved(questions: questions, messages: messages, notes: notes, accordDeliveries: Array(accordDeliveries)), to: store)
         onChange?()
     }
 

@@ -40,6 +40,7 @@ public final class StewardService {
 
     /// The board as the steward reads it, and what changed since the user last looked.
     @ObservationIgnored public var digests: (() -> [Steward.Digest])?
+    @ObservationIgnored public var sharedSummaries: (() -> [String: String])?
     @ObservationIgnored public var changes: (() -> [String])?
     /// Privacy mode is on: nothing is read or sent.
     @ObservationIgnored public var paused: (() -> Bool)?
@@ -157,10 +158,12 @@ public final class StewardService {
         guard config.enabled, let base = Self.baseURL(config.url), Date() >= retryAt else { return }
         guard paused?() != true, let digests = digests?() else { return }
         let now = Date()
+        let shared = sharedSummaries?() ?? [:]
         let ids = Set(digests.map(\.id))
         for id in seen.keys where !ids.contains(id) { (seen[id], summarized[id], summaries[id]) = (nil, nil, nil) }
         // What waits on the user is summarized first: the lane and triage read those lines.
         for d in digests.filter(\.waiting) + digests.filter({ !$0.waiting }) {
+            if shared[d.id] != nil { continue }
             let fp = d.fingerprint
             if seen[d.id]?.fingerprint != fp {
                 seen[d.id] = (fp, now)
@@ -172,11 +175,11 @@ public final class StewardService {
                   !d.text.isEmpty || d.detail != nil else { continue }
             summarize(d, fingerprint: fp, base: base)
         }
-        let boardState = digests.map { "\($0.id)\($0.state)\($0.waiting)\(summaries[$0.id]?.summary ?? "")" }.joined().hashValue
+        let boardState = digests.map { "\($0.id)\($0.state)\($0.waiting)\(shared[$0.id] ?? summaries[$0.id]?.summary ?? "")" }.joined().hashValue
         // The brief must not wait for tile summaries to drain: on a busy board there is always
         // another tile to summarize, and the brief would starve. It runs on its own request.
         if !briefing, briefedState != boardState, now.timeIntervalSince(lastBriefAt) >= Self.briefEvery || brief == nil {
-            makeBrief(digests.map { var d = $0; d.summary = summaries[d.id]?.summary; return d }, state: boardState, base: base)
+            makeBrief(digests.map { var d = $0; d.summary = shared[d.id] ?? summaries[d.id]?.summary; return d }, state: boardState, base: base)
         }
     }
 

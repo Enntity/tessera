@@ -138,7 +138,9 @@ final class AgentAPITests: XCTestCase {
         addTeardownBlock { [dir] in try? FileManager.default.removeItem(at: dir!) }
         setenv("TESSERA_DATA_DIR", dir.path, 1)
         defer { unsetenv("TESSERA_DATA_DIR") }
-        return Workspace()
+        let workspace = Workspace()
+        XCTAssertFalse(workspace.accord.isConfigured, "Isolated test workspace must never join the installed Accord")
+        return workspace
     }
 
     private func call(_ workspace: Workspace, _ method: String, _ params: [String: Any] = [:]) async throws -> [String: Any] {
