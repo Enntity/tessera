@@ -168,9 +168,21 @@ final class TerminalActivityTrackerTests: XCTestCase {
         t.tick(now: t0.addingTimeInterval(6), screenTail: ["Previous answer", "? for shortcuts"])
         XCTAssertEqual(t.activity, .idle)
         XCTAssertFalse(t.attention)
+        t.noteNotification(title: "Completed", body: "Previous turn finished")
+        t.noteBell(screenTail: ["Previous answer"])
+        XCTAssertFalse(t.attention)
+        // A later replay/redraw is still history, even if startup animated a spinner.
         for i in 0..<40 { t.noteOutput(bytes: 400, at: t0.addingTimeInterval(10 + Double(i) * 0.1)) }
-        t.tick(now: t0.addingTimeInterval(14), screenTail: [])
-        t.tick(now: t0.addingTimeInterval(16), screenTail: ["New answer"])
+        t.tick(now: t0.addingTimeInterval(14), screenTail: ["Loading (esc to interrupt)"])
+        XCTAssertFalse(t.hasLiveWork)
+        t.tick(now: t0.addingTimeInterval(16), screenTail: ["Previous answer"])
+        XCTAssertEqual(t.activity, .idle)
+        XCTAssertFalse(t.attention)
+        t.noteInput(at: t0.addingTimeInterval(17))
+        for i in 0..<40 { t.noteOutput(bytes: 400, at: t0.addingTimeInterval(18 + Double(i) * 0.1)) }
+        t.tick(now: t0.addingTimeInterval(22), screenTail: [])
+        XCTAssertTrue(t.hasLiveWork)
+        t.tick(now: t0.addingTimeInterval(24), screenTail: ["New answer"])
         XCTAssertEqual(t.activity, .done)
         XCTAssertTrue(t.attention)
     }
@@ -181,7 +193,8 @@ final class TerminalActivityTrackerTests: XCTestCase {
         asking.tick(now: t0.addingTimeInterval(2), screenTail: ["Allow command (y/n)"])
         XCTAssertEqual(asking.activity, .needsInput)
         XCTAssertTrue(asking.attention)
-        var working = TerminalActivityTracker(restoring: true)
+        // Previously active sessions are explicitly restored without an idle baseline.
+        var working = TerminalActivityTracker(restoring: false)
         for i in 0..<40 { working.noteOutput(bytes: 400, at: t0.addingTimeInterval(Double(i) * 0.1)) }
         working.tick(now: t0.addingTimeInterval(4), screenTail: ["Working (esc to interrupt)"])
         working.tick(now: t0.addingTimeInterval(6), screenTail: ["New result"])

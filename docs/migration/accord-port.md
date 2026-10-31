@@ -54,7 +54,11 @@ SSH aliases with discovered authorities. A future cutover must verify every conf
 host in the running UI, including recovery after a transport interruption; a successful
 localhost sample alone is insufficient.
 
-Restored agent CLIs baseline their initial transcript replay. Terminal device-query
+The first live repair still produced seven historical review cards: the CLIs replayed
+multiple bursts and startup spinners. The follow-up regression includes that pattern.
+Previously idle agent CLIs baseline transcript replay, including later redraws and startup
+spinners, until input or a genuine question starts a new turn. The saved board records
+whether a session was working, so active restored work still reports completion. Terminal device-query
 replies do not count as user input. Approvals, failures, new turns, and active resumed
 work still surface. Historical completed sessions arriving from a later source scan
 remain quiet; new completions after app launch request review. Automatic overseer

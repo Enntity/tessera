@@ -25,6 +25,7 @@ extension Workspace {
             var url: String?
             var sessionId: String?
             var suspended: Bool?
+            var wasWorking: Bool?
         }
         var tiles: [Lossy<Tile>]
         var defaultDirectory: String?

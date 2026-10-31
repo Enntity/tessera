@@ -1,7 +1,7 @@
 {
   "status": "passed",
-  "at": "2026-10-31T21:10:22.845359+00:00",
-  "nativeTests": 267,
+  "at": "2026-10-31T21:15:49.009079+00:00",
+  "nativeTests": 268,
   "checks": {
     "restoredTranscriptReplay": true,
     "emulatorRepliesAreNotUserInput": true,
@@ -12,12 +12,13 @@
     "fourHostsFreshTelemetry": true
   },
   "logs": {
-    "tests": "ecb123a36a1a0c535b9fa1609a5d7245a616a1022ae18c1a935e8fa8c475fc37",
-    "build": "6620d5ca01944dae3783a8efb7f7da621b94c6f7dde7bdb8d8f5b1b438d0ad16",
-    "package": "841b3a316b16d5c25c89bdab74b768af6d06e7e40a815321a906985b22e6247f"
+    "tests": "6ed1173036357a4b4bec4176a267c929c1880bc865d9dd8411f29093f05bea02",
+    "build": "747b98c9c8ae4d46b0072c12cceafb2d898162b512c9f3b7cf9083d345d4aa6e",
+    "package": "66ca4bdd6ea8b900ee5e3f2252c1ac55d6cf558cee26197710771380201a2b41",
+    "tracker": "2ffa1f916e30b501f29ef42908eaf9c8db4afa77e39e25550d15bc84d9d6ef6d"
   },
-  "sourceTreeSHA256": "25aa11d0132a9a5ef5f6cbb1b1b6084a92a9268d4c123bb051d49e70a0729afa",
-  "binarySHA256": "6c49757ac7baca70b8ca3101d5f14ab09a59a7decb37c51b61fc6c8a0807b7fa",
+  "sourceTreeSHA256": "5ea3cfe5e181c8bca3d30c9c7953f5222d0f825781b888ea3cf57b08437fa80a",
+  "binarySHA256": "506ec272009d0e92ec90fa478e58225020f2acd265e2a85c462c0d46e021d866",
   "hostServiceSource": "b07e272",
   "limits": [
     "Live native activation and automatic SSH recovery still to be verified",

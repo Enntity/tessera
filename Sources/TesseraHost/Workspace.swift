@@ -917,7 +917,7 @@ public final class Workspace {
     private func savedTile(_ id: String) -> Saved.Tile? {
         if let t = terminals[id] {
             return .init(id: id, kind: .terminal, command: t.command, cwd: t.liveDirectory() ?? t.cwd, title: t.customTitle,
-                         sessionId: t.sessionId, suspended: t.isSuspended)
+                         sessionId: t.sessionId, suspended: t.isSuspended, wasWorking: t.hasLiveWork)
         }
         if let b = browsers[id] { return .init(id: id, kind: .browser, title: b.customTitle, url: b.url?.absoluteString) }
         return nil
@@ -939,7 +939,7 @@ public final class Workspace {
             let decision = decision ?? RestorePlan.Decision(sessionId: nil, mayContinueLatest: false)
             adopt(TerminalSession(id: tile.id, command: tile.command, cwd: cwd, title: tile.title, label: tile.command,
                                   sessionId: decision.sessionId, resuming: true, mayContinueLatest: decision.mayContinueLatest,
-                                  startSuspended: suspended))
+                                  startSuspended: suspended, resumingWork: tile.wasWorking == true))
         case .browser:
             guard let url = tile.url.flatMap(URL.init(string:)) else { return false }
             browsers[tile.id] = BrowserSession(id: tile.id, url: url, title: tile.title)

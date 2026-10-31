@@ -18,9 +18,12 @@ public struct TerminalActivityTracker: Sendable {
     private var burstStartedAt: Date?
     private var lastInputAt: Date?
     private var exited = false
-    // A resumed CLI redraws its previous conversation. That first burst is history,
-    // not a newly finished turn. Questions and failures still need attention.
+    // A previously idle CLI can replay history in several bursts, including startup spinners.
+    // Output alone cannot prove a new turn. Input or a genuine question arms it again;
+    // sessions known to be working before restart do not enter this baseline.
     private var restoring = false
+    /// A startup spinner is not evidence of an active turn to resume on the next launch.
+    public var hasLiveWork: Bool { activity == .working && !restoring }
     /// The prompt the user last responded to; it can linger on screen but is no longer a question.
     private var answeredPrompt: String?
     private var visiblePrompt: String?
@@ -65,12 +68,14 @@ public struct TerminalActivityTracker: Sendable {
 
     public mutating func noteBell(screenTail: [String]) {
         let prompt = openPrompt(in: Array(screenTail.suffix(14)))
+        guard !restoring || prompt != nil else { return }
         raise(needsInput: prompt != nil, detail: prompt)
     }
 
     public mutating func noteNotification(title: String, body: String) {
         let text = [title, body].filter { !$0.isEmpty }.joined(separator: " — ")
         let asksForInput = Self.matchesPrompt(text.lowercased())
+        guard !restoring || asksForInput else { return }
         raise(needsInput: asksForInput, detail: text.isEmpty ? nil : text.preview(120))
     }
 
@@ -132,10 +137,8 @@ public struct TerminalActivityTracker: Sendable {
         let chooserWaiting = prompt != nil && Self.isChooser(prompt!)
             && promptSince.map { now.timeIntervalSince($0) >= Self.settleTime } == true
 
-        // A live working indicator distinguishes a resumed active turn from transcript replay.
-        if spinnerVisible { restoring = false }
         if restoring && lastOutputAt != nil && quietFor >= Self.workingWindow && prompt == nil {
-            restoring = false
+            if spinnerVisible { activity = .working; return before != (activity, attention, detail) }
             burstStartedAt = nil
             activity = .idle
             attention = false

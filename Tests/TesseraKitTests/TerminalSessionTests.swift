@@ -37,6 +37,10 @@ final class TerminalSessionTests: XCTestCase {
         let tool = try fakeTool("codex-replay-probe", body: """
         i=0
         while [ "$i" -lt 35 ]; do echo "old transcript line $i"; i=$((i+1)); sleep 0.1; done
+        sleep 2
+        i=0
+        while [ "$i" -lt 35 ]; do echo 'Loading history (esc to interrupt)'; i=$((i+1)); sleep 0.1; done
+        printf '\\033[2J\\033[H'
         printf '\\033[6n'
         echo '? for shortcuts'
         exec sleep 30
@@ -46,9 +50,25 @@ final class TerminalSessionTests: XCTestCase {
         let session = TerminalSession(command: tool.path, cwd: home.url.path, resuming: true,
                                       shell: "/bin/zsh", environmentOverrides: home.env)
         defer { session.terminate() }
-        XCTAssertTrue(waitUntil { session.terminal.screenTail(40).contains { $0.contains("? for shortcuts") } })
+        XCTAssertTrue(waitUntil(20) { session.terminal.screenTail(40).contains { $0.contains("? for shortcuts") } })
         XCTAssertTrue(waitUntil { session.info.activity == .idle })
         XCTAssertFalse(session.info.attention)
+    }
+
+    func testPreviouslyWorkingRestoredPTYStillRequestsReview() throws {
+        let tool = try fakeTool("codex-active-probe", body: """
+        i=0
+        while [ "$i" -lt 35 ]; do echo "new output $i"; i=$((i+1)); sleep 0.1; done
+        echo 'New result'
+        exec sleep 30
+        """)
+        defer { try? FileManager.default.removeItem(at: tool.deletingLastPathComponent()) }
+        let home = try isolatedHome()
+        let session = TerminalSession(command: tool.path, cwd: home.url.path, resuming: true, resumingWork: true,
+                                      shell: "/bin/zsh", environmentOverrides: home.env)
+        defer { session.terminate() }
+        XCTAssertTrue(waitUntil(20) { session.info.activity == .done })
+        XCTAssertTrue(session.info.attention)
     }
 
     func testShutDownKeepsTileAndResumeRunsAgain() {
