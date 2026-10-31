@@ -63,3 +63,101 @@ extension AccordBridgeTests {
         XCTAssertNil(projected[0].openURL)
     }
 }
+
+extension AccordBridgeTests {
+    func testOldDeskIsPreservedWithoutReactivatingSessions() throws {
+        let dir = try directory()
+        let original = Data("saved pre-Accord user data".utf8)
+        let old = dir.appendingPathComponent("agent-desk.json")
+        try original.write(to:old)
+        let desk = AgentDesk(directory:dir)
+        XCTAssertTrue(desk.sessions.isEmpty)
+        desk.importAccordQuestions([["id":"new","question":"New question"]])
+        XCTAssertEqual(try Data(contentsOf:old),original)
+        XCTAssertEqual(AgentDesk(directory:dir).questions.count,1)
+    }
+    func testPromptAttemptIsPersistedBeforeNativeInput() throws {
+        let dir = try directory(), desk = AgentDesk(directory:dir)
+        let previous = desk.typingAllowed
+        defer { desk.typingAllowed = previous }
+        desk.typingAllowed = false
+        XCTAssertTrue(desk.importAccordMessage(id:"effect",text:"Check",from:"agent",to:"tile",title:"Tile",wantsTyping:true))
+        desk.typeInto = { _,_ in
+            let restarted = AgentDesk(directory:dir)
+            XCTAssertEqual(restarted.messages.first?.delivery,"attempting")
+            var replayed = false
+            restarted.typeInto = { _,_ in replayed = true; return true }
+            restarted.approveDelivery("accord:effect",true)
+            XCTAssertFalse(replayed)
+            return true
+        }
+        desk.approveDelivery("accord:effect",true)
+        XCTAssertEqual(desk.messages.first?.delivery,"typed")
+    }
+}
+
+extension AccordBridgeTests {
+    func testFleetProjectionKeepsDelegatedQueuesJobsAndUnknownOwnership() throws {
+        let remote: [String:Any] = ["name":"fleet","board":["resources":[["id":"gpu","holders":["r1"],"queue":["r2"]]],
+            "reservations":[["id":"r1","resource":"gpu","owner":"worker","state":"active","expiresAt":2000]],
+            "jobs":[["id":"job","title":"Serving","owner":"worker","state":"running","startedAt":1000,"heartbeatAt":1500,"notes":[],"metrics":["tokens":10]]]]]
+        let native: [String:Any] = ["id":"host/gpu","state":"unknown","queue":[["id":"waiting"]]]
+        let board = try FleetService.project(resources:[native],jobs:[],managers:[remote])
+        XCTAssertEqual(board.resources[0].holders,["fleet:r1"])
+        XCTAssertEqual(board.resources[0].queue,["fleet:r2"])
+        XCTAssertEqual(board.reservations[0].resource,"fleet:gpu")
+        XCTAssertEqual(board.jobs[0].id,"fleet:job")
+        XCTAssertNotNil(board.resources[1].error)
+        XCTAssertEqual(board.resources[1].queue,["waiting"])
+    }
+}
+
+extension AccordBridgeTests {
+    func testOverseerProjectsOnlyOpenNonprivateEvidenceAndLinksToNativeSession() {
+        let board: [String:Any] = ["sessions":[["id":"s","source":"tessera","externalId":"terminal","title":"Worker"],
+            ["id":"p","source":"agent","title":"Private","private":true]],
+            "incidents":[["id":"one","session_id":"s","state":"open","evidence":["kind":"quiet-session","quietMs":900000]],
+                         ["id":"two","session_id":"p","state":"open"], ["id":"three","session_id":"s","state":"resolved"]]]
+        let sessions = AccordBridge.projectIncidents(board,nativeIDs:["terminal"])
+        XCTAssertEqual(sessions.count,1)
+        XCTAssertEqual(sessions[0].link,"terminal")
+        XCTAssertTrue(sessions[0].snapshot.detail?.contains("15 minutes") == true)
+        XCTAssertNil(sessions[0].resumeCommand)
+    }
+}
+
+@MainActor final class PairingIsolationTests: XCTestCase {
+    func testDisabledPhoneLinkNeverReadsOrWritesKeychain() throws {
+        let previous = ProcessInfo.processInfo.environment["TESSERA_DATA_DIR"]
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("pairing-isolation-" + UUID().uuidString)
+        setenv("TESSERA_DATA_DIR",directory.path,1)
+        defer {
+            if let previous { setenv("TESSERA_DATA_DIR",previous,1) } else { unsetenv("TESSERA_DATA_DIR") }
+            try? FileManager.default.removeItem(at:directory)
+        }
+        var reads = 0, writes = 0
+        let server = HostServer(workspace:Workspace(),open:{ _ in },close:{ _ in },readCode:{ reads += 1; return nil },saveCode:{ _ in writes += 1 })
+        XCTAssertEqual(reads,0); XCTAssertEqual(writes,0)
+        XCTAssertNil(server.pairingURL)
+        server.stop()
+        XCTAssertEqual(reads,0); XCTAssertEqual(writes,0)
+        server.preparePairingCode()
+        XCTAssertEqual(reads,1); XCTAssertEqual(writes,1)
+        server.preparePairingCode()
+        XCTAssertEqual(reads,1); XCTAssertEqual(writes,1)
+    }
+    func testDeniedPairingReadNeverOverwritesSavedCode() {
+        let previous = ProcessInfo.processInfo.environment["TESSERA_DATA_DIR"]
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("pairing-denied-" + UUID().uuidString)
+        setenv("TESSERA_DATA_DIR",directory.path,1)
+        defer {
+            if let previous { setenv("TESSERA_DATA_DIR",previous,1) } else { unsetenv("TESSERA_DATA_DIR") }
+            try? FileManager.default.removeItem(at:directory)
+        }
+        var writes = 0
+        let server = HostServer(workspace:Workspace(),open:{ _ in },close:{ _ in },readCode:{ throw URLError(.userAuthenticationRequired) },saveCode:{ _ in writes += 1 })
+        server.preparePairingCode()
+        XCTAssertFalse(server.pairingCode.isEmpty)
+        XCTAssertEqual(writes,0)
+    }
+}

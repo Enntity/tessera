@@ -2,13 +2,8 @@ import Foundation
 import Observation
 import TesseraKit
 
-/// Tessera's steward: a model, reached through any OpenAI-compatible endpoint (a LLooM gateway by
-/// default), that keeps a one-line summary of every tile and a short brief of the whole board, so
-/// the user reads a few lines instead of every tile. It only reports and suggests.
-///
-/// A tile is summarized again only when what it shows has changed and settled; the brief is
-/// rebuilt from those summaries when anything moved. Text goes out with credentials removed, and
-/// nothing goes out in privacy mode.
+/// Native board brief and presentation suggestions. Shared per-session summaries are
+/// consumed from Accord, which alone schedules and stores that analysis.
 @Observable
 @MainActor
 public final class StewardService {
@@ -40,7 +35,8 @@ public final class StewardService {
 
     /// The board as the steward reads it, and what changed since the user last looked.
     @ObservationIgnored public var digests: (() -> [Steward.Digest])?
-    @ObservationIgnored public var sharedSummaries: (() -> [String: String])?
+    @ObservationIgnored public var sharedSummaries: (() -> [String: Steward.TileSummary])?
+    @ObservationIgnored public var configureShared: ((Config, String?, Bool) async throws -> Void)?
     @ObservationIgnored public var changes: (() -> [String])?
     /// Privacy mode is on: nothing is read or sent.
     @ObservationIgnored public var paused: (() -> Bool)?
@@ -50,8 +46,6 @@ public final class StewardService {
     @ObservationIgnored private var timer: Timer?
     /// Each tile's fingerprint when first seen like this, and when it was last summarized.
     @ObservationIgnored private var seen: [String: (fingerprint: Int, since: Date)] = [:]
-    @ObservationIgnored private var summarized: [String: Int] = [:]
-    @ObservationIgnored private var inFlight: Set<String> = []
     @ObservationIgnored private var briefing = false
     @ObservationIgnored private var briefedState: Int?
     @ObservationIgnored private var lastBriefAt = Date.distantPast
@@ -67,11 +61,8 @@ public final class StewardService {
     }
 
     nonisolated static let account = "steward.key"
-    /// A tile must show the same thing this long before it is summarized (a busy terminal isn't
-    /// summarized on every line it prints).
-    static let settle: TimeInterval = 20
+    /// Native board brief cadence; Accord schedules individual session summaries.
     static let briefEvery: TimeInterval = 60
-    static let concurrency = 2
 
     public init(directory: URL) {
         self.session = Self.makeSession()
@@ -92,7 +83,15 @@ public final class StewardService {
     public var hasKey: Bool { Keychain.contains(account: Self.account) }
 
     public func start() {
-        if config.enabled { status = .idle }
+        if config.enabled {
+            status = .idle
+            let current = config
+            Task {
+                let key = await Task.detached { Keychain.get(account: Self.account) }.value
+                do { try await configureShared?(current,key,true) }
+                catch { status = .failed("Accord summary setup: " + error.localizedDescription) }
+            }
+        }
         let t = Timer(timeInterval: 10, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.tick() }
         }
@@ -106,7 +105,6 @@ public final class StewardService {
     public func configure(_ next: Config, key: String?) -> Bool {
         guard !next.enabled || (Self.baseURL(next.url) != nil && !next.model.isEmpty) else { return false }
         generation = UUID()
-        summarized = [:]
         brief = nil
         summaries = [:]
         lastBriefAt = .distantPast
@@ -122,6 +120,12 @@ public final class StewardService {
             retryAt = .distantPast
             briefedState = nil
             tick()
+        }
+        if next.enabled {
+            Task {
+                do { try await configureShared?(next,key,false) }
+                catch { status = .failed("Accord summary setup: " + error.localizedDescription) }
+            }
         }
         return true
     }
@@ -155,42 +159,21 @@ public final class StewardService {
     // MARK: The loop
 
     private func tick() {
-        guard config.enabled, let base = Self.baseURL(config.url), Date() >= retryAt else { return }
         guard paused?() != true, let digests = digests?() else { return }
-        let now = Date()
         let shared = sharedSummaries?() ?? [:]
+        if summaries != shared { summaries = shared }
         let ids = Set(digests.map(\.id))
-        for id in seen.keys where !ids.contains(id) { (seen[id], summarized[id], summaries[id]) = (nil, nil, nil) }
-        // What waits on the user is summarized first: the lane and triage read those lines.
-        for d in digests.filter(\.waiting) + digests.filter({ !$0.waiting }) {
-            if shared[d.id] != nil { continue }
-            let fp = d.fingerprint
-            if seen[d.id]?.fingerprint != fp {
-                seen[d.id] = (fp, now)
-                dismissed.remove(d.id)
-            }
-            // Waiting or finished tiles are worth a word at once; busy ones once they settle.
-            let settled = d.waiting || d.state == "done" || d.state == "failed" || now.timeIntervalSince(seen[d.id]!.since) >= Self.settle
-            guard summarized[d.id] != fp, settled, !inFlight.contains(d.id), inFlight.count < Self.concurrency,
-                  !d.text.isEmpty || d.detail != nil else { continue }
-            summarize(d, fingerprint: fp, base: base)
+        for id in seen.keys where !ids.contains(id) { seen[id] = nil }
+        for d in digests where seen[d.id]?.fingerprint != d.fingerprint {
+            seen[d.id] = (d.fingerprint, Date()); dismissed.remove(d.id)
         }
-        let boardState = digests.map { "\($0.id)\($0.state)\($0.waiting)\(shared[$0.id] ?? summaries[$0.id]?.summary ?? "")" }.joined().hashValue
+        guard config.enabled, let base = Self.baseURL(config.url), Date() >= retryAt else { return }
+        let now = Date()
+        let boardState = digests.map { "\($0.id)\($0.state)\($0.waiting)\(shared[$0.id]?.summary ?? "")" }.joined().hashValue
         // The brief must not wait for tile summaries to drain: on a busy board there is always
         // another tile to summarize, and the brief would starve. It runs on its own request.
         if !briefing, briefedState != boardState, now.timeIntervalSince(lastBriefAt) >= Self.briefEvery || brief == nil {
-            makeBrief(digests.map { var d = $0; d.summary = shared[d.id] ?? summaries[d.id]?.summary; return d }, state: boardState, base: base)
-        }
-    }
-
-    private func summarize(_ digest: Steward.Digest, fingerprint: Int, base: URL) {
-        inFlight.insert(digest.id)
-        call(base: base, messages: Steward.tileMessages(digest), maxTokens: 160) { [weak self] data in
-            guard let self else { return }
-            self.inFlight.remove(digest.id)
-            guard let data, let summary = try? Steward.tileSummary(fromCompletion: data) else { return }
-            self.summarized[digest.id] = fingerprint
-            if self.summaries[digest.id] != summary { self.summaries[digest.id] = summary }
+            makeBrief(digests.map { var d = $0; d.summary = shared[d.id]?.summary; return d }, state: boardState, base: base)
         }
     }
 

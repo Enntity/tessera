@@ -2,11 +2,8 @@ import Foundation
 import Observation
 import TesseraKit
 
-/// What agents on this Mac leave for the user and for each other through Tessera: questions for
-/// the user (answered from the Needs-you lane), notes for the user, and messages between agents
-/// (kept in the recipient's inbox, and typed into a terminal agent when the user allows it or
-/// approves the delivery). Each item that wants the user is a tile, so it joins the lane, alerts and
-/// the phone like everything else.
+/// Native presentation of Accord questions and operator notifications, plus durable
+/// receipts for terminal input. This is not an agent mailbox or session authority.
 @Observable
 @MainActor
 public final class AgentDesk {
@@ -48,6 +45,7 @@ public final class AgentDesk {
         var messages: [Message]
         var notes: [Note]
         var accordDeliveries: [String]?
+        var noteReads: [String]?
     }
 
     public private(set) var questions: [Question] = []
@@ -64,30 +62,23 @@ public final class AgentDesk {
 
     public static let idPrefix = "ask:"
     static let keep: TimeInterval = 24 * 3600
-    static let limit = 200
 
     @ObservationIgnored private let store: URL
 
     private var accordDeliveries: Set<String> = []
+    private var noteReads: Set<String> = []
 
     public init(directory: URL) {
-        store = directory.appendingPathComponent("agent-desk.json")
+        store = directory.appendingPathComponent("accord-desk.json")
         if let saved = StateFile.load(Saved.self, from: store) {
             (questions, messages, notes) = (saved.questions, saved.messages, saved.notes)
             accordDeliveries = Set(saved.accordDeliveries ?? [])
+            noteReads = Set(saved.noteReads ?? [])
+
         }
     }
 
     // MARK: Questions
-
-    @discardableResult
-    public func ask(_ text: String, options: [String], from: String, fromTile: String?) -> Question {
-        let question = Question(id: Self.newId(), from: from, fromTile: fromTile, text: text.preview(2000),
-                                options: options.prefix(6).map { $0.preview(60) }, askedAt: Date())
-        questions.append(question)
-        changed()
-        return question
-    }
 
     public func question(_ id: String) -> Question? { questions.first { $0.id == id } }
 
@@ -102,7 +93,7 @@ public final class AgentDesk {
     public func importAccordMessage(id: String, text: String, from: String, to: String, title: String, wantsTyping: Bool) -> Bool {
         let key = "accord:" + id
         if accordDeliveries.contains(key) { return true }
-        guard accordDeliveries.count < 10000 else { return false }
+        guard wantsTyping else { return true } // Ordinary inbox content stays exclusively in Accord.
         accordDeliveries.insert(key)
         var message = Message(id: key, from: from, fromTile: nil, to: to, toTitle: title, text: Redactor.redact(text).preview(4000), sentAt: Date())
         // Persist the delivery before optional native interaction. A crash cannot cause retyping.
@@ -141,50 +132,36 @@ public final class AgentDesk {
         }
     }
 
+    public func importAccordNotes(_ values: [[String: Any]]) {
+        let pending = Set(values.compactMap { $0["deliveryId"] as? String }.map { "accord:" + $0 })
+        notes.removeAll { $0.id.hasPrefix("accord:") && !pending.contains($0.id) }
+        for value in values {
+            guard let id = value["deliveryId"] as? String, let text = value["text"] as? String,
+                  !noteReads.contains(id), !notes.contains(where: { $0.id == "accord:" + id }) else { continue }
+            notes.append(Note(id:"accord:" + id, from:value["from"] as? String ?? "Accord", text:Redactor.redact(text), at:Date()))
+        }
+        changed()
+    }
+    public func accordNoteReads() -> [String] { Array(noteReads) }
+    public func confirmNoteRead(_ id: String) { noteReads.remove(id); changed() }
+
     // MARK: Messages
 
-    /// Leaves `text` in the inbox of tile `to`, and for a terminal agent types it in too, now or
-    /// once the user approves (`typingAllowed`).
-    public func send(_ text: String, from: String, fromTile: String?, to: String, toTitle: String, type: Bool) -> Message {
-        var message = Message(id: Self.newId(), from: from, fromTile: fromTile, to: to, toTitle: toTitle,
-                              text: text.preview(4000), sentAt: Date())
-        if type {
-            if typingAllowed {
-                message.delivery = typeInto?(to, Self.typed(message)) == true ? "typed" : nil
-            } else {
-                message.delivery = "waiting"
-            }
-        }
-        messages.append(message)
-        changed()
-        return message
-    }
-
-    /// The messages for `tile`, oldest first; reading them marks them read.
-    public func inbox(for tile: String, unreadOnly: Bool, markRead: Bool) -> [Message] {
-        let found = messages.filter { $0.to == tile && (!unreadOnly || !$0.read) }
-        if markRead, found.contains(where: { !$0.read }) {
-            for i in messages.indices where messages[i].to == tile { messages[i].read = true }
-            changed()
-        }
-        return found
-    }
-
     public func approveDelivery(_ id: String, _ approve: Bool) {
-        guard let i = messages.firstIndex(where: { $0.id == id }), messages[i].delivery == "waiting" else { return }
-        messages[i].delivery = approve ? (typeInto?(messages[i].to, Self.typed(messages[i])) == true ? "typed" : "failed") : "declined"
+        guard id.hasPrefix("accord:"), let i = messages.firstIndex(where: { $0.id == id }), messages[i].delivery == "waiting" else { return }
+        if !approve { messages[i].delivery = "declined"; changed(); return }
+        // Record intent before the irreversible terminal effect. After a crash this remains
+        // unknown and is never automatically replayed; displaying a message is not execution.
+        messages[i].delivery = "attempting"
+        changed()
+        guard let saved = StateFile.load(Saved.self, from: store),
+              saved.messages.first(where: { $0.id == id })?.delivery == "attempting" else { return }
+        messages[i].delivery = typeInto?(messages[i].to, Self.typed(messages[i])) == true ? "typed" : "failed"
         changed()
     }
 
     static func typed(_ message: Message) -> String {
-        "[Message from \(message.from) via Tessera] \(message.text)"
-    }
-
-    // MARK: Notes
-
-    public func note(_ text: String, from: String) {
-        notes.append(Note(id: Self.newId(), from: from, text: text.preview(1000), at: Date()))
-        changed()
+        "[Message from \(message.from) via Accord] \(message.text)"
     }
 
     // MARK: The board
@@ -196,7 +173,9 @@ public final class AgentDesk {
         let id = String(tileId.dropFirst(Self.idPrefix.count))
         if let i = questions.firstIndex(where: { $0.id == id && $0.answer == nil }) { questions[i].dismissed = true }
         if messages.contains(where: { $0.id == id && $0.delivery == "waiting" }) { approveDelivery(id, false) }
+        if id.hasPrefix("accord:"), notes.contains(where: { $0.id == id }) { noteReads.insert(String(id.dropFirst(7))) }
         notes.removeAll { $0.id == id }
+        if let i = messages.firstIndex(where:{ $0.id == id && ["attempting","failed"].contains($0.delivery ?? "") }) { messages[i].delivery = "reviewed" }
         changed()
     }
 
@@ -204,7 +183,9 @@ public final class AgentDesk {
     public func seen(_ tileId: String) {
         let id = String(tileId.dropFirst(Self.idPrefix.count))
         guard tileId.hasPrefix(Self.idPrefix), notes.contains(where: { $0.id == id }) else { return }
+        if id.hasPrefix("accord:"), notes.contains(where: { $0.id == id }) { noteReads.insert(String(id.dropFirst(7))) }
         notes.removeAll { $0.id == id }
+        if let i = messages.firstIndex(where:{ $0.id == id && ["attempting","failed"].contains($0.delivery ?? "") }) { messages[i].delivery = "reviewed" }
         changed()
     }
 
@@ -214,6 +195,11 @@ public final class AgentDesk {
         for q in questions where q.answer == nil && !q.dismissed {
             out.append(tile(id: q.id, title: "\(q.from) asks", activity: .needsInput, detail: q.text, at: q.askedAt,
                             items: [ConversationItem(id: q.id, role: .assistant, text: q.text, timestamp: q.askedAt)], link: q.fromTile))
+        }
+        for m in messages where m.delivery == "attempting" || m.delivery == "failed" {
+            let detail = m.delivery == "attempting" ? "Terminal delivery outcome is unknown after interruption. Check the terminal before sending again." : "Terminal delivery failed. Check the terminal before sending again."
+            out.append(tile(id:m.id,title:"Check delivery to \(m.toTitle)",activity:.needsInput,detail:detail,at:m.sentAt,
+                items:[ConversationItem(id:m.id,role:.system,text:detail + "\n" + m.text,timestamp:m.sentAt)],link:m.to))
         }
         for m in messages where m.delivery == "waiting" {
             out.append(tile(id: m.id, title: "\(m.from) → \(m.toTitle)", activity: .needsInput,
@@ -231,7 +217,7 @@ public final class AgentDesk {
     public func choices(for tileId: String) -> [String]? {
         let id = String(tileId.dropFirst(Self.idPrefix.count))
         if let q = questions.first(where: { $0.id == id && $0.answer == nil }) { return q.options }
-        if messages.contains(where: { $0.id == id && $0.delivery == "waiting" }) { return ["Deliver", "Don't"] }
+        if id.hasPrefix("accord:"), messages.contains(where: { $0.id == id && $0.delivery == "waiting" }) { return ["Deliver", "Don't"] }
         return nil
     }
 
@@ -254,14 +240,10 @@ public final class AgentDesk {
 
     private func changed() {
         let cutoff = Date().addingTimeInterval(-Self.keep)
-        questions.removeAll { ($0.answeredAt ?? ($0.dismissed ? $0.askedAt : .distantFuture)) < cutoff }
-        messages.removeAll { $0.sentAt < cutoff && $0.read && $0.delivery != "waiting" }
-        if questions.count > Self.limit { questions.removeFirst(questions.count - Self.limit) }
-        if messages.count > Self.limit { messages.removeFirst(messages.count - Self.limit) }
-        if notes.count > Self.limit { notes.removeFirst(notes.count - Self.limit) }
-        StateFile.save(Saved(questions: questions, messages: messages, notes: notes, accordDeliveries: Array(accordDeliveries)), to: store)
+        questions.removeAll { $0.id.hasPrefix("accord:") && ($0.answeredAt ?? ($0.dismissed ? $0.askedAt : .distantFuture)) < cutoff }
+        messages.removeAll { $0.id.hasPrefix("accord:") && $0.sentAt < cutoff && $0.read && $0.delivery != "waiting" }
+        StateFile.save(Saved(questions: questions, messages: messages, notes: notes, accordDeliveries: Array(accordDeliveries), noteReads: Array(noteReads)), to: store)
         onChange?()
     }
 
-    static func newId() -> String { String(UUID().uuidString.prefix(8)).lowercased() }
 }

@@ -77,10 +77,10 @@ struct AgentsSettings: View {
                 Toggle("Let agents on this Mac use Tessera", isOn: Bindable(server).enabled)
                 Text(server.isRunning ? "\(server.status) · \(server.calls) calls" : server.status).note()
                 Toggle("Agents may type messages into terminal agents without asking", isOn: $desk.typingAllowed)
-                Text("Agents see the board, read tiles, message each other and ask you questions through the `tessera` command or its MCP server. Off: each typed delivery waits for your OK in the lane.").note()
+                Text("Accord connects agents, messages, questions and shared resources. Tessera adds native board and screen inspection. Off: each request to type into a terminal waits for your OK in the lane.").note()
                 HStack {
                     Spacer()
-                    Button(installing ? "Installing…" : "Install Command, Skill & MCP…") {
+                    Button(installing ? "Installing…" : "Connect Agents through Accord…") {
                         installing = true
                         Task {
                             installOutput = await Task.detached { Self.install() }.value
@@ -88,8 +88,9 @@ struct AgentsSettings: View {
                         }
                     }
                         .disabled(installing)
-                        .help("Installs the `tessera` command, shared skill, and MCP setup for Claude Code, Codex and Devin")
+                        .help("Installs Accord’s skill and agent connection, plus Tessera’s native UI tools")
                 }
+                if let error = model.workspace.accord.setupError { Text(error).note() }
                 if let installOutput { Text(installOutput).font(Style.mono(.caption)).textSelection(.enabled) }
             }
         }

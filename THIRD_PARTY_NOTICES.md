@@ -17,6 +17,15 @@ third-party software, which remains under its own license.
 - License: used under the BSD-3-Clause option of its BSD/GPLv2 dual license; see
   [`LICENSES/BSD-3-Clause-zstd.txt`](LICENSES/BSD-3-Clause-zstd.txt)
 
+## Accord and Node.js
+
+- Accord is an MIT-licensed standalone dependency pinned by `Vendor/accord-lock.json`.
+  Its embedded Messenger implementation retains its own provenance and licenses in
+  `Vendor/Accord/vendor/messenger`.
+- The packaged app includes the build's Node.js runtime. Its complete distribution license
+  is shipped as `Contents/Resources/Accord/LICENSE-NODE`. Node is signed separately with
+  V8 executable-memory entitlements; the native app does not receive those entitlements.
+
 ## Trademarks
 
 Tessera is an independent project, not affiliated with or endorsed by Anthropic, OpenAI,

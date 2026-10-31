@@ -8,19 +8,13 @@ let usage = """
     tessera — talk to the Tessera board running on this Mac
 
       tessera board [--waiting]                 Every tile (id, title, state, summary) and the brief
-      tessera resources                         Fleet holders, queues, expiry and snapshot freshness
       tessera whoami                            Which tile you are
       tessera read <tile> [--lines N]           What a tile shows now
-      tessera send <tile> <text…> [--type]      Message another agent (--type: into its terminal)
-      tessera inbox [--wait S] [--all]          Messages for you
-      tessera ask <question…> [--option A]… [--wait S]   Ask the developer; prints the answer or an id
-      tessera answer <id> [--wait S]            Wait for an ask's answer
-      tessera notify <text…>                    Leave the developer a note
       tessera mcp                               Serve these as MCP tools over stdio
-      tessera install [--dry-run]               Put `tessera` on PATH, install the skill, register MCP
+      tessera install [--dry-run]               Install Accord hookup and optional native Tessera tools
 
     Options: --as NAME names you when Tessera can't tell which tile you are (or set TESSERA_AS).
-    Exit codes: 0 done, 1 error, 2 asked but not answered yet, 3 Tessera isn't running.
+    Exit codes: 0 done, 1 error, 3 Tessera isn't running.
     """
 
 struct Failure: Error, CustomStringConvertible {
@@ -32,7 +26,7 @@ struct Failure: Error, CustomStringConvertible {
     }
 }
 
-let valueFlags: Set<String> = ["--lines", "--wait", "--option", "--as"]
+let valueFlags: Set<String> = ["--lines", "--as"]
 var words: [String] = []
 var flags: [String: [String]] = [:]
 var args = Array(CommandLine.arguments.dropFirst())
@@ -100,7 +94,7 @@ func callTool(_ name: String, _ arguments: [String: Any]) throws -> String {
 // MARK: MCP over stdio
 
 /// Forwards each JSON-RPC line from the MCP client to the app (adding who is calling) and writes
-/// the reply back. Calls run concurrently, since asking the developer can wait; writes don't interleave.
+/// the reply back. Calls run concurrently, so one slow native read does not block others; writes don't interleave.
 func serveMCP() -> Never {
     let out = FileHandle.standardOutput
     let lock = NSLock()
@@ -161,9 +155,6 @@ func serveMCP() -> Never {
 
 // MARK: Commands
 
-func rest(from index: Int) -> String { words.dropFirst(index).joined(separator: " ") }
-
-func waitArgument(default value: Int) -> Int { Int(flag("--wait") ?? "") ?? value }
 
 do {
     // --help or -h anywhere prints usage; `tessera install --help` must not install.
@@ -172,34 +163,13 @@ do {
         serveMCP()
     case "board":
         print(try callTool("board", ["waiting_only": has("--waiting")]))
-    case "resources":
-        print(try callTool("resources", [:]))
     case "whoami":
         print(try callTool("whoami", [:]))
     case "read":
         guard words.count >= 2 else { throw Failure("tessera read <tile> [--lines N]") }
         print(try callTool("read_tile", ["tile": words[1], "lines": Int(flag("--lines") ?? "") ?? 60]))
-    case "send":
-        guard words.count >= 3 else { throw Failure("tessera send <tile> <text…> [--type]") }
-        print(try callTool("send_message", ["to": words[1], "text": rest(from: 2), "type": has("--type")]))
-    case "inbox":
-        print(try callTool("inbox", ["wait_seconds": waitArgument(default: 0), "all": has("--all")]))
-    case "ask":
-        guard words.count >= 2 else { throw Failure("tessera ask <question…> [--option A]… [--wait S]") }
-        let reply = try callTool("ask_human", ["question": rest(from: 1), "options": flags["--option"] ?? [],
-                                               "wait_seconds": waitArgument(default: 50)])
-        print(reply)
-        if reply.hasPrefix("Not answered yet") { exit(2) }
-    case "answer":
-        guard words.count >= 2 else { throw Failure("tessera answer <id> [--wait S]") }
-        let reply = try callTool("get_answer", ["id": words[1], "wait_seconds": waitArgument(default: 50)])
-        print(reply)
-        if reply.hasPrefix("Not answered yet") { exit(2) }
-    case "notify":
-        guard words.count >= 2 else { throw Failure("tessera notify <text…>") }
-        print(try callTool("notify_human", ["text": rest(from: 1)]))
     case "install":
-        try Installer(dryRun: has("--dry-run")).run()
+        try Installer(dryRun: has("--dry-run"), noStart: has("--no-start")).run()
     case "help", "-h":
         print(usage)
     default:

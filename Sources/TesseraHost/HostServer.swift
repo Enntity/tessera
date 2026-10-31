@@ -14,7 +14,7 @@ public final class HostServer {
     /// Why the listener last failed; stays on show until the next start.
     public private(set) var failure: String?
     public private(set) var clientNames: [String] = []
-    public private(set) var pairingCode: String
+    public private(set) var pairingCode = ""
     public let port: UInt16 = WireProtocol.defaultPort
     public let hostName = Host.current().localizedName ?? "Mac"
 
@@ -31,23 +31,17 @@ public final class HostServer {
     @ObservationIgnored private var lastUsage: [UsageReading] = []
     @ObservationIgnored private let hostId: String
 
-    public init(workspace: Workspace, open: @escaping (String) -> Void, close: @escaping (String) -> Void) {
+    @ObservationIgnored private let readCode: () throws -> String?
+    @ObservationIgnored private let saveCode: (String) -> Void
+
+    public init(workspace: Workspace, open: @escaping (String) -> Void, close: @escaping (String) -> Void,
+                readCode: @escaping () throws -> String? = { try Keychain.read(account:"pairing-code") },
+                saveCode: @escaping (String) -> Void = { Keychain.set($0,account:"pairing-code") }) {
         self.workspace = workspace
         self.open = open
         closeTile = close
-        do {
-            if let saved = try Keychain.read(account: "pairing-code") {
-                pairingCode = saved
-            } else {
-                let fresh = SecureChannel.makePairingCode()
-                Keychain.set(fresh, account: "pairing-code")
-                pairingCode = fresh
-            }
-        } catch {
-            // Saved but not readable right now (access denied): use a code for this session only,
-            // never replacing the one the phone is paired with.
-            pairingCode = SecureChannel.makePairingCode()
-        }
+        self.readCode = readCode
+        self.saveCode = saveCode
         if let id = Preferences.store.string(forKey: "tessera.hostId") {
             hostId = id
         } else {
@@ -56,13 +50,32 @@ public final class HostServer {
         }
     }
 
+    func preparePairingCode() {
+        guard pairingCode.isEmpty else { return }
+        do {
+            if let saved = try readCode() {
+                pairingCode = saved
+            } else {
+                let fresh = SecureChannel.makePairingCode()
+                saveCode(fresh)
+                pairingCode = fresh
+            }
+        } catch {
+            // Saved but not readable right now (access denied): use a code for this session only,
+            // never replacing the one the phone is paired with.
+            pairingCode = SecureChannel.makePairingCode()
+        }
+    }
+
     public var pairingURL: URL? {
+        guard !pairingCode.isEmpty else { return nil }
         let address = Self.lanAddress() ?? ProcessInfo.processInfo.hostName
         return SecureChannel.pairingURL(host: address, port: port, code: pairingCode, name: hostName)
     }
 
     public func start() {
         guard listener == nil else { return }
+        preparePairingCode()
         failure = nil
         do {
             let l = try NWListener(using: SecureChannel.parameters(pairingCode: pairingCode), on: NWEndpoint.Port(rawValue: port)!)
@@ -105,7 +118,7 @@ public final class HostServer {
 
     public func regenerateCode() {
         pairingCode = SecureChannel.makePairingCode()
-        Keychain.set(pairingCode, account: "pairing-code")
+        saveCode(pairingCode)
         if isRunning {
             stop()
             start()

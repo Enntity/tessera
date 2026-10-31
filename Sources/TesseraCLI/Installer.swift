@@ -1,15 +1,12 @@
 import Foundation
+import TesseraAPI
 
-/// `tessera install`: makes Tessera reachable from every agent on this Mac.
-/// - `~/.local/bin/tessera` points at this command;
-/// - the skills shipped beside it go to `~/.agents/skills` (read by Codex, Devin and other agents),
-///   linked from `~/.claude/skills` for Claude Code;
-/// - `tessera mcp` is registered as an MCP server with Claude Code (`claude mcp add --scope user`),
-///   Codex (`[mcp_servers.tessera]` in `~/.codex/config.toml`, backed up first) and Devin
-///   (`devin mcp add --scope user`, `~/.config/devin/mcp_config.json`).
-/// Each step says what it did; `--dry-run` only says what it would do.
+/// Installs Accord's agent hookup and Tessera's optional native UI tools.
+/// Accord owns skills and shared coordination. Retired Tessera skills are archived outside
+/// every agent discovery directory, preserving customizations without publishing two contracts.
 struct Installer {
     let dryRun: Bool
+    var noStart: Bool = false
     let fm = FileManager.default
     let home = URL(fileURLWithPath: NSHomeDirectory())
 
@@ -19,41 +16,19 @@ struct Installer {
         return url.resolvingSymlinksInPath()
     }
 
-    /// Beside the command in the app (Contents/Helpers → Contents/Resources/skills), or in a
-    /// source checkout (.build/<config>/ → skills/).
-    var skillsSource: URL? {
-        let dir = executable.deletingLastPathComponent()
-        let candidates = [ProcessInfo.processInfo.environment["TESSERA_SKILLS_DIR"].map { URL(fileURLWithPath: $0) },
-                          dir.appendingPathComponent("../Resources/skills"),
-                          dir.appendingPathComponent("../../skills"),
-                          dir.appendingPathComponent("../../../skills")].compactMap { $0 }
-        return candidates.map(\.standardizedFileURL).first { fm.fileExists(atPath: $0.appendingPathComponent("tessera/SKILL.md").path) }
-    }
-
     func say(_ text: String) { print((dryRun ? "would: " : "") + text) }
 
     func run() throws {
         let bin = home.appendingPathComponent(".local/bin/tessera")
-        try link(bin, to: executable)
-
-        if let source = skillsSource {
-            for name in try fm.contentsOfDirectory(atPath: source.path).sorted() where !name.hasPrefix(".") {
-                let target = home.appendingPathComponent(".agents/skills/\(name)")
-                say("install skill \(name) → \(target.path)")
-                if !dryRun {
-                    try fm.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
-                    if fm.fileExists(atPath: target.path) || (try? fm.destinationOfSymbolicLink(atPath: target.path)) != nil {
-                        let backup = target.appendingPathExtension("backup-\(UUID().uuidString)")
-                        try fm.moveItem(at: target, to: backup)
-                        print("  kept previous skill at \(backup.path)")
-                    }
-                    try fm.copyItem(at: source.appendingPathComponent(name), to: target)
-                }
-                try link(home.appendingPathComponent(".claude/skills/\(name)"), to: target, relative: "../../.agents/skills/\(name)")
-            }
-        } else {
-            say("skip skills: none found beside \(executable.path) (set TESSERA_SKILLS_DIR)")
+        guard let accord = AccordExecutable.locate() else {
+            throw Failure("Accord is required. Install Accord, then rerun tessera install. No Tessera skill was installed.")
         }
+        try link(bin, to: executable)
+        say("install Accord's skill, startup instructions and MCP connection")
+        let (status, output) = Self.run(accord.url, accord.arguments + ["install"] + (dryRun ? ["--dry-run"] : []) + (noStart ? ["--no-start"] : []))
+        guard status == 0 else { throw Failure("Accord installation failed: \(output)") }
+        print(output)
+        try retireSkills()
 
         if let claude = Self.which("claude") {
             let (has, _) = Self.run(claude, ["mcp", "get", "tessera"])
@@ -112,7 +87,31 @@ struct Installer {
         if !(ProcessInfo.processInfo.environment["PATH"] ?? "").split(separator: ":").contains(Substring(bin.deletingLastPathComponent().path)) {
             print("For shell use, add ~/.local/bin to PATH in your shell configuration. MCP uses the absolute path and needs no PATH change.")
         }
-        print(dryRun ? "Nothing changed." : "Done. Restart agent sessions to pick up the MCP server and skills.")
+        if !dryRun {
+            let marker = home.appendingPathComponent(".config/tessera/accord-installed-v1")
+            try fm.createDirectory(at:marker.deletingLastPathComponent(),withIntermediateDirectories:true)
+            try "Accord skill owns agent coordination.\n".write(to:marker,atomically:true,encoding:.utf8)
+        }
+        print(dryRun ? "Nothing changed." : "Done. Restart agent sessions to pick up the MCP server and Accord skill.")
+    }
+
+    /// Move whole directories (including local customizations) out of skill discovery.
+    /// A symlink is archived as a symlink: never follow it and move its external target.
+    func retireSkills() throws {
+        let archive = home.appendingPathComponent(".config/accord/retired-skills")
+        for (client, relative) in [("shared", ".agents/skills"), ("claude", ".claude/skills"), ("codex", ".codex/skills")] {
+            let root = home.appendingPathComponent(relative)
+            guard let names = try? fm.contentsOfDirectory(atPath: root.path) else { continue }
+            for name in names.sorted() where name == "tessera" || name.hasPrefix("tessera.backup-") {
+                let source = root.appendingPathComponent(name)
+                let target = archive.appendingPathComponent("\(client)-\(name)-\(UUID().uuidString)")
+                say("retire Tessera skill → \(target.path)")
+                if !dryRun {
+                    try fm.createDirectory(at: archive, withIntermediateDirectories: true)
+                    try fm.moveItem(at: source, to: target)
+                }
+            }
+        }
     }
 
     /// A symlink at `path` to `target`, replacing an older symlink but never a real file.

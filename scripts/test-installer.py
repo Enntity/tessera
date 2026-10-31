@@ -7,16 +7,14 @@ import sys
 import tempfile
 
 cli = Path(sys.argv[1]).resolve()
-source = Path(__file__).resolve().parents[1] / "skills"
 with tempfile.TemporaryDirectory(prefix="tessera-install-test-") as temporary:
     home = Path(temporary).resolve()
     env = dict(os.environ, HOME=str(home), CFFIXED_USER_HOME=str(home),
                PATH=str(home / ".local/bin") + ":/usr/bin:/bin")
-    env.pop("TESSERA_SKILLS_DIR", None)
-    # Packaged checks must use the shipped skills, not silently borrow from this checkout.
-    if cli.parent.name != "Helpers":
-        env["TESSERA_SKILLS_DIR"] = str(source)
     (home / ".local/bin").mkdir(parents=True)
+    accord = home / ".local/bin/accord"
+    accord.write_text('#!/bin/sh\nprintf "%s\\n" "$*" >> "$HOME/accord-calls"\n')
+    accord.chmod(0o755)
     # Stub the optional client registration; it must never invoke a user's real client.
     claude = home / ".local/bin/claude"
     claude.write_text("#!/bin/sh\n"
@@ -36,6 +34,14 @@ with tempfile.TemporaryDirectory(prefix="tessera-install-test-") as temporary:
     skill.mkdir(parents=True)
     (skill / "SKILL.md").write_text("local customization to preserve\n")
 
+    old_backup = home / ".agents/skills/tessera.backup-old"
+    old_backup.mkdir()
+    (old_backup / "SKILL.md").write_text("old published backup\n")
+    claude_skills = home / ".claude/skills"
+    claude_skills.mkdir(parents=True)
+    (claude_skills / "tessera").symlink_to("../../.agents/skills/tessera")
+    (home / ".agents/skills/unrelated").mkdir()
+
     def run(*args):
         return subprocess.run([str(cli), *args], env=env, capture_output=True, text=True, timeout=30)
 
@@ -50,10 +56,14 @@ with tempfile.TemporaryDirectory(prefix="tessera-install-test-") as temporary:
     installed = run("install")
     assert installed.returncode == 0, installed.stdout + installed.stderr
     assert (home / ".local/bin/tessera").resolve() == cli
-    assert "resources" in (skill / "SKILL.md").read_text()
-    backups = list(skill.parent.glob("tessera.backup-*"))
-    assert any("local customization" in (p / "SKILL.md").read_text() for p in backups)
-    assert (home / ".claude/skills/tessera").resolve() == skill
+    assert not skill.exists()
+    assert not old_backup.exists()
+    assert not (claude_skills / "tessera").is_symlink()
+    archive = home / ".config/accord/retired-skills"
+    assert any("local customization" in (p / "SKILL.md").read_text()
+               for p in archive.glob("shared-tessera-*") if p.is_dir())
+    assert (home / ".agents/skills/unrelated").is_dir()
+    assert (home / "accord-calls").read_text().splitlines() == ["install --dry-run", "install"]
     assert config.read_text().startswith('model = "existing-model"')
     assert config.read_text().count("[mcp_servers.tessera]") == 1
     assert list(config.parent.glob("config.toml.bak-tessera-*"))
@@ -86,4 +96,4 @@ with tempfile.TemporaryDirectory(prefix="tessera-install-test-") as temporary:
     assert refused.returncode != 0
     assert link.read_text() == "user command"
     assert "existing file" in refused.stderr
-print("Installer checks passed: dry-run, isolated setup, preserved custom skill/config, repeat install, conflict refusal.")
+print("Installer checks passed: dry-run, isolated setup, retired skills outside discovery, preserved customizations/config, repeat install, conflict refusal.")

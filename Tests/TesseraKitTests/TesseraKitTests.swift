@@ -668,6 +668,9 @@ final class UsageAPITests: XCTestCase {
 final class KeychainTests: XCTestCase {
     /// "No such item" is an answer, not a failure: only unreadable items throw.
     func testPresenceWithoutReadingTheSecret() throws {
+        let previous = ProcessInfo.processInfo.environment["TESSERA_DATA_DIR"]
+        setenv("TESSERA_DATA_DIR","/tmp/keychain-test-" + UUID().uuidString,1)
+        defer { if let previous { setenv("TESSERA_DATA_DIR",previous,1) } else { unsetenv("TESSERA_DATA_DIR") } }
         let account = "tessera-test-\(UUID().uuidString)"
         XCTAssertFalse(Keychain.contains(account: account))
         XCTAssertNil(try Keychain.read(account: account))
@@ -804,52 +807,6 @@ final class RemoteVitalsTests: XCTestCase {
         XCTAssertNotEqual(a, b)
     }
 
-    let sample = """
-    @stat cpu  13388591 4655 4582035 301064634 1058763 0 17213 0 0 0
-    @memtotal 127600812
-    @memavail 65669088
-    @load 1.15
-    @ncpu 20
-    @ctemp 59200
-    @gpu NVIDIA GB10, 3, 53, 14.93
-    """
-
-    func testParsesSparkProbe() {
-        let r = RemoteVitals.parse(sample)
-        XCTAssertEqual(r.cores, 20)
-        XCTAssertEqual(r.gpuName, "NVIDIA GB10")
-        XCTAssertEqual(r.gpu!, 0.03, accuracy: 0.0001)
-        XCTAssertEqual(r.cpuTemperature!, 59.2, accuracy: 0.01)
-        XCTAssertEqual(r.temperature!, 53, accuracy: 0.01)  // GPU temperature, like nvidia-smi
-        XCTAssertEqual(r.memory!, 1 - 65669088.0 / 127600812.0, accuracy: 0.0001)
-        XCTAssertEqual(r.memoryTotalGB!, 121.7, accuracy: 0.1)
-    }
-
-    func testHostileOutputCantOverflow() {
-        let r = RemoteVitals.parse("""
-        @stat cpu 18446744073709551615 18446744073709551615 1 18446744073709551615 9
-        @memtotal 1e30
-        @memavail 5
-        @ctemp inf
-        @gpu x, 1e30, nan, 99999999999999999999
-        """)
-        XCTAssertNotNil(r.cpuSample)
-        XCTAssertNil(r.memory)
-        XCTAssertNil(r.cpuTemperature)
-        XCTAssertNil(r.gpu)
-        XCTAssertNil(r.gpuTemperature)
-        XCTAssertNil(r.gpuPowerW)
-        // Memory stays a fraction however the two numbers relate.
-        XCTAssertEqual(RemoteVitals.parse("@memtotal 1e-300\n@memavail 1e11").memory, 0)
-    }
-
-    func testCPUUtilizationFromDeltas() {
-        let a = RemoteVitals.parse("@stat cpu 100 0 100 800 0 0 0 0").cpuSample
-        let b = RemoteVitals.parse("@stat cpu 150 0 150 900 0 0 0 0").cpuSample
-        XCTAssertNil(a?.utilization(since: nil))
-        XCTAssertEqual(b!.utilization(since: a)!, 0.5, accuracy: 0.0001)
-    }
-
     func testHostsFromSSHConfigAndValidation() {
         let config = """
         Host *
@@ -859,7 +816,7 @@ final class RemoteVitalsTests: XCTestCase {
         Host=gpu-box-3
         Host github.com !bad dev-*
         """
-        XCTAssertEqual(RemoteVitals.configuredHosts(in: config), ["gpu-box-1", "gpu-box-2", "gpu-box-3", "github.com"])
+        XCTAssertEqual(SSHHostSuggestions.configuredHosts(in: config), ["gpu-box-1", "gpu-box-2", "gpu-box-3", "github.com"])
         XCTAssertFalse(MachineConfig.isValidHost("-oProxyCommand=evil"))
         XCTAssertFalse(MachineConfig.isValidHost("host; rm -rf /"))
         XCTAssertTrue(MachineConfig.isValidHost("me@10.0.0.4"))

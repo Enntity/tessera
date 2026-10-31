@@ -152,6 +152,8 @@ struct RemoteSettings: View {
                     }
                     .padding(Style.Space.xs)
                 }
+                .disabled(!server.isRunning)
+                if !server.isRunning { Text("Enable the phone link to set up pairing.").note() }
                 if !server.clientNames.isEmpty {
                     Text("Connected: " + server.clientNames.joined(separator: ", "))
                 }

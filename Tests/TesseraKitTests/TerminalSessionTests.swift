@@ -288,14 +288,17 @@ final class TerminalSessionTests: XCTestCase {
     }
 }
 
-final class LocalSamplerTests: XCTestCase {
-    /// Regression: sensor reads after init must not touch a released HID client.
-    func testRepeatedSamplesAreSafe() {
-        let sampler = LocalSampler()
-        var last: LocalSampler.Sample?
-        for _ in 0..<5 { last = sampler.sample() }
-        XCTAssertNotNil(last?.memory)
-        if let t = last?.temperature { XCTAssert((10...120).contains(t)) }
+@MainActor
+final class AccordTelemetryViewTests: XCTestCase {
+    func testTelemetryFractionsAndStaleness() {
+        let sample: [String:Any] = ["stale":false,"host":["cpu":["utilization":50.0,"logicalCpus":20],"gpu":["utilization":3.0,"temperatureC":53.0],"memory":["pressureUtilization":60.0,"totalBytes":137438953472.0]]]
+        let v = MachineMonitor.project(sample, id:"spark", name:"Spark", local:false)
+        XCTAssertEqual(v.cpu,0.5); XCTAssertEqual(v.gpu,0.03)
+        XCTAssertEqual(v.memoryTotalGB,128); XCTAssertEqual(v.temperature,53)
+        let stale = MachineMonitor.project(["stale":true,"host":sample["host"]!], id:"spark", name:"Spark", local:false)
+        XCTAssertEqual(stale.status,.unreachable); XCTAssertNil(stale.gpu)
+        let missing = MachineMonitor.project(["stale":false,"host":[:]], id:"mac", name:"Mac", local:true)
+        XCTAssertNil(missing.cpu); XCTAssertNil(missing.temperature)
     }
 }
 

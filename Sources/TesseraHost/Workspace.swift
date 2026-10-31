@@ -97,13 +97,11 @@ public final class Workspace {
     public init(accordProfile: URL? = nil) {
         var bridgeProfile = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".config/accord/connection.json")
         var dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("Tessera")
-        #if DEBUG
-        // Lets a development instance run beside the real one without sharing its board.
+        // Isolated debug and packaged-release instances never share the live board.
         if let override = ProcessInfo.processInfo.environment["TESSERA_DATA_DIR"] {
             dir = URL(fileURLWithPath: override)
             bridgeProfile = dir.appendingPathComponent("accord-connection.json")
         }
-        #endif
         directory = dir
         accord = AccordBridge(profile: accordProfile ?? bridgeProfile)
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -132,17 +130,25 @@ public final class Workspace {
         agents.onChange = { [weak self] in self?.agentsChanged() }
         agents.start()
         usage.start()
+        machines.accord = accord
         machines.start()
         fleet.onChange = { [weak self] in self?.fleetChanged() }
+        fleet.accord = accord
         fleet.start()
         desk.onChange = { [weak self] in self?.deskChanged() }
         desk.typeInto = { [weak self] id, text in self?.typeMessage(text, into: id) ?? false }
         deskChanged()
         steward.digests = { [weak self] in self?.stewardDigests() ?? [] }
         steward.changes = { [weak self] in self.map { Steward.changes($0.allTiles, since: $0.awaySince) } ?? [] }
-        steward.sharedSummaries = { [weak self] in self?.accord.summaries ?? [:] }
+        steward.sharedSummaries = { [weak self] in self?.accord.tileSummaries ?? [:] }
+        steward.configureShared = { [weak self] config, key, migration in
+            guard let self else { return }
+            var args: [String:Any] = ["url":config.url,"model":config.model,"ifAbsent":migration]
+            if let key, !key.isEmpty { args["key"] = key }
+            _ = try await self.accord.request("summary-configure", args:args)
+        }
         steward.start()
-        accord.digests = { [weak self] in self?.stewardDigests().filter { !$0.id.hasPrefix("accord:") } ?? [] }
+        accord.digests = { [weak self] in self?.stewardDigests().filter { !$0.id.hasPrefix("accord:") && ![AgentFlavor.lloom.rawValue, AgentFlavor.agentDesk.rawValue, AgentFlavor.accord.rawValue].contains($0.flavor) } ?? [] }
         accord.sessions = { [weak self] values in self?.agents.setExternal(values, source: "accord") }
         accord.paused = { [weak self] in self?.agentTools.privacy() ?? true }
         accord.deliver = { [weak self] delivery, tile, sender, text, wantsTyping in
@@ -150,6 +156,9 @@ public final class Workspace {
             return self.desk.importAccordMessage(id: delivery, text: text, from: sender, to: tile, title: info.title, wantsTyping: wantsTyping && self.terminals[tile] != nil)
         }
         accord.questions = { [weak self] questions in self?.desk.importAccordQuestions(questions) }
+        accord.notes = { [weak self] in self?.desk.importAccordNotes($0) }
+        accord.noteReads = { [weak self] in self?.desk.accordNoteReads() ?? [] }
+        accord.noteRead = { [weak self] in self?.desk.confirmNoteRead($0) }
         accord.answers = { [weak self] in self?.desk.accordAnswers() ?? [] }
         accord.start()
         agentTools.attach(self)
@@ -410,6 +419,19 @@ public final class Workspace {
         if !visibleIds.contains(id) { query = BoardQuery() }
         if !visibleIds.contains(id) { filter = .all }
         selectedId = id
+    }
+
+    @ObservationIgnored private var openedShared: [String:AgentAppSession] = [:]
+    public func openSharedSession(_ session: AgentAppSession) {
+        Task {
+            let loaded = (try? await accord.history(session)) ?? session
+            openedShared[loaded.id] = loaded
+            agents.setExternal(Array(openedShared.values),source:"accord-search")
+            for _ in 0..<40 {
+                if exists(loaded.id) { open(loaded.id,inApp:false); return }
+                try? await Task.sleep(nanoseconds:50_000_000)
+            }
+        }
     }
 
     // MARK: The filter
@@ -745,7 +767,9 @@ public final class Workspace {
     /// The tile of the conversation a LLooM job or lease names (`claude:<id>`, `codex:<id>`): by its
     /// tile id, else by the session id a terminal or a Claude app conversation carries.
     public func linkedConversation(_ id: String) -> String? {
-        guard let link = agents.session(id)?.link, let colon = link.firstIndex(of: ":") else { return nil }
+        guard let link = agents.session(id)?.link else { return nil }
+        if link != id, exists(link), agents.session(link)?.flavor != .lloom, agents.session(link)?.link == nil { return link }
+        guard let colon = link.firstIndex(of: ":") else { return nil }
         let sessionId = String(link[link.index(after: colon)...])
         guard SessionResume.isSafeId(sessionId) else { return nil }
         let candidates = [link] + terminals.filter { $0.value.sessionId == sessionId }.map(\.key)

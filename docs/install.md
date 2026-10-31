@@ -1,7 +1,7 @@
 # Install Tessera on macOS
 
 Requires macOS 15 or newer. The supported installation path today is a source build with Xcode
-26 or newer. There is no notarized public download yet. Everything described below is included
+26 or newer and Node 22.13+. There is no notarized public download yet. Everything described below is included
 in the public source; Fleet, Steward, provider accounts, and the iOS companion are optional.
 
 ## Build from source
@@ -17,7 +17,10 @@ scripts/build-app.sh
 open .build/app
 ```
 
-The first build downloads the public SwiftTerm and zstd dependencies. Drag `Tessera.app` from
+The first build downloads the public SwiftTerm and zstd dependencies. Accord is a pinned,
+hash-checked standalone package under `Vendor/Accord`. Packaging copies your Node executable
+and its distribution license into the app; set `TESSERA_NODE_BINARY` and `TESSERA_NODE_LICENSE`
+if they are outside the standard distribution layout. End users do not need Node installed. Drag `Tessera.app` from
 the Finder window into Applications (or `~/Applications`), then open it. Keep it in that location
 before installing the agent integrations. The build uses a local signing identity if available,
 or an ad-hoc signature if none exists; no Apple developer account is needed for a local build.
@@ -49,13 +52,12 @@ Use an asset matching your Mac; `arm64` means Apple silicon.
 1. **Connect your agents.** Install and sign in to whichever agent CLIs or desktop apps you use.
    Tessera detects installed tools; it does not include their subscriptions or credentials.
    In Settings → Agents, leave **Let agents on this Mac use Tessera** enabled, then choose
-   **Install Command, Skill & MCP**. Read the result and restart your agent sessions.
+   **Connect Agents through Accord**. Read the result and restart your agent sessions.
 2. **Open a workspace.** Use ⌘T for a shell or the New menu for an installed agent. Recent Claude
    and Codex desktop sessions appear automatically. Devin launched inside a terminal resumes
    its bound conversation after a normal quit/restart. Other commands can run in any shell tile.
-3. **Try the decision queue.** From a Tessera terminal, run
-   `tessera ask 'What should I try next?' --option 'Messages' --option 'Steward' --wait 0`.
-   Answer in the Needs-you lane, then retrieve it with `tessera answer '<question id>' --wait 0`.
+3. **Try the decision queue.** Ask an enrolled agent to use `accord_ask` with two answer choices.
+   Answer in the Needs-you lane; the agent retrieves the answer through `accord_question`.
    ⇧⌘J opens keyboard triage. The [messaging walkthrough](control-plane.md#a-working-conversation)
    shows how two agents exchange messages.
 4. **Enable Steward summaries.** In Settings → Agents, enter your inference base URL ending in
@@ -66,23 +68,27 @@ Use an asset matching your Mac; `arm64` means Apple silicon.
    Any request failure appears in Settings. Selected board text is sent to this endpoint.
 5. **Add the extras you use.** Settings → Fleet connects a LLooM head. Only jobs needing attention
    become tiles by default; **Show agents' jobs as tiles** enables all jobs. Settings → Machines
-   adds your SSH hosts. Accounts are optional and use your own provider keys. The source-built
+   connects SSH hosts running Accord; joined hosts also appear automatically. Accounts are optional and use your own provider keys. The source-built
    [iOS companion](../README.md#build-and-run) pairs through Settings → iPhone; it has no background
    push notifications and needs a reachable Mac.
 
-Local terminals, agent discovery, messages, questions, triage, and session restoration work
-without Steward, Fleet, or a Tessera account. Grant Notifications for alerts; Accessibility is
+Local terminals, triage and session restoration remain native. Accord supplies discovery,
+messages and questions without Steward, Fleet, or a Tessera account. Grant Notifications for alerts; Accessibility is
 needed only to position desktop-app windows. Local Network access is used for the iPhone link.
 
 ## What the integration installer changes
 
-The installer links `~/.local/bin/tessera` to the bundled command, copies the skill to
-`~/.agents/skills/tessera`, links it for Claude Code, and registers MCP for detected Claude Code,
-Codex and Devin clients. It preserves previous skills and backs up changed Codex configuration.
-Existing Tessera MCP registrations are retained, including customized commands. If a retained
-registration points at an old app, update it in that client or remove that Tessera registration
-and rerun the installer. If you move the app later, run the installer again to update its symlink.
-An existing real file at a required symlink path is left untouched and reported as a conflict.
+The app bundles the standalone Accord service and Node runtime. On first launch, its installer
+sets up Accord's CLI, skill, startup instructions, MCP connection and user service. An existing
+Accord installation takes precedence. Settings → Agents lets you retry setup and inspect errors.
+The optional `tessera` command and MCP server expose native UI inspection.
+
+Accord is the only published agent skill. Older `tessera` skill directories, symlinks and skill
+backups move to `~/.config/accord/retired-skills`, outside discovery. Their customizations are
+preserved. Existing MCP registrations and unrelated client settings remain intact. If you move
+the app, rerun its installer to update the command symlink. Conflicting real files are reported
+and left untouched. `tessera install --dry-run` previews setup; `--no-start` stages it without
+registering a background service.
 
 For direct shell use, ensure `~/.local/bin` is on PATH. For zsh, add this line to `~/.zshrc` if needed:
 
@@ -124,9 +130,8 @@ Any MCP client supporting stdio can launch this executable with the argument `mc
 }
 ```
 
-Adapt the enclosing configuration to your client. Use at least a 70-second tool timeout for
-human questions. Agents that can run shell commands can use the CLI without MCP. The bundled
-skill is in `Tessera.app/Contents/Resources/skills/tessera/SKILL.md`.
+Adapt the enclosing configuration to your client. Agents use the Accord skill at `~/.agents/skills/accord/SKILL.md`;
+there is no Tessera skill. Accord messages and questions work while the native app is closed.
 
 ## Troubleshooting
 
@@ -147,7 +152,8 @@ Fleet requires a separately configured LLooM head. Steward requires an inference
 neither is needed for local messages or questions. Configure those under Fleet and Agents.
 
 To remove integrations, remove the Tessera MCP registration in your clients and the Tessera
-symlinks and skill installed above. Preserve any skill backups you need. Deleting the app does
+command symlink. Accord is shared infrastructure: leave it installed while other agents or
+products use it. Retired skill customizations remain in the archive described above. Deleting the app does
 not delete its board or conversations. Tessera's state is under
 `~/Library/Application Support/Tessera`; provider keys are in Keychain. Do not delete state just
 to upgrade or reinstall.
