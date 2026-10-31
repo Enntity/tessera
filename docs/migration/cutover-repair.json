@@ -21,8 +21,20 @@
   "binarySHA256": "506ec272009d0e92ec90fa478e58225020f2acd265e2a85c462c0d46e021d866",
   "hostServiceSource": "b07e272",
   "limits": [
-    "Live native activation and automatic SSH recovery still to be verified",
     "No GPU workload or reservation changed",
     "Development signature; not notarized"
-  ]
+  ],
+  "activation": {
+    "installedSource": "75c3e9498ba05930265e278b6e7131cd3721140f",
+    "matchingSigningRequirement": true,
+    "restoredTerminalIDs": 13,
+    "historicalReviewCards": 0,
+    "operatorItems": 1,
+    "remainingItem": "Existing overdue LLooM lease",
+    "configuredHosts": 4,
+    "freshGPUAndMemorySamples": 4,
+    "duplicateHostChips": 0,
+    "sshRecoverySeconds": 24.3,
+    "scope": "SSH transport interruption only; host daemons and GPU workloads kept running"
+  }
 }
