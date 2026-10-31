@@ -18,6 +18,9 @@ public struct TerminalActivityTracker: Sendable {
     private var burstStartedAt: Date?
     private var lastInputAt: Date?
     private var exited = false
+    // A resumed CLI redraws its previous conversation. That first burst is history,
+    // not a newly finished turn. Questions and failures still need attention.
+    private var restoring = false
     /// The prompt the user last responded to; it can linger on screen but is no longer a question.
     private var answeredPrompt: String?
     private var visiblePrompt: String?
@@ -33,9 +36,10 @@ public struct TerminalActivityTracker: Sendable {
     /// Quiet needed before we trust what is on screen.
     static let settleTime: TimeInterval = 0.8
 
-    public init() {}
+    public init(restoring: Bool = false) { self.restoring = restoring }
 
     public mutating func noteInput(at now: Date) {
+        restoring = false
         lastInputAt = now
         if let visiblePrompt { answeredPrompt = visiblePrompt }
         if activity == .needsInput {
@@ -86,8 +90,8 @@ public struct TerminalActivityTracker: Sendable {
         detail = resumeHint
     }
 
-    public mutating func restart() {
-        self = TerminalActivityTracker()
+    public mutating func restart(restoring: Bool = false) {
+        self = TerminalActivityTracker(restoring: restoring)
     }
 
     /// The user set the question aside without answering: it counts as answered, so it isn't asked
@@ -127,6 +131,17 @@ public struct TerminalActivityTracker: Sendable {
         // same chooser line has been on screen for settleTime, it is the question, output or not.
         let chooserWaiting = prompt != nil && Self.isChooser(prompt!)
             && promptSince.map { now.timeIntervalSince($0) >= Self.settleTime } == true
+
+        // A live working indicator distinguishes a resumed active turn from transcript replay.
+        if spinnerVisible { restoring = false }
+        if restoring && lastOutputAt != nil && quietFor >= Self.workingWindow && prompt == nil {
+            restoring = false
+            burstStartedAt = nil
+            activity = .idle
+            attention = false
+            detail = nil
+            return before != (activity, attention, detail)
+        }
 
         if chooserWaiting {
             if activity != .needsInput { raise(needsInput: true, detail: prompt) }
@@ -172,6 +187,7 @@ public struct TerminalActivityTracker: Sendable {
     }
 
     private mutating func raise(needsInput: Bool, detail: String?) {
+        restoring = false
         activity = needsInput ? .needsInput : .done
         self.detail = detail
         if !isBeingViewed { attention = true } else if activity == .done { activity = .idle }

@@ -19,6 +19,8 @@ public final class MachineMonitor {
     @ObservationIgnored private var busy = false
     @ObservationIgnored private var pinned: Set<String> = []
     @ObservationIgnored private var hidden: Set<String> = []
+    @ObservationIgnored private var connecting: Set<String> = []
+    @ObservationIgnored private var lastConnect: [String: Date] = [:]
 
     public init(directory: URL) {
         store = directory.appendingPathComponent("machines.json")
@@ -29,7 +31,7 @@ public final class MachineMonitor {
         for r in remotes { publish(MachineVitals(id:r.id, name:r.name, isLocal:false)) }
     }
     public func start() {
-        for config in remotes where config.authority == nil { connect(config) }
+        for config in remotes { connect(config) }
         Task { await refresh() }
         let timer = Timer(timeInterval: 2, repeats: true) { [weak self] _ in Task { @MainActor in await self?.refresh() } }
         self.timer = timer
@@ -47,19 +49,28 @@ public final class MachineMonitor {
         connect(config)
     }
     private func connect(_ config: MachineConfig) {
-        guard let accord, let host = config.sshHost else { return }
+        guard let accord, let host = config.sshHost, !connecting.contains(config.id),
+              Date().timeIntervalSince(lastConnect[config.id] ?? .distantPast) >= 30 else { return }
+        connecting.insert(config.id)
+        lastConnect[config.id] = Date()
         Task {
+            defer { connecting.remove(config.id) }
             do {
                 let authority = try await accord.connectHost(host)
                 guard let index = remotes.firstIndex(where: { $0.id == config.id }) else { return }
                 hidden.remove(authority)
                 StateFile.save(Array(hidden),to:hiddenStore)
                 remotes[index].authority = authority
+                // Discovery can beat SSH alias resolution. Keep the user's existing chip,
+                // rather than a second auto-discovered chip for the same machine.
+                let duplicates = remotes.filter { $0.id != config.id && $0.authority == authority && $0.sshHost == nil }
+                remotes.removeAll { item in duplicates.contains { $0.id == item.id } }
+                for item in duplicates { vitals[item.id] = nil; faces[item.id] = nil }
                 StateFile.save(remotes, to:store)
                 await refresh()
             } catch {
                 var v = MachineVitals(id:config.id,name:config.name,isLocal:false,status:.unreachable)
-                v.message = "Accord connection unavailable; install Accord on this host first"
+                v.message = "Accord connection unavailable. Check the host's Accord service; retrying automatically."
                 publish(v)
             }
         }
@@ -90,6 +101,7 @@ public final class MachineMonitor {
         guard !busy, let accord else { return }
         busy = true
         defer { busy = false }
+        for config in remotes where vitals[config.id]?.status != .ok { connect(config) }
         do {
             let catalog = try await accord.request("hosts")
             let hosts = catalog["hosts"] as? [[String:Any]] ?? []
@@ -105,7 +117,10 @@ public final class MachineMonitor {
                             let existing = self.remotes.first { $0.id == authority || $0.authority == authority || $0.sshHost == hostname || $0.name == hostname }
                             let id = local ? Self.localId : existing?.id ?? authority
                             guard !self.hidden.contains(authority), !self.hidden.contains(id), !self.pinned.contains(id) else { return }
-                            if !local && existing == nil { self.remotes.append(MachineConfig(id:id, name:hostname, sshHost:nil, authority:authority)); StateFile.save(self.remotes,to:self.store) }
+                            if !local && existing == nil {
+                                guard self.connecting.isEmpty else { return }
+                                self.remotes.append(MachineConfig(id:id, name:hostname, sshHost:nil, authority:authority)); StateFile.save(self.remotes,to:self.store)
+                            }
                             self.publish(Self.project(sample, id:id, name:existing?.name ?? hostname, local:local))
                         } catch {
                             let id = local ? Self.localId : self.remotes.first(where: { $0.authority == authority })?.id ?? authority

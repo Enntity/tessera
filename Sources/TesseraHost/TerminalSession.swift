@@ -111,6 +111,7 @@ public final class TerminalSession: NSObject {
     }
 
     private func configureView() {
+        view.onTerminalReply = { [weak self] bytes in self?.process?.send(data: bytes) }
         let theme = TerminalTheme.midnight
         view.terminalDelegate = self
         view.nativeBackgroundColor = NSColor(cgColor: theme.background.cgColor) ?? .black
@@ -201,7 +202,7 @@ public final class TerminalSession: NSObject {
     }
 
     public func start() {
-        tracker.restart()
+        tracker.restart(restoring: hasStarted && command.flatMap(SessionResume.conversationTool(for:)) != nil)
         isSuspended = false
         launchedAt = Date()
         let plan = launchPlan()

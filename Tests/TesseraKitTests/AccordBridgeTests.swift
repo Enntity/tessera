@@ -123,6 +123,7 @@ extension AccordBridgeTests {
         XCTAssertEqual(sessions[0].link,"terminal")
         XCTAssertTrue(sessions[0].snapshot.detail?.contains("15 minutes") == true)
         XCTAssertNil(sessions[0].resumeCommand)
+        XCTAssertEqual(sessions[0].snapshot.activity, .idle, "An automatic agent check-in is not a human question")
     }
 }
 

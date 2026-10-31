@@ -259,7 +259,9 @@ public final class AccordBridge {
             let link = nativeIDs.contains(native) ? native : (view["address"] as? String).map { "accord:" + $0 }
             let at = Date(timeIntervalSince1970:(incident["updated_at"] as? Double ?? 0)/1000)
             return AgentAppSession(id:"overseer:"+id,flavor:.accord,title:"Check-in: " + (view["title"] as? String ?? "Session"),cwd:"Accord overseer",openURL:nil,resumeCommand:nil,
-                snapshot:ConversationSnapshot(items:[ConversationItem(id:id,role:.system,text:detail)],activity:.needsInput,detail:detail,lastEventAt:at),summary:detail,lastActivityAt:at,link:link)
+                // The overseer is asking the agent, not the operator. Keep its evidence visible
+                // without manufacturing a human question; real questions use Accord's inbox.
+                snapshot:ConversationSnapshot(items:[ConversationItem(id:id,role:.system,text:detail)],activity:.idle,detail:detail,lastEventAt:at),summary:detail,lastActivityAt:at,link:link)
         }
     }
 

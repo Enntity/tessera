@@ -193,7 +193,16 @@ public struct TileInfo: Codable, Identifiable, Hashable, Sendable {
         if let line = needs ?? summary ?? detail { return line }
         return shown?.components(separatedBy: "\n").lazy
             .map { $0.trimmingCharacters(in: .whitespaces) }
-            .last { !$0.isEmpty } ?? "Finished"
+            .last { Self.isResultLine($0) } ?? "Finished"
+    }
+
+    /// Terminal UI chrome is useful on the screen, but is not a result preview.
+    static func isResultLine(_ line: String) -> Bool {
+        guard line.contains(where: { $0.isLetter || $0.isNumber }), !line.contains("�") else { return false }
+        let lower = line.lowercased()
+        if ["? for shortcuts", "shift+tab:", "ctrl+x:", "enter:send", "esc to interrupt", "esc twice to interrupt", "ask codex to", "ask devin to", "bypass permissions"].contains(where: { lower.contains($0) }) { return false }
+        if lower.hasPrefix("fusion ·") || lower.hasPrefix("gpt-") && line.contains(" · ") || lower.hasPrefix("worked for ") { return false }
+        return true
     }
 
     /// The lane line when what the tile shows isn't at hand.

@@ -1,0 +1,27 @@
+{
+  "status": "passed",
+  "at": "2026-10-31T21:10:22.845359+00:00",
+  "nativeTests": 267,
+  "checks": {
+    "restoredTranscriptReplay": true,
+    "emulatorRepliesAreNotUserInput": true,
+    "oldDiscoveryDoesNotRequestReview": true,
+    "newCompletionRequestsReview": true,
+    "automaticCheckinsAreNotHumanQuestions": true,
+    "packagedRestart": true,
+    "fourHostsFreshTelemetry": true
+  },
+  "logs": {
+    "tests": "ecb123a36a1a0c535b9fa1609a5d7245a616a1022ae18c1a935e8fa8c475fc37",
+    "build": "6620d5ca01944dae3783a8efb7f7da621b94c6f7dde7bdb8d8f5b1b438d0ad16",
+    "package": "841b3a316b16d5c25c89bdab74b768af6d06e7e40a815321a906985b22e6247f"
+  },
+  "sourceTreeSHA256": "25aa11d0132a9a5ef5f6cbb1b1b6084a92a9268d4c123bb051d49e70a0729afa",
+  "binarySHA256": "6c49757ac7baca70b8ca3101d5f14ab09a59a7decb37c51b61fc6c8a0807b7fa",
+  "hostServiceSource": "b07e272",
+  "limits": [
+    "Live native activation and automatic SSH recovery still to be verified",
+    "No GPU workload or reservation changed",
+    "Development signature; not notarized"
+  ]
+}

@@ -161,6 +161,38 @@ final class GridNavigationTests: XCTestCase {
 final class TerminalActivityTrackerTests: XCTestCase {
     let t0 = Date(timeIntervalSince1970: 1_000_000)
 
+    func testRestoredTranscriptIsNotANewResultButNextTurnIs() {
+        var t = TerminalActivityTracker(restoring: true)
+        for i in 0..<40 { t.noteOutput(bytes: 400, at: t0.addingTimeInterval(Double(i) * 0.1)) }
+        t.tick(now: t0.addingTimeInterval(4), screenTail: ["Previous answer", "? for shortcuts"])
+        t.tick(now: t0.addingTimeInterval(6), screenTail: ["Previous answer", "? for shortcuts"])
+        XCTAssertEqual(t.activity, .idle)
+        XCTAssertFalse(t.attention)
+        for i in 0..<40 { t.noteOutput(bytes: 400, at: t0.addingTimeInterval(10 + Double(i) * 0.1)) }
+        t.tick(now: t0.addingTimeInterval(14), screenTail: [])
+        t.tick(now: t0.addingTimeInterval(16), screenTail: ["New answer"])
+        XCTAssertEqual(t.activity, .done)
+        XCTAssertTrue(t.attention)
+    }
+
+    func testRestorationKeepsApprovalAndLiveWorkVisible() {
+        var asking = TerminalActivityTracker(restoring: true)
+        asking.noteOutput(bytes: 100, at: t0)
+        asking.tick(now: t0.addingTimeInterval(2), screenTail: ["Allow command (y/n)"])
+        XCTAssertEqual(asking.activity, .needsInput)
+        XCTAssertTrue(asking.attention)
+        var working = TerminalActivityTracker(restoring: true)
+        for i in 0..<40 { working.noteOutput(bytes: 400, at: t0.addingTimeInterval(Double(i) * 0.1)) }
+        working.tick(now: t0.addingTimeInterval(4), screenTail: ["Working (esc to interrupt)"])
+        working.tick(now: t0.addingTimeInterval(6), screenTail: ["New result"])
+        XCTAssertEqual(working.activity, .done)
+        XCTAssertTrue(working.attention)
+        var failed = TerminalActivityTracker(restoring: true)
+        failed.noteExit(code: 1)
+        XCTAssertEqual(failed.activity, .failed)
+        XCTAssertTrue(failed.attention)
+    }
+
     func testSustainedOutputThenSilenceIsDoneWithAttention() {
         var t = TerminalActivityTracker()
         for i in 0..<30 { t.noteOutput(bytes: 400, at: t0.addingTimeInterval(Double(i) * 0.1)) }

@@ -107,6 +107,8 @@ with tempfile.TemporaryDirectory(prefix='tessera-app-test-') as temporary:
                              'events': [{'key': 'event', 'kind': 'progress', 'text': 'History survives native app restart'}]}, a['credential'])
         token = None
         for launch in range(2):
+            op('session-report', {'key': f'old-result-{launch}', 'title': 'Historic completed result', 'state': 'done',
+                                 'events': [{'key': f'old-result-event-{launch}', 'kind': 'progress', 'text': 'Finished before Tessera opened'}]}, b['credential'])
             with (home / 'app.log').open('a') as log:
                 start = time.monotonic()
                 proc = subprocess.Popen([str(app / 'Contents/MacOS/Tessera'), '-ApplePersistenceIgnoreState', 'YES',
@@ -123,6 +125,11 @@ with tempfile.TemporaryDirectory(prefix='tessera-app-test-') as temporary:
                     assert all(tile in run('board') for tile in ids)
                     assert 'You are tile ' + ids[0] in run('whoami')
                     eventually(lambda: 'Package demo question?' in run('board') and 'Package demo note' in run('board'))
+                    eventually(lambda: 'Historic completed result' in run('board'))
+                    assert 'Historic completed result' not in run('board', '--waiting'), 'late discovery resurfaced an old completion'
+                    op('session-report', {'key': f'new-result-{launch}', 'title': 'Fresh completed result', 'state': 'done',
+                                         'events': [{'key': f'new-result-event-{launch}', 'kind': 'progress', 'text': 'Finished while Tessera was open'}]}, b['credential'])
+                    eventually(lambda: 'Fresh completed result' in run('board', '--waiting'))
                     for old in ['send', 'inbox', 'ask', 'answer', 'notify', 'resources']:
                         run(old, code=1)
                     inbox = op('inbox', credential=b['credential'])['messages']
@@ -141,4 +148,4 @@ with tempfile.TemporaryDirectory(prefix='tessera-app-test-') as temporary:
     finally:
         stop(daemon)
         hostlog.close()
-print('Packaged app passed: standalone bundled installation, one skill, two agents, discovery, native questions/notes, unread persistence, shared search, telemetry, restart and no legacy commands. launchd activation was not performed.')
+print('Packaged app passed: standalone bundled installation, one skill, two agents, discovery, historical completion baseline, fresh result attention, native questions/notes, unread persistence, shared search, telemetry, restart and no legacy commands. launchd activation was not performed.')

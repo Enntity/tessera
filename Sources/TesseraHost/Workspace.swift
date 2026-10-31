@@ -91,7 +91,7 @@ public final class Workspace {
     private var hiddenAgents: [String: Date] = [:]
     /// The order last saved, app sessions included: they take their places again as they reappear.
     @ObservationIgnored private var savedOrder: [String] = []
-    @ObservationIgnored private var firstAgentScan = true
+    @ObservationIgnored private let attentionBaseline = Date()
     @ObservationIgnored private let directory: URL
 
     public init(accordProfile: URL? = nil) {
@@ -779,12 +779,9 @@ public final class Workspace {
 
     private func syncAgents() {
         let live = agents.sessions
-        if firstAgentScan, !live.isEmpty {
-            // Whatever finished before Tessera opened has been seen elsewhere; don't light it up.
-            firstAgentScan = false
-            let now = Date()
-            for id in live.keys { agentAcknowledged[id] = now }
-        }
+        // Sources arrive independently: a later Accord discovery is still historical if its
+        // last result predates this launch. New results after launch remain unseen.
+        for id in live.keys where agentAcknowledged[id] == nil { agentAcknowledged[id] = attentionBaseline }
         let newest = live.values.map(\.session).sorted { $0.lastActivityAt > $1.lastActivityAt }
         var added: [AgentAppSession] = []
         for a in newest where !order.contains(a.id) {
@@ -794,7 +791,6 @@ public final class Workspace {
                 hiddenAgents[a.id] = nil
                 _ = recentlyClosed.take(a.id)
             }
-            if agentAcknowledged[a.id] == nil { agentAcknowledged[a.id] = .distantPast }
             order.insert(a.id, at: Self.restoredIndex(of: a.id, saved: savedOrder, in: order))
             added.append(a)
         }

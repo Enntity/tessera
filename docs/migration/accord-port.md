@@ -34,15 +34,34 @@ The final native suite passed 264 tests. The optimized packaged app passed two l
 and restarts after the Keychain isolation fix. Source hashes and check results are recorded
 in `qualification.json`.
 
-## Activation boundary
+## Activation and host qualification
 
-The candidate is built separately. The installed Tessera app has not been replaced
-or restarted, and active terminals have not been interrupted. Packaged checks use a
-private host and dynamic loopback ports; they do not replace the live launchd service.
-No LLooM serving workload, Spark daemon or Shrug lifecycle controller was changed.
-A development signature is not a notarized release.
+Tessera was installed and restarted after the original isolated qualification.
+That check missed two live cutover requirements: existing SSH hosts need installed,
+linked Accord daemons, and restored CLI transcripts must not count as fresh results.
+The original receipt in `qualification.json` describes the pre-activation candidate.
+The follow-up repair is recorded in `cutover-repair.json`.
 
-The installed Accord service was separately activated at epoch 11 after source-hash checks,
-private consistent SQLite backups, an admission pause and zero active claims or external
-manager requests. Its prior admission state was restored. The installed Accord skill was
-refreshed and Tessera skill copies were archived outside agent discovery.
+The host cutover installed the qualified standalone Accord package on three hosts
+and upgraded the fourth from the earlier qualification build. The upgrade preserved
+its authority and four closed claims, with a stopped-state backup and rollback.
+All four hosts now provide fresh NVIDIA GPU, temperature, power, and memory readings
+through Accord. No GPU workload or reservation was changed. LLooM still owns its
+existing serving leases; an overdue lease remains visible until its owner resolves it.
+
+Native host presentation retries unavailable SSH links every 30 seconds and reconciles
+SSH aliases with discovered authorities. A future cutover must verify every configured
+host in the running UI, including recovery after a transport interruption; a successful
+localhost sample alone is insufficient.
+
+Restored agent CLIs baseline their initial transcript replay. Terminal device-query
+replies do not count as user input. Approvals, failures, new turns, and active resumed
+work still surface. Historical completed sessions arriving from a later source scan
+remain quiet; new completions after app launch request review. Automatic overseer
+check-ins remain visible as monitoring evidence without becoming human questions.
+Actual operator questions continue through Accord's question queue.
+
+The installed Mac Accord service remains at the previously qualified source and epoch.
+Its original activation used private consistent SQLite backups, an admission pause,
+and zero active claims or external manager requests. Accord is the only published
+agent skill. A development signature is not a notarized release.

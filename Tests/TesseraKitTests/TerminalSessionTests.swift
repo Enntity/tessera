@@ -33,6 +33,24 @@ final class TerminalSessionTests: XCTestCase {
         XCTAssertTrue(waitUntil { session.terminal.screenTail(40).contains { $0.contains("tessera-first-run") } })
     }
 
+    func testRestoredPTYReplayDoesNotRequestReview() throws {
+        let tool = try fakeTool("codex-replay-probe", body: """
+        i=0
+        while [ "$i" -lt 35 ]; do echo "old transcript line $i"; i=$((i+1)); sleep 0.1; done
+        printf '\\033[6n'
+        echo '? for shortcuts'
+        exec sleep 30
+        """)
+        defer { try? FileManager.default.removeItem(at: tool.deletingLastPathComponent()) }
+        let home = try isolatedHome()
+        let session = TerminalSession(command: tool.path, cwd: home.url.path, resuming: true,
+                                      shell: "/bin/zsh", environmentOverrides: home.env)
+        defer { session.terminate() }
+        XCTAssertTrue(waitUntil { session.terminal.screenTail(40).contains { $0.contains("? for shortcuts") } })
+        XCTAssertTrue(waitUntil { session.info.activity == .idle })
+        XCTAssertFalse(session.info.attention)
+    }
+
     func testShutDownKeepsTileAndResumeRunsAgain() {
         let dir = (NSTemporaryDirectory() as NSString).resolvingSymlinksInPath
         let session = TerminalSession(command: "echo tessera-resume-check", cwd: dir)
