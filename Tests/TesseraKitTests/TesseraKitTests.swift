@@ -646,9 +646,12 @@ final class UsageAPITests: XCTestCase {
         mirror.feed(Array("Current session\r\n\u{1b}[5C11%\u{1b}[1Cused\r\n".utf8))
         XCTAssertTrue(mirror.terminal.transcriptLines().contains("     11% used"))
         XCTAssertEqual(windows, [.init(label: "5h", usedPercent: 10, resets: "6:50pm"),
-                                 .init(label: "Week", usedPercent: 20, resets: "Oct 7 at 5am")])
+                                 .init(label: "Week", usedPercent: 20, resets: "Oct 7 at 5am"),
+                                 .init(label: "Week (Fable)", usedPercent: 0)])
         // Still loading: nothing yet. Refused: said so.
-        XCTAssertNil(ClaudeUsageScreen.parse(Array(panel.prefix(6))))
+        guard case .windows(let partial) = ClaudeUsageScreen.parse(Array(panel.prefix(6))) else { return XCTFail("missing session-only quota") }
+        XCTAssertEqual(partial.map(\.label), ["5h"])
+        XCTAssertNil(ClaudeUsageScreen.parse(["Current session", "Loading…"]))
         XCTAssertEqual(ClaudeUsageScreen.parse(["Error: Usage endpoint is rate limited. Please try again in a moment."]),
                        .refused("Error: Usage endpoint is rate limited. Please try again in a moment."))
 
@@ -658,7 +661,7 @@ final class UsageAPITests: XCTestCase {
         // One number: what is left of the window nearest its limit, as the gauge shows.
         XCTAssertEqual(r.headline, "80% left")
         XCTAssertEqual(r.remaining!, 0.8, accuracy: 0.001)
-        XCTAssertEqual(r.lines, ["5h 10% used · resets 6:50pm", "Week 20% used · resets Oct 7 at 5am"])
+        XCTAssertEqual(r.lines, ["5h 10% used · resets 6:50pm", "Week 20% used · resets Oct 7 at 5am", "Week (Fable) 0% used"])
         XCTAssertNil(r.message)
         XCTAssertEqual(UsageAPI.claudeUsageReading(windows, readAt: now, config: config, now: now.addingTimeInterval(3600)).message, "As of 1h ago")
     }

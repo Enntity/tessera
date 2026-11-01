@@ -1,0 +1,25 @@
+{
+  "status": "passed",
+  "at": "2026-11-01T04:26:57.678737+00:00",
+  "nativeTests": 272,
+  "checks": [
+    "Partial and model-specific quota windows",
+    "Window boundaries and redraws",
+    "Immediate publication without request throttling",
+    "Last-good quota restored with original timestamp",
+    "Failure and refusal preserve cached data",
+    "Invalid cache rejected",
+    "Packaged app startup and restart"
+  ],
+  "logs": {
+    "tests": "79d0c22322070f8064787f9be3bd07433888d661dd08232d7b40b861fe4f6639",
+    "build": "8ae6c78c19206bc9e5127e239c01ee6923da7623bba81098200129febfba8445",
+    "package": "a7298f3a5a9f98f31d166ead3cebcc073a0de260f47fcf81dd045d2f17f9f4e6"
+  },
+  "sourceTreeSHA256": "3acf9e3f632b0f776c034beccfb67236f1432576996456e19df8de2e6058913b",
+  "binarySHA256": "8fba0092ecd2b6233db9e8a418d072ab8bd3845f458dcd1e0d81dbd1d7ce450c",
+  "limits": [
+    "Live Claude reading and installed-app cache restart still to be verified",
+    "Development signature; not notarized"
+  ]
+}

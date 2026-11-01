@@ -26,7 +26,18 @@ public final class UsageService {
         didSet { Preferences.store.set(claudeChecksOn, forKey: "tessera.claudeUsageChecks") }
     }
     /// The plan as `/usage` last showed it, and when; and why the last read didn't get it.
-    @ObservationIgnored private var claudePlan: (windows: [ClaudeUsageScreen.Window], at: Date)?
+    struct ClaudePlan: Codable {
+        var schema = 1
+        var windows: [ClaudeUsageScreen.Window]
+        var at: Date
+        func valid(at now: Date = Date()) -> Bool {
+            schema == 1 && at.timeIntervalSince1970.isFinite && at <= now.addingTimeInterval(300)
+                && !windows.isEmpty && windows.allSatisfy { !$0.label.isEmpty && $0.label.count <= 120 && $0.usedPercent.isFinite && (0...100).contains($0.usedPercent) }
+        }
+    }
+    @ObservationIgnored private var claudePlan: ClaudePlan?
+    @ObservationIgnored private var claudeLocalLine: String?
+    @ObservationIgnored private let claudePlanStore: URL
     @ObservationIgnored private var claudePlanNote: String?
     @ObservationIgnored private var claudeProbe: ClaudeUsageProbe?
     /// When `/usage` may next be read: every few minutes, and longer after Anthropic said not now.
@@ -53,8 +64,16 @@ public final class UsageService {
     public init(directory: URL) {
         store = directory.appendingPathComponent("providers.json")
         self.directory = directory
+        claudePlanStore = directory.appendingPathComponent("claude-plan.json")
+        if let saved = StateFile.load(ClaudePlan.self, from: claudePlanStore), saved.valid() {
+            claudePlan = saved
+            claudeProbeAt = saved.at.addingTimeInterval(Self.claudeProbeEvery)
+        }
         // Local plan readers need no key, so they're on by default.
         configs = StateFile.loadList(UsageProviderConfig.self, from: store) ?? [UsageProviderConfig(id: "codex-plan", kind: .codexPlan)]
+        if claudeChecksOn {
+            for config in configs where config.kind == .claudePlan { publishClaudePlan(for: config) }
+        }
     }
 
     public var orderedReadings: [UsageReading] {
@@ -74,7 +93,10 @@ public final class UsageService {
     /// Starts (the user has agreed) or stops Tessera reading Claude Code's `/usage` in the background.
     public func setClaudeChecks(_ on: Bool) {
         claudeChecksOn = on
-        claudePlan = nil
+        if !on {
+            claudePlan = nil
+            try? FileManager.default.removeItem(at: claudePlanStore)
+        }
         claudePlanNote = nil
         claudeProbeAt = .distantPast
         for c in configs where c.kind == .claudePlan { refresh(c, force: true) }
@@ -88,18 +110,42 @@ public final class UsageService {
         probe.run { [weak self] result in
             guard let self else { return }
             self.claudeProbe = nil
-            switch result {
-            case .read(let windows):
-                self.claudePlan = (windows, Date())
-                self.claudePlanNote = nil
-            case .refused:
-                self.claudeProbeAt = Date().addingTimeInterval(3 * Self.claudeProbeEvery)
-                self.claudePlanNote = "Anthropic didn't give the plan limits just now; trying again later."
-            case .failed(let why):
-                self.claudePlanNote = why
-            }
-            self.refresh(config)
+            guard self.claudeChecksOn else { return }
+            self.acceptClaudePlan(result, for: config)
         }
+    }
+
+    /// Publish a completed probe directly: the ordinary request throttle must not delay its result.
+    func acceptClaudePlan(_ result: ClaudeUsageProbe.Result, for config: UsageProviderConfig, at now: Date = Date()) {
+        switch result {
+        case .read(let windows):
+            let plan = ClaudePlan(windows: windows, at: now)
+            guard plan.valid(at: now) else { return }
+            claudePlan = plan
+            StateFile.save(plan, to: claudePlanStore)
+            try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: claudePlanStore.path)
+            claudePlanNote = nil
+        case .refused:
+            claudeProbeAt = now.addingTimeInterval(3 * Self.claudeProbeEvery)
+            claudePlanNote = "Anthropic didn't give the plan limits just now; trying again later."
+        case .failed(let why):
+            claudePlanNote = why
+        }
+        if claudePlan != nil { publishClaudePlan(for: config, now: now) }
+        else if var reading = readings[config.id] {
+            reading.message = claudePlanNote
+            readings[config.id] = reading
+        }
+    }
+
+    private func publishClaudePlan(for config: UsageProviderConfig, now: Date = Date()) {
+        guard let plan = claudePlan else { return }
+        var reading = UsageAPI.claudeUsageReading(plan.windows, readAt: plan.at, config: config, now: now)
+        if let claudeLocalLine { reading.lines.append(claudeLocalLine) }
+        if let note = claudePlanNote {
+            reading.message = "Last read \(plan.at.shortAge(now: now)) ago · \(note)"
+        }
+        readings[config.id] = reading
     }
 
     #if DEBUG
@@ -229,22 +275,21 @@ public final class UsageService {
             if self.claudeChecksOn, signedIn, self.claudeProbe == nil, Date() >= self.claudeProbeAt {
                 self.readClaudePlan(for: config)
             }
-            var reading: UsageReading
-            if self.claudeChecksOn, let plan = self.claudePlan {
-                reading = UsageAPI.claudeUsageReading(plan.windows, readAt: plan.at, config: config)
-                reading.lines.append("Local · 5h \(counted.fiveHours.tokens.compactTokens) · week \(counted.week.tokens.compactTokens) tokens")
-                if reading.message == nil { reading.message = self.claudePlanNote }
+            self.claudeLocalLine = "Local · 5h \(counted.fiveHours.tokens.compactTokens) · week \(counted.week.tokens.compactTokens) tokens"
+            if self.claudeChecksOn, self.claudePlan != nil {
+                self.publishClaudePlan(for: config)
+                if !signedIn { self.readings[config.id]?.fix = Self.claudeSignIn }
             } else {
-                reading = UsageAPI.claudeLocalReading(
+                var reading = UsageAPI.claudeLocalReading(
                     config: config, fiveHours: (counted.fiveHours.tokens, counted.fiveHours.replies),
                     week: (counted.week.tokens, counted.week.replies),
                     limit: counted.limit.map { ($0.window, $0.resetsAt) },
                     note: !signedIn ? (expired ? "Claude Code's sign-in has run out; sign in again for its plan limits."
                                                : "Sign in to Claude Code for its usage and plan limits.")
                         : self.claudeChecksOn ? self.claudePlanNote ?? "Reading plan limits from Claude Code…" : nil)
+                reading.fix = !signedIn ? Self.claudeSignIn : self.claudeChecksOn ? nil : Self.claudeConnect
+                self.readings[config.id] = reading
             }
-            reading.fix = !signedIn ? Self.claudeSignIn : self.claudeChecksOn ? nil : Self.claudeConnect
-            self.readings[config.id] = reading
         }
     }
 
