@@ -20,6 +20,7 @@ public final class AccordBridge {
     public private(set) var tileSummaries: [String: Steward.TileSummary] = [:]
     public private(set) var incidents: [[String: Any]] = []
     public private(set) var projectedSessions: [AgentAppSession] = []
+    public var retainedSessionIDs: Set<String> = []
     @ObservationIgnored public var sessions: (([AgentAppSession]) -> Void)?
     @ObservationIgnored public var nativeAliases: (() -> Set<String>)?
     @ObservationIgnored public var digests: (() -> [Steward.Digest])?
@@ -199,11 +200,14 @@ public final class AccordBridge {
         let address = String(session.id.dropFirst(7)).split(separator:"/",maxSplits:1).map(String.init)
         guard session.id.hasPrefix("accord:"), address.count == 2 else { return session }
         let result = try await request("session-read",args:["id":address[1],"limit":100],host:address[0])
-        var value = session
-        value.snapshot.items = (result["events"] as? [[String:Any]] ?? []).compactMap { event in
+        var value = (result["session"] as? [String: Any]).flatMap { current in
+            Self.project(["authority": address[0], "sessions": [current]], nativeIDs: [], includeNativeHistory: true).first
+        } ?? session
+        let items: [ConversationItem] = (result["events"] as? [[String:Any]] ?? []).compactMap { event in
             guard let body = event["body"] as? String else { return nil }
             return ConversationItem(id:String(describing:event["seq"] ?? UUID().uuidString),role:ConversationItem.Role(rawValue:event["kind"] as? String ?? "") ?? .system,text:Redactor.redact(body),timestamp:(event["at"] as? Double).map { Date(timeIntervalSince1970:$0/1000) })
         }
+        if !items.isEmpty { value.snapshot.items = items }
         return value
     }
     public func connectHost(_ host: String) async throws -> String {
@@ -253,7 +257,11 @@ public final class AccordBridge {
             let host = String(value.id.dropFirst(7)).split(separator:"/").first.map(String.init) ?? ""
             return missing.contains(host)
         }
-        projectedSessions = Self.project(board,nativeIDs:nativeIDs,now:now) + retained
+        let live = Self.project(board,nativeIDs:nativeIDs,now:now)
+        let present = Set(live.map(\.id))
+        let opened = Self.project(board,nativeIDs:[],includeNativeHistory:true,now:now)
+            .filter { retainedSessionIDs.contains($0.id) && !present.contains($0.id) }
+        projectedSessions = live + opened + retained
         sessions?(projectedSessions)
     }
 
@@ -277,9 +285,10 @@ public final class AccordBridge {
                 let progress = (value["progressAt"] as? Double ?? 0) / 1000
                 if ["starting", "working"].contains(state), now.timeIntervalSince1970 - progress > 7200 { return nil }
             }
-            let activity: TileActivity = state == "waiting" || state == "blocked" ? .needsInput : state == "cancelled" ? .exited : TileActivity(rawValue: state) ?? .idle
+            let activity: TileActivity = state == "waiting" ? .idle : state == "blocked" ? .needsInput : state == "cancelled" ? .exited : TileActivity(rawValue: state) ?? .idle
             let at = Date(timeIntervalSince1970: (value["progressAt"] as? Double ?? 0) / 1000)
-            let detail = [value["detail"] as? String, value["summary"] as? String, title].compactMap { $0 }.first { !$0.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty } ?? title
+            let reported = [value["detail"] as? String, value["summary"] as? String, title].compactMap { $0 }.first { !$0.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty } ?? title
+            let detail = source == "agent" ? "Agent report at \(ISO8601DateFormatter().string(from: at)): \(reported)" : reported
             let parent = value["parentSession"] as? [String:Any]
             let parentLink: String? = parent.flatMap { p in
                 guard let source=p["source"] as? String, let id=p["externalId"] as? String else { return nil }

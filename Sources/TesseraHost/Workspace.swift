@@ -450,6 +450,7 @@ public final class Workspace {
         Task {
             let loaded = (try? await accord.history(session)) ?? session
             openedShared[loaded.id] = loaded
+            accord.retainedSessionIDs.insert(loaded.id)
             agents.setExternal(Array(openedShared.values),source:"accord-search")
             for _ in 0..<40 {
                 if exists(loaded.id) { open(loaded.id,inApp:false); return }

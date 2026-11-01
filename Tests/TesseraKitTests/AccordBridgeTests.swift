@@ -124,7 +124,7 @@ extension AccordBridgeTests {
         bridge.acceptSnapshot(board,nativeIDs:[],now:now)
         XCTAssertEqual(bridge.projectedSessions.count,1)
         XCTAssertEqual(bridge.projectedSessions[0].snapshot.items[0].role,.assistant)
-        XCTAssertEqual(bridge.projectedSessions[0].snapshot.items[0].text,"Evaluating checkpoint")
+        XCTAssertEqual(bridge.projectedSessions[0].snapshot.items[0].text,"Agent report at 1970-01-01T02:46:30Z: Evaluating checkpoint")
         let before = bridge.projectedSessions
         bridge.connectionFailed()
         XCTAssertEqual(bridge.projectedSessions,before)
@@ -211,5 +211,32 @@ extension AccordBridgeTests {
         XCTAssertEqual(Workspace.taskOrder(ids,recent:[],activity:times),["new","tie","old"])
         XCTAssertEqual(Workspace.taskOrder(ids,recent:["old"],activity:times),["old","new","tie"])
         XCTAssertEqual(Workspace.taskOrder(ids,recent:["old","old"],activity:times),["old","new","tie"])
+    }
+}
+
+
+extension AccordBridgeTests {
+    func testCachedSearchCannotOverrideNewerLiveState() {
+        func tile(_ title: String, _ state: TileActivity, _ time: Double) -> AgentAppSession {
+            AgentAppSession(id: "accord:host/music", flavor: .accord, title: title, cwd: "", openURL: nil, resumeCommand: nil,
+                snapshot: ConversationSnapshot(items: [], activity: state), lastActivityAt: Date(timeIntervalSince1970: time))
+        }
+        let old = tile("No resources reserved", .needsInput, 10), live = tile("Comparing music", .working, 20)
+        let sources = ["accord-search": [old.id: old], "accord": [live.id: live]]
+        XCTAssertEqual(AgentAppWatcher.mergeSessions(scanned: [:], external: sources)[live.id], live)
+        let done = tile("Finished", .done, 20)
+        XCTAssertEqual(AgentAppWatcher.mergeSessions(scanned: [:], external: ["accord-search": [live.id: live], "accord": [done.id: done]])[done.id], done)
+    }
+    func testOpenedHistoryReceivesCompletionAndWaitingIsNotAQuestion() {
+        let bridge = AccordBridge(), now = Date(timeIntervalSince1970: 100)
+        bridge.retainedSessionIDs = ["accord:host/music"]
+        let waiting: [String: Any] = ["address":"host/music", "source":"agent", "title":"Waiting for a collaborator", "state":"waiting", "detail":"No resources reserved", "progressAt":99000.0]
+        bridge.acceptSnapshot(["authority":"host", "sessions":[waiting]], nativeIDs: [], now:now)
+        XCTAssertEqual(bridge.projectedSessions.first?.snapshot.activity, .idle)
+        XCTAssertTrue(bridge.projectedSessions.first?.snapshot.detail?.hasPrefix("Agent report at ") == true)
+        var done = waiting; done["state"] = "done"; done["title"] = "Finished"; done["progressAt"] = 100000.0
+        bridge.acceptSnapshot(["authority":"host", "sessions":[done]], nativeIDs: [], now:now)
+        XCTAssertEqual(bridge.projectedSessions.first?.title, "Finished")
+        XCTAssertEqual(bridge.projectedSessions.first?.snapshot.activity, .done)
     }
 }
