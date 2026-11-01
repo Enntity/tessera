@@ -193,7 +193,7 @@ public final class FleetService {
             guard let id = r["id"] as? String else { continue }
             let holder = r["holder"] as? [String:Any]
             let claim = holder?["claim"] as? String
-            var view: [String:Any] = ["id":id, "description":r["label"] ?? id, "hosts":r["hosts"] ?? [],"holders":claim.map { [$0] } ?? [],"queue":(r["queue"] as? [[String:Any]] ?? []).compactMap { $0["id"] as? String },"capacity":1]
+            var view: [String:Any] = ["id":id, "label":r["label"] ?? id, "description":r["label"] ?? id, "hosts":r["hosts"] ?? [],"holders":claim.map { [$0] } ?? [],"queue":(r["queue"] as? [[String:Any]] ?? []).compactMap { $0["id"] as? String },"capacity":1]
             if r["state"] as? String == "unknown" { view["error"] = "Controller unavailable; ownership unknown" }
             rs.append(view)
             if let holder, let claim {

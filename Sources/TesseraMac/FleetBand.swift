@@ -52,7 +52,7 @@ struct FleetLaneChip: View {
     var body: some View {
         HStack(spacing: Style.Space.s) {
             Dot(color, lit: lane.state != .free)
-            Text(lane.id).font(Style.ui(.label, .semibold)).foregroundStyle(Style.ink)
+            Text(lane.label).font(Style.ui(.label, .semibold)).foregroundStyle(Style.ink)
             Text(summary).font(Style.caption).foregroundStyle(Style.dim)
         }
         .lineLimit(1)
@@ -75,7 +75,7 @@ struct FleetLaneChip: View {
 
     private var summary: String {
         guard !lane.holders.isEmpty else {
-            return lane.state == .unusable ? "config error" : lane.capacity > 1 ? "free · 0/\(lane.capacity)" : "free"
+            return lane.state == .unusable ? "unknown" : lane.capacity > 1 ? "unclaimed · 0/\(lane.capacity)" : "unclaimed"
         }
         var parts = [lane.holders.joined(separator: ", ")]
         if lane.capacity > 1 { parts.append("\(lane.holders.count)/\(lane.capacity)") }

@@ -14,6 +14,7 @@ public enum LLoomSchedule {
 
     public struct Resource: Decodable, Equatable, Sendable, Identifiable {
         public var id: String
+        public var label: String?
         public var description: String?
         public var hosts: [String]?
         public var capacity: Int?
@@ -199,6 +200,7 @@ public enum LLoomSchedule {
         public enum State: Sendable { case free, held, attention, unusable }
         public var id: String
         public var state: State
+        public var label: String
         /// Who holds it, the soonest-ending first.
         public var holders: [String]
         public var purpose: String?
@@ -219,13 +221,13 @@ public enum LLoomSchedule {
             let state: Lane.State = resource.error != nil ? .unusable
                 : held.contains { $0.state == "stuck" || $0.warnedAt != nil } ? .attention
                 : held.isEmpty ? .free : .held
-            var help = [resource.description, resource.hosts.map { $0.joined(separator: ", ") }].compactMap { $0 }
+            var help = [resource.id, resource.description, resource.hosts.map { $0.joined(separator: ", ") }].compactMap { $0 }
             if let error = resource.error { help.append(error) }
             for lease in held {
                 help.append("\(lease.owner) (\(lease.state))" + (lease.purpose.map { ": \($0)" } ?? "") + (lease.error.map { " — \($0)" } ?? ""))
             }
             if !queued.isEmpty { help.append("Waiting: " + queued.map(\.owner).joined(separator: ", ")) }
-            return Lane(id: resource.id, state: state, holders: held.map(\.owner), purpose: held.first?.purpose,
+            return Lane(id: resource.id, state: state, label: resource.label ?? resource.id, holders: held.map(\.owner), purpose: held.first?.purpose,
                         remaining: remaining, queued: queued.count, capacity: capacity, help: help.joined(separator: "\n"))
         }
     }
