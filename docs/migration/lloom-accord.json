@@ -1,0 +1,28 @@
+{
+  "status": "passed",
+  "binarySHA256": "babe09d1f2864d588f748a3fcce1c6a0d67ab2a0667a283ead2f5eb88aa76f38",
+  "swiftTests": 272,
+  "installerChecks": "passed",
+  "packagedChecks": "passed",
+  "accordPackageSHA256": "8b52a1da49c881a49aa1ed14c3756085ea0040b1237af296cc3f2f3f7367f51e",
+  "installed": {
+    "status": "passed",
+    "pid": 23714,
+    "nativeTiles": 13,
+    "nativeTools": [
+      "board",
+      "read_tile",
+      "whoami"
+    ],
+    "freshAccordNativeObservations": 14,
+    "telemetryStale": false,
+    "sourceCommit": "e070c2f099d99d619fdbea658d2c34602e44f568",
+    "onlyAccordSkill": true,
+    "setupMarker": true
+  },
+  "visibleChecks": {
+    "fourRemoteTelemetryBadges": true,
+    "claudeQuotaPercentVisible": true,
+    "claudeRemainingPercent": 83
+  }
+}
