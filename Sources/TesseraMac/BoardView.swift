@@ -228,7 +228,26 @@ struct TileView: View {
         // (An open tile's panel says it is the one; its ring would only show past the panel's edge.)
         TileCard(info: info, isSelected: workspace.selectedId == info.id && workspace.expandedId != info.id, isHovered: hovering, compact: compact,
                  mark: workspace.dock.contains(info.id) ? AppModel.dockSymbol : nil) {
-            content
+            VStack(spacing: 0) {
+                content.frame(maxHeight: .infinity)
+                let related = workspace.relatedSessions(info.id)
+                if !related.isEmpty {
+                    Divider()
+                    Menu {
+                        ForEach(related) { child in
+                            Button("\(child.title) · \(child.snapshot.activity.rawValue)") { workspace.open(child.id,inApp:false) }
+                        }
+                    } label: {
+                        HStack {
+                            Image(systemName:"person.2")
+                            Text("\(related.count) related \(related.count == 1 ? "session" : "sessions")")
+                            Spacer()
+                            if related.contains(where: { $0.snapshot.activity == .needsInput }) { Image(systemName:"exclamationmark.circle.fill").foregroundStyle(.orange) }
+                            Text(related.first?.title ?? "").lineLimit(1)
+                        }.font(Style.caption).padding(8)
+                    }.menuStyle(.borderlessButton)
+                }
+            }
         }
         .environment(\.tesseraMotion, onScreen)
         .onGeometryChange(for: Bool.self) { g in

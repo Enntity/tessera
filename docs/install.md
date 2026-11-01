@@ -157,3 +157,9 @@ products use it. Retired skill customizations remain in the archive described ab
 not delete its board or conversations. Tessera's state is under
 `~/Library/Application Support/Tessera`; provider keys are in Keychain. Do not delete state just
 to upgrade or reinstall.
+
+## Task cards and order
+
+Accord observations of a known native session share its existing task card. Verified child sessions appear in its related-sessions menu, with requests for attention carried up to the parent. Independent sessions stay separate. Grouping uses native identities and parent metadata, never similar names or working directories.
+
+The default order is Recently opened: tasks move when you open them, not whenever an agent writes output. Use the sort menu for Manual order; dragging a card also switches to manual.

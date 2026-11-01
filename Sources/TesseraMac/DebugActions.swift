@@ -217,6 +217,7 @@ extension AppModel {
             "selectedId": workspace.selectedId ?? "", "openId": workspace.expandedId ?? "",
             "openURL": workspace.expandedId.flatMap(workspace.info)?.url ?? "",
             "visible": workspace.visibleIds.map(title), "tiles": workspace.order.count,
+            "taskSort": workspace.boardSort.rawValue, "related": Dictionary(uniqueKeysWithValues: workspace.visibleIds.map { ($0,workspace.relatedSessions($0).map(\.title)) }),
             "filter": "\(workspace.filter)", "tabs": workspace.groups.list.map { [$0.name: $0.tileIds.map(title)] },
             "query": workspace.query.text, "chips": Dictionary(uniqueKeysWithValues: BoardQuery.Chip.allCases.map {
                 ($0.rawValue + (workspace.query.chips.contains($0) ? " on" : ""), workspace.count($0))

@@ -192,3 +192,24 @@ extension AccordBridgeTests {
         XCTAssertTrue(board.resources.allSatisfy { $0.error != nil })
     }
 }
+
+extension AccordBridgeTests {
+    func testNativeCLIAliasSuppressesDesktopDuplicateAndParentLinkIsPreserved() {
+        let now=Date(timeIntervalSince1970:10000)
+        let base:[String:Any] = ["source":"claude","state":"working","progressAt":9990000.0]
+        let native=base.merging(["address":"local/native","externalId":"cli-id","title":"Main task"]) { _,b in b }
+        let child=base.merging(["address":"local/child","externalId":"cli-id/agent-1","title":"Review","parentSession":["source":"claude","externalId":"cli-id"]]) { _,b in b }
+        let proxy:[String:Any] = ["address":"remote/proxy","source":"agent","title":"Resource holder","state":"working","progressAt":9990000.0,"originAddress":"local/owner"]
+        let projected=AccordBridge.project(["authority":"local","sessions":[native,child,proxy]],nativeIDs:["claude:local-desktop","claude:cli-id"],now:now)
+        XCTAssertEqual(projected.map(\.id),["accord:local/child"])
+        XCTAssertEqual(projected.first?.link,"claude:cli-id")
+        XCTAssertTrue(AccordBridge.project(["authority":"other","sessions":[child]],nativeIDs:[],now:now).first?.link?.hasPrefix("accord:local/observed-") == true)
+    }
+    func testTaskMRUUsesDeliberateOpensAndStableTies() {
+        let ids=["old","new","tie"]
+        let times=["old":Date(timeIntervalSince1970:1),"new":Date(timeIntervalSince1970:2),"tie":Date(timeIntervalSince1970:2)]
+        XCTAssertEqual(Workspace.taskOrder(ids,recent:[],activity:times),["new","tie","old"])
+        XCTAssertEqual(Workspace.taskOrder(ids,recent:["old"],activity:times),["old","new","tie"])
+        XCTAssertEqual(Workspace.taskOrder(ids,recent:["old","old"],activity:times),["old","new","tie"])
+    }
+}

@@ -21,6 +21,7 @@ public final class AccordBridge {
     public private(set) var incidents: [[String: Any]] = []
     public private(set) var projectedSessions: [AgentAppSession] = []
     @ObservationIgnored public var sessions: (([AgentAppSession]) -> Void)?
+    @ObservationIgnored public var nativeAliases: (() -> Set<String>)?
     @ObservationIgnored public var digests: (() -> [Steward.Digest])?
     @ObservationIgnored public var paused: (() -> Bool)?
     @ObservationIgnored public var deliver: ((String, String, String, String, Bool) -> Bool)?
@@ -150,7 +151,7 @@ public final class AccordBridge {
                 let details = value["summaryDetails"] as? [String:Any] ?? [:]
                 return (tile, Steward.TileSummary(summary:summary, blocked:details["blocked"] as? Bool ?? false, needs:details["needs"] as? String))
             }, uniquingKeysWith: { _, latest in latest })
-            acceptSnapshot(board, nativeIDs: current)
+            acceptSnapshot(board, nativeIDs: current.union(nativeAliases?() ?? []))
             incidents = board["incidents"] as? [[String: Any]] ?? []
             questions?(board["questions"] as? [[String: Any]] ?? [])
             for (id, answer) in answers?() ?? [] where !answered.contains(id) {
@@ -262,6 +263,8 @@ public final class AccordBridge {
         return ((board["sessions"] as? [[String: Any]]) ?? []).compactMap { value in
             guard value["private"] as? Bool != true, let address = value["address"] as? String,
                   let title = value["title"] as? String, let source = value["source"] as? String else { return nil }
+            // Remote reservation principals mirror the owner's native session; they are not tasks.
+            if !includeNativeHistory, value["originAddress"] as? String != nil || (source == "agent" && address.split(separator:"/").last?.hasPrefix("remote-") == true) { return nil }
             let local = address.split(separator: "/").first.map(String.init) == authority
             let external = value["externalId"] as? String ?? ""
             if local && ((source == "tessera" && !includeNativeHistory) || nativeIDs.contains(source + ":" + external)) { return nil }
@@ -277,10 +280,18 @@ public final class AccordBridge {
             let activity: TileActivity = state == "waiting" || state == "blocked" ? .needsInput : state == "cancelled" ? .exited : TileActivity(rawValue: state) ?? .idle
             let at = Date(timeIntervalSince1970: (value["progressAt"] as? Double ?? 0) / 1000)
             let detail = [value["detail"] as? String, value["summary"] as? String, title].compactMap { $0 }.first { !$0.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty } ?? title
+            let parent = value["parentSession"] as? [String:Any]
+            let parentLink: String? = parent.flatMap { p in
+                guard let source=p["source"] as? String, let id=p["externalId"] as? String else { return nil }
+                if local { return source == "tessera" ? id : source + ":" + id }
+                guard let host=address.split(separator:"/").first else { return nil }
+                let digest=SHA256.hash(data:Data((source+"/"+id).utf8)).map { String(format:"%02x",$0) }.joined()
+                return "accord:"+host+"/observed-"+String(digest.prefix(40))
+            }
             return AgentAppSession(id: "accord:" + address, flavor: .accord, title: title,
                 cwd: value["location"] as? String ?? "", openURL: nil, resumeCommand: nil,
                 snapshot: ConversationSnapshot(items: [ConversationItem(id: "summary", role: .assistant, text: Redactor.redact(detail))], activity: activity, detail: detail, lastEventAt: at),
-                summary: value["summary"] as? String, lastActivityAt: at)
+                summary: value["summary"] as? String, lastActivityAt: at, link: parentLink)
         }
     }
 

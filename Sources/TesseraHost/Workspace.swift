@@ -12,6 +12,12 @@ public final class Workspace {
         case all, group(String)
     }
 
+    public enum BoardSort: String, CaseIterable { case recent, manual }
+    public var boardSort = BoardSort(rawValue: Preferences.store.string(forKey:"tessera.boardSort") ?? "recent") ?? .recent {
+        didSet { Preferences.store.set(boardSort.rawValue,forKey:"tessera.boardSort") }
+    }
+    private var recentlyUsed = Preferences.store.stringArray(forKey:"tessera.recentTasks") ?? []
+    private var arrivalActivity: [String:Date] = [:]
     public private(set) var order: [String] = []
     public private(set) var terminals: [String: TerminalSession] = [:]
     public private(set) var browsers: [String: BrowserSession] = [:]
@@ -117,7 +123,7 @@ public final class Workspace {
     public func start() {
         restore()
         observe({ [weak self] in
-            let tiles = self?.allTiles ?? []
+            let tiles = self?.taskTiles ?? []
             return (BoardState(tiles), BoardQuery.holdings(of: tiles))
         }) { [weak self] state, holdings in
             guard let self, self.state != state || self.holdings != holdings else { return }
@@ -149,6 +155,7 @@ public final class Workspace {
         }
         steward.start()
         accord.digests = { [weak self] in self?.stewardDigests().filter { !$0.id.hasPrefix("accord:") && ![AgentFlavor.lloom.rawValue, AgentFlavor.agentDesk.rawValue, AgentFlavor.accord.rawValue].contains($0.flavor) } ?? [] }
+        accord.nativeAliases = { [weak self] in self?.nativeSessionAliases ?? [] }
         accord.sessions = { [weak self] values in self?.agents.setExternal(values, source: "accord") }
         accord.paused = { [weak self] in self?.agentTools.privacy() ?? true }
         accord.deliver = { [weak self] delivery, tile, sender, text, wantsTyping in
@@ -186,6 +193,14 @@ public final class Workspace {
         }
         info.summary = accord.summaries[id] ?? steward.summaries[id]?.summary
         info.needs = steward.summaries[id]?.needs ?? steward.brief?.attention.first { $0.id == id }?.why
+        let children = relatedSessions(id)
+        if let waiting = children.first(where: { $0.snapshot.activity == .needsInput }) {
+            info.activity = .needsInput
+            info.needs = waiting.snapshot.detail ?? waiting.title
+            info.attention = true
+        } else if children.contains(where: { $0.snapshot.activity == .working }), ![TileActivity.needsInput,.failed].contains(info.activity) {
+            info.activity = .working
+        }
         if info.needs?.isEmpty == true { info.needs = nil }
         return info
     }
@@ -195,31 +210,39 @@ public final class Workspace {
     public func exists(_ id: String) -> Bool { order.contains(id) }
 
     public var allTiles: [TileInfo] { order.compactMap(info) }
+    public var taskIDs: [String] { order.filter { linkedConversation($0) == nil } }
+    public var taskTiles: [TileInfo] { taskIDs.compactMap(info) }
 
     /// The tiles the board shows, in order: the tab's, narrowed by the filter. Reads membership and
     /// `holdings`, not every tile's data.
     public var visibleIds: [String] {
         // (Unfiltered, the board doesn't depend on what the chips hold.)
-        query.isEmpty ? tabIds : query.narrow(tabIds, found: found, holdings: holdings, keeping: expandedId)
+        let candidates = query.isEmpty ? tabIds : query.narrow(tabIds, found: found, holdings: holdings, keeping: expandedId)
+        return candidates.filter { id in
+            guard id != expandedId, let parent=linkedConversation(id) else { return true }
+            return !candidates.contains(parent)
+        }
     }
 
     /// The number on a filter chip (see `BoardQuery.count`).
     public func count(_ chip: BoardQuery.Chip) -> Int {
-        query.count(chip, in: tabIds, found: found, holdings: holdings)
+        query.count(chip, in: tabIds.filter { linkedConversation($0) == nil }, found: found, holdings: holdings)
     }
 
     /// How many tiles the chips have to narrow: the tab's, or those of them the typed text found.
     public var findable: Int {
-        found.map { found in tabIds.filter(found.contains).count } ?? tabIds.count
+        let tasks = tabIds.filter { linkedConversation($0) == nil }
+        return found.map { found in tasks.filter(found.contains).count } ?? tasks.count
     }
 
     /// The tiles of the tab being viewed, before the filter narrows them.
     public var tabIds: [String] {
+        let sorted = boardSort == .manual ? order : Self.taskOrder(order,recent:recentlyUsed,activity:arrivalActivity)
         switch filter {
-        case .all: return order
+        case .all: return sorted
         case .group(let g):
             let members = groups.members(of: g)
-            return order.filter { members.contains($0) || $0 == expandedId }
+            return sorted.filter { members.contains($0) || $0 == expandedId || linkedConversation($0).map(members.contains) == true }
         }
     }
 
@@ -370,6 +393,7 @@ public final class Workspace {
 
     public func move(_ id: String, before target: String) {
         guard id != target, let from = order.firstIndex(of: id) else { return }
+        boardSort = .manual
         order.remove(at: from)
         let to = order.firstIndex(of: target) ?? order.endIndex
         order.insert(id, at: to)
@@ -499,6 +523,9 @@ public final class Workspace {
             return open(conversation, inApp: true, nativeAt: rect)
         }
         opened.note(id)
+        recentlyUsed.removeAll { $0 == id }; recentlyUsed.insert(id,at:0)
+        recentlyUsed = Array(recentlyUsed.prefix(200))
+        Preferences.store.set(recentlyUsed,forKey:"tessera.recentTasks")
         if app(opening: id, inApp: inApp) != nil {
             collapse()
             select(id)
@@ -738,6 +765,36 @@ public final class Workspace {
         agents.setExternal(desk.sessions, source: "desk")
     }
 
+    /// Canonical native identities, including Claude desktop's distinct CLI session ID.
+    public var nativeSessionAliases: Set<String> {
+        var ids=Set(order.filter { !$0.hasPrefix("accord:") })
+        for t in terminals.values where [.codex,.claude].contains(t.info.flavor) { if let id=t.sessionId { ids.insert((t.info.flavor == .codex ? "codex:" : "claude:")+id) } }
+        for a in agents.sessions.values.map(\.session) where a.flavor != .accord {
+            if let command=a.resumeCommand {
+                let words=command.split(separator:" ").map(String.init)
+                if let i=words.firstIndex(where: { $0 == "--resume" || $0 == "resume" }), i+1<words.count, SessionResume.isSafeId(words[i+1]) {
+                    ids.insert((words.first == "codex" ? "codex:" : "claude:")+words[i+1])
+                }
+            }
+        }
+        return ids
+    }
+    /// MRU follows deliberate opens, not tool traffic. Arrival times seed unopened tasks once.
+    nonisolated static func taskOrder(_ ids: [String], recent: [String], activity: [String:Date]) -> [String] {
+        let ranks=Dictionary(recent.enumerated().map { ($0.element,$0.offset) },uniquingKeysWith: { a,_ in a })
+        let positions=Dictionary(ids.enumerated().map { ($0.element,$0.offset) },uniquingKeysWith: { a,_ in a })
+        return ids.sorted { a,b in
+            let ar=ranks[a] ?? Int.max, br=ranks[b] ?? Int.max
+            if ar != br { return ar < br }
+            let at=activity[a] ?? .distantPast, bt=activity[b] ?? .distantPast
+            return at == bt ? positions[a]! < positions[b]! : at > bt
+        }
+    }
+    public func relatedSessions(_ id: String) -> [AgentAppSession] {
+        order.compactMap { agents.session($0) }.filter { linkedConversation($0.id) == id }
+            .sorted { $0.lastActivityAt > $1.lastActivityAt }
+    }
+
     /// The board as the steward reads it: every tile with what it shows.
     private func stewardDigests() -> [Steward.Digest] {
         let now = Date()
@@ -791,6 +848,7 @@ public final class Workspace {
                 hiddenAgents[a.id] = nil
                 _ = recentlyClosed.take(a.id)
             }
+            arrivalActivity[a.id] = a.lastActivityAt
             order.insert(a.id, at: Self.restoredIndex(of: a.id, saved: savedOrder, in: order))
             added.append(a)
         }
@@ -815,6 +873,7 @@ public final class Workspace {
         session.onResumableChange = { [weak self] in self?.save() }
         session.onOpenLink = { [weak self] url in self?.onLink?(url) }
         terminals[session.id] = session
+        arrivalActivity[session.id] = session.info.lastActivityAt
     }
 
     // MARK: Session binding

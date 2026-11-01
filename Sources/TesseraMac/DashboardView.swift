@@ -392,6 +392,12 @@ struct TabStrip: View {
             tabs(workspace, state)
             // The chips take the room they need first; the tabs scroll in the rest.
             FilterChips().layoutPriority(1)
+            Menu {
+                Button("Recently opened" + (workspace.boardSort == .recent ? " ✓" : "")) { workspace.boardSort = .recent }
+                Button("Manual order" + (workspace.boardSort == .manual ? " ✓" : "")) { workspace.boardSort = .manual }
+            } label: { Image(systemName:"arrow.up.arrow.down") }
+            .menuStyle(.borderlessButton).frame(width:24).padding(.trailing,12)
+            .help("Task order. Recently opened stays stable during background activity; dragging switches to manual.")
         }
         .frame(height: Style.Metrics.strip)
         .chromeSurface(rule: .bottom)
@@ -401,7 +407,7 @@ struct TabStrip: View {
     private func tabs(_ workspace: Workspace, _ state: BoardState) -> some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: Style.Space.xxs) {
-                TabChip(title: "All", count: workspace.order.count,
+                TabChip(title: "All", count: workspace.taskIDs.count,
                         selected: workspace.filter == .all, dropTile: { file($0, into: nil) }) { model.onBoard { $0.filter = .all } }
                 if !workspace.groups.list.isEmpty {
                     Hairline(.vertical).frame(height: Style.Space.xl).padding(.horizontal, Style.Space.xs)

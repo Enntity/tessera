@@ -1,0 +1,16 @@
+{
+  "status": "passed",
+  "visible": [
+    "Local shell",
+    "Evaluate the model",
+    "Independent task"
+  ],
+  "related": {
+    "accord:22fa9b61-d6be-4b81-9f1c-3b57de147792/observed-41a1b2deaed188e2c5bb50606589345c35545892": [],
+    "claude:local_ui-proof": [
+      "Review evaluation results"
+    ],
+    "proof-terminal": []
+  },
+  "screenshot": "board.png"
+}
