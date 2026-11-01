@@ -130,11 +130,13 @@ public final class FleetService {
                 }
                 let schedules = try await accord.request("manager-schedules")
                 let managers = schedules["managers"] as? [[String:Any]] ?? []
-                guard managers.allSatisfy({ $0["state"] as? String == "observed" }) else { throw Failure("Accord reports an unreachable resource manager; ownership is unknown") }
-                let resources = try await accord.request("resources")
-                let jobs = try await accord.request("jobs")
+                guard Self.managersReachable(managers) else { throw Failure("Accord reports an unreachable resource manager; ownership is unknown") }
+                let hosts = try await accord.request("hosts")
+                let fleet = try await Self.nativeFleet(hosts: hosts["hosts"] as? [[String:Any]] ?? []) { operation, host in
+                    try await accord.request(operation, host:host)
+                }
                 guard self.isVisible else { return }
-                self.apply(try Self.project(resources:resources["resources"] as? [[String:Any]] ?? [], jobs:jobs["jobs"] as? [[String:Any]] ?? [], managers:managers))
+                self.apply(try Self.project(resources:fleet.resources, jobs:fleet.jobs, managers:managers))
             } catch {
                 guard self.isVisible else { return }
                 self.retryAt = Date().addingTimeInterval(10)
@@ -142,6 +144,29 @@ public final class FleetService {
                 if self.status != .failed(message) { self.status = .failed(message) }
             }
         }
+    }
+
+    static func managersReachable(_ managers: [[String:Any]]) -> Bool {
+        managers.allSatisfy { ["observed", "migrated"].contains($0["state"] as? String ?? "") }
+    }
+
+    /// Read each authority directly, including migrated managers' native resources.
+    /// A failed host preserves the last board rather than presenting its assets as free.
+    static func nativeFleet(hosts: [[String:Any]], fetch: (String, String) async throws -> [String:Any]) async throws -> (resources: [[String:Any]], jobs: [[String:Any]]) {
+        var resources: [[String:Any]] = [], jobs: [[String:Any]] = []
+        var seen = Set<String>()
+        for host in hosts {
+            guard let authority = host["authority"] as? String, seen.insert(authority).inserted else { continue }
+            let r = try await fetch("resources", authority)
+            let j = try await fetch("jobs", authority)
+            resources += (r["resources"] as? [[String:Any]] ?? []).filter { $0["manager"] == nil }
+            jobs += (j["jobs"] as? [[String:Any]] ?? []).map { job in
+                var item = job
+                if let id = job["id"] as? String { item["id"] = authority + "/" + id }
+                return item
+            }
+        }
+        return (resources, jobs)
     }
 
     /// A view projection, never a second scheduler. Preserve every delegated job/lease field.

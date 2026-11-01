@@ -162,3 +162,19 @@ extension AccordBridgeTests {
         XCTAssertEqual(writes,0)
     }
 }
+
+extension AccordBridgeTests {
+    func testMigratedFleetReadsNativeResourcesAcrossAuthorities() async throws {
+        XCTAssertTrue(FleetService.managersReachable([["state":"migrated"], ["state":"observed"]]))
+        XCTAssertFalse(FleetService.managersReachable([["state":"unknown"]]))
+        let fleet = try await FleetService.nativeFleet(hosts:[["authority":"mac"], ["authority":"spark"], ["authority":"spark"]]) { operation, host in
+            if operation == "resources" { return ["resources":[["id":host+"/gpu", "state":"unknown"]]] }
+            return ["jobs":[["id":"same", "title":"Serving", "state":"working"]]]
+        }
+        XCTAssertEqual(fleet.resources.count,2)
+        let board = try FleetService.project(resources:fleet.resources, jobs:fleet.jobs, managers:[["name":"lloom", "state":"migrated"]])
+        XCTAssertEqual(board.resources.map(\.id),["mac/gpu","spark/gpu"])
+        XCTAssertEqual(Set(board.jobs.map(\.id)),Set(["accord:mac/same","accord:spark/same"]))
+        XCTAssertTrue(board.resources.allSatisfy { $0.error != nil })
+    }
+}
