@@ -114,17 +114,29 @@ extension AccordBridgeTests {
 }
 
 extension AccordBridgeTests {
-    func testOverseerProjectsOnlyOpenNonprivateEvidenceAndLinksToNativeSession() {
-        let board: [String:Any] = ["sessions":[["id":"s","source":"tessera","externalId":"terminal","title":"Worker"],
-            ["id":"p","source":"agent","title":"Private","private":true]],
-            "incidents":[["id":"one","session_id":"s","state":"open","evidence":["kind":"quiet-session","quietMs":900000]],
-                         ["id":"two","session_id":"p","state":"open"], ["id":"three","session_id":"s","state":"resolved"]]]
-        let sessions = AccordBridge.projectIncidents(board,nativeIDs:["terminal"])
-        XCTAssertEqual(sessions.count,1)
-        XCTAssertEqual(sessions[0].link,"terminal")
-        XCTAssertTrue(sessions[0].snapshot.detail?.contains("15 minutes") == true)
-        XCTAssertNil(sessions[0].resumeCommand)
-        XCTAssertEqual(sessions[0].snapshot.activity, .idle, "An automatic agent check-in is not a human question")
+    func testSharedBoardKeepsLastSnapshotOnFailuresAndDoesNotPromoteCheckinsOrOldSessions() {
+        let bridge = AccordBridge(), now = Date(timeIntervalSince1970:10000)
+        let session: [String:Any] = ["address":"remote/live","source":"agent","title":"Training","state":"working","progressAt":9990000.0,"summary":"Evaluating checkpoint"]
+        let board: [String:Any] = ["authority":"local","sessions":[session,
+            ["address":"local/old","source":"agent","title":"Old","state":"working","progressAt":1.0],
+            ["address":"local/exited","source":"agent","title":"Ended","state":"exited"]],
+            "incidents":[["id":"ping","state":"open","session_id":"live"]]]
+        bridge.acceptSnapshot(board,nativeIDs:[],now:now)
+        XCTAssertEqual(bridge.projectedSessions.count,1)
+        XCTAssertEqual(bridge.projectedSessions[0].snapshot.items[0].role,.assistant)
+        XCTAssertEqual(bridge.projectedSessions[0].snapshot.items[0].text,"Evaluating checkpoint")
+        let before = bridge.projectedSessions
+        bridge.connectionFailed()
+        XCTAssertEqual(bridge.projectedSessions,before)
+        bridge.acceptSnapshot(["sessions":[],"hosts":[["authority":"remote","status":"unknown"]]],nativeIDs:[],now:now)
+        XCTAssertEqual(bridge.projectedSessions,before)
+        bridge.acceptSnapshot(["sessions":[],"hosts":[["authority":"remote","status":"observed"]]],nativeIDs:[],now:now)
+        XCTAssertTrue(bridge.projectedSessions.isEmpty)
+        XCTAssertEqual(AccordBridge.project(board,nativeIDs:[],includeNativeHistory:true).count,3)
+    }
+    func testBoundAgentDoesNotDuplicateNativeTile() {
+        let row: [String:Any] = ["address":"local/agent","source":"agent","title":"Worker","state":"working","progressAt":9990000.0,"nativeSession":["source":"codex","externalId":"thread"]]
+        XCTAssertTrue(AccordBridge.project(["authority":"local","sessions":[row]],nativeIDs:["codex:thread"],now:Date(timeIntervalSince1970:10000)).isEmpty)
     }
 }
 

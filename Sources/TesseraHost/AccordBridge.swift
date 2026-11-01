@@ -19,6 +19,7 @@ public final class AccordBridge {
     public private(set) var summaries: [String: String] = [:]
     public private(set) var tileSummaries: [String: Steward.TileSummary] = [:]
     public private(set) var incidents: [[String: Any]] = []
+    public private(set) var projectedSessions: [AgentAppSession] = []
     @ObservationIgnored public var sessions: (([AgentAppSession]) -> Void)?
     @ObservationIgnored public var digests: (() -> [Steward.Digest])?
     @ObservationIgnored public var paused: (() -> Bool)?
@@ -119,7 +120,7 @@ public final class AccordBridge {
                 wasPrivate = privacy
                 seen.removeAll()
             }
-            if privacy { summaries.removeAll(); tileSummaries.removeAll(); incidents.removeAll(); sessions?([]); connected = true; return }
+            if privacy { summaries.removeAll(); tileSummaries.removeAll(); incidents.removeAll(); projectedSessions = []; sessions?([]); connected = true; return }
             let values = digests?() ?? []
             for digest in values.filter({ seen[$0.id] != fingerprint($0) }).sorted(by: { (published[$0.id] ?? .distantPast) < (published[$1.id] ?? .distantPast) }).prefix(16) {
                 let state = digest.state == "needsInput" ? "waiting" : digest.state
@@ -149,7 +150,7 @@ public final class AccordBridge {
                 let details = value["summaryDetails"] as? [String:Any] ?? [:]
                 return (tile, Steward.TileSummary(summary:summary, blocked:details["blocked"] as? Bool ?? false, needs:details["needs"] as? String))
             }, uniquingKeysWith: { _, latest in latest })
-            sessions?(Self.project(board, nativeIDs: current) + Self.projectIncidents(board,nativeIDs:current))
+            acceptSnapshot(board, nativeIDs: current)
             incidents = board["incidents"] as? [[String: Any]] ?? []
             questions?(board["questions"] as? [[String: Any]] ?? [])
             for (id, answer) in answers?() ?? [] where !answered.contains(id) {
@@ -176,7 +177,7 @@ public final class AccordBridge {
             let operatorInbox = try await operation(c, "inbox", [:])
             notes?(operatorInbox["messages"] as? [[String: Any]] ?? [])
             connected = true
-        } catch { connected = false; summaries.removeAll(); tileSummaries.removeAll(); incidents.removeAll(); sessions?([]) }
+        } catch { connectionFailed() }
     }
     public func search(_ query: String) async {
         let q = String(query.trimmingCharacters(in:.whitespacesAndNewlines).prefix(200))
@@ -241,32 +242,22 @@ public final class AccordBridge {
         let result = try await call(c, path: "v1/collaboration", body:["operation":"session-read", "host":address[0], "args":["id":address[1]]])
         return Redactor.redact(((result["events"] as? [[String: Any]]) ?? []).map { "\($0["kind"] as? String ?? "event"): \($0["body"] as? String ?? "")" }.joined(separator:"\n"))
     }
-    static func projectIncidents(_ board: [String:Any], nativeIDs: Set<String>) -> [AgentAppSession] {
-        let views = board["sessions"] as? [[String:Any]] ?? []
-        return (board["incidents"] as? [[String:Any]] ?? []).compactMap { incident in
-            guard incident["state"] as? String == "open", let id = incident["id"] as? String,
-                  let subject = incident["session_id"] as? String,
-                  let view = views.first(where: { $0["id"] as? String == subject }), view["private"] as? Bool != true else { return nil }
-            let evidence = incident["evidence"] as? [String:Any] ?? [:]
-            let detail: String
-            switch evidence["kind"] as? String {
-            case "quiet-session": detail = "No meaningful progress reported for \((evidence["quietMs"] as? Int ?? 0) / 60000) minutes. Accord has requested a check-in."
-            case "idle-resource": detail = "The reserved resource looks idle. Accord has asked its holder to check in; ownership has not changed."
-            default: detail = Redactor.redact(evidence["reason"] as? String ?? "Accord has requested a check-in.")
-            }
-            let source = view["source"] as? String ?? "", external = view["externalId"] as? String ?? ""
-            let native = source == "tessera" ? external : source + ":" + external
-            let link = nativeIDs.contains(native) ? native : (view["address"] as? String).map { "accord:" + $0 }
-            let at = Date(timeIntervalSince1970:(incident["updated_at"] as? Double ?? 0)/1000)
-            return AgentAppSession(id:"overseer:"+id,flavor:.accord,title:"Check-in: " + (view["title"] as? String ?? "Session"),cwd:"Accord overseer",openURL:nil,resumeCommand:nil,
-                // The overseer is asking the agent, not the operator. Keep its evidence visible
-                // without manufacturing a human question; real questions use Accord's inbox.
-                snapshot:ConversationSnapshot(items:[ConversationItem(id:id,role:.system,text:detail)],activity:.idle,detail:detail,lastEventAt:at),summary:detail,lastActivityAt:at,link:link)
+    func connectionFailed() {
+        // A transport failure is not a session exit. Preserve the last good board.
+        connected = false
+    }
+    func acceptSnapshot(_ board: [String:Any], nativeIDs: Set<String>, now: Date = Date()) {
+        let missing = Set((board["hosts"] as? [[String:Any]] ?? []).filter { $0["status"] as? String == "unknown" }.compactMap { $0["authority"] as? String })
+        let retained = projectedSessions.filter { value in
+            let host = String(value.id.dropFirst(7)).split(separator:"/").first.map(String.init) ?? ""
+            return missing.contains(host)
         }
+        projectedSessions = Self.project(board,nativeIDs:nativeIDs,now:now) + retained
+        sessions?(projectedSessions)
     }
 
     /// Shared sessions are view-only tiles. No shell command is inferred from remote text.
-    static func project(_ board: [String: Any], nativeIDs: Set<String>, includeNativeHistory: Bool = false) -> [AgentAppSession] {
+    static func project(_ board: [String: Any], nativeIDs: Set<String>, includeNativeHistory: Bool = false, now: Date = Date()) -> [AgentAppSession] {
         let authority = board["authority"] as? String
         return ((board["sessions"] as? [[String: Any]]) ?? []).compactMap { value in
             guard value["private"] as? Bool != true, let address = value["address"] as? String,
@@ -274,13 +265,21 @@ public final class AccordBridge {
             let local = address.split(separator: "/").first.map(String.init) == authority
             let external = value["externalId"] as? String ?? ""
             if local && ((source == "tessera" && !includeNativeHistory) || nativeIDs.contains(source + ":" + external)) { return nil }
+            if !includeNativeHistory, local, let binding = value["nativeSession"] as? [String:Any],
+               let source = binding["source"] as? String, let external = binding["externalId"] as? String,
+               nativeIDs.contains(source == "tessera" ? external : source + ":" + external) { return nil }
             let state = value["state"] as? String ?? "unknown"
+            if !includeNativeHistory {
+                guard ["starting", "working", "waiting", "blocked"].contains(state) else { return nil }
+                let progress = (value["progressAt"] as? Double ?? 0) / 1000
+                if ["starting", "working"].contains(state), now.timeIntervalSince1970 - progress > 7200 { return nil }
+            }
             let activity: TileActivity = state == "waiting" || state == "blocked" ? .needsInput : state == "cancelled" ? .exited : TileActivity(rawValue: state) ?? .idle
             let at = Date(timeIntervalSince1970: (value["progressAt"] as? Double ?? 0) / 1000)
-            let detail = value["detail"] as? String ?? ""
+            let detail = [value["detail"] as? String, value["summary"] as? String, title].compactMap { $0 }.first { !$0.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty } ?? title
             return AgentAppSession(id: "accord:" + address, flavor: .accord, title: title,
                 cwd: value["location"] as? String ?? "", openURL: nil, resumeCommand: nil,
-                snapshot: ConversationSnapshot(items: [ConversationItem(id: "summary", role: .system, text: detail)], activity: activity, detail: detail, lastEventAt: at),
+                snapshot: ConversationSnapshot(items: [ConversationItem(id: "summary", role: .assistant, text: Redactor.redact(detail))], activity: activity, detail: detail, lastEventAt: at),
                 summary: value["summary"] as? String, lastActivityAt: at)
         }
     }

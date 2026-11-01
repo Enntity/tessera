@@ -189,7 +189,7 @@ public final class FleetService {
                 if let r = j["resource"] as? String { j["resource"] = prefix + r }; js.append(j)
             }
         }
-        for r in resources where r["manager"] == nil {
+        for r in resources where r["manager"] == nil && r["plugin"] as? String != "artifact" {
             guard let id = r["id"] as? String else { continue }
             let holder = r["holder"] as? [String:Any]
             let claim = holder?["claim"] as? String
