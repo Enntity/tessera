@@ -58,7 +58,7 @@ public final class AccordBridge {
         let marker = home.appendingPathComponent(".config/tessera/accord-installed-v1")
         guard profile == home.appendingPathComponent(".config/accord/connection.json"),
               ProcessInfo.processInfo.environment["TESSERA_NO_AUTO_SETUP"] != "1",
-              !FileManager.default.fileExists(atPath:marker.path), !installing else { return }
+              !(FileManager.default.fileExists(atPath:marker.path) && FileManager.default.fileExists(atPath:profile.path)), !installing else { return }
         let cli = Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers/tessera-cli")
         guard FileManager.default.isExecutableFile(atPath:cli.path) else { return }
         installing = true

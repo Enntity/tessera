@@ -351,7 +351,7 @@ final class LLoomScheduleTests: XCTestCase {
         let items = LLoomSchedule.items(try parsed(), lookback: 36 * 3600)
         let expiring = try XCTUnwrap(item("pair lease expiring", in: items))
         XCTAssertEqual(expiring.activity, .needsInput)
-        XCTAssertEqual(expiring.detail, "4m left · lloom renew pair")
+        XCTAssertEqual(expiring.detail, "4m left · check reservation in Accord")
         XCTAssertEqual(expiring.session, "claude:cli-1234")
         let stuck = try XCTUnwrap(item("bench restore failed", in: items))
         XCTAssertEqual(stuck.activity, .failed)

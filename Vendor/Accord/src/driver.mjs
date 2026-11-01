@@ -100,7 +100,7 @@ export function driverServer(defaultDriver, controlToken, {resolveDriver,registe
     requireThat(equal(hash(credential), hash(controlToken)), 'FORBIDDEN', 'Driver control credential required', 403);
     if(url.pathname==='/control/resources'&&req.method==='POST'){requireThat(register,'UNSUPPORTED','Registration unavailable');return register(await readBody(req));}
     if(url.pathname==='/control/resources'&&req.method==='GET')return {resources:list?list():[]};
-    if (req.method === 'GET' && url.pathname === '/control/status') return driver.status();
+    if (req.method === 'GET' && url.pathname === '/control/status') return {...driver.status(),...(driver.availability?await driver.availability():{})};
     if (req.method === 'GET' && url.pathname === '/control/audit') return { events: driver.db.prepare('SELECT * FROM audit ORDER BY seq').all() };
     if (req.method === 'GET' && url.pathname.startsWith('/control/receipts/')) return driver.receipt(url.pathname.split('/').at(-1));
     if (req.method === 'GET' && url.pathname.startsWith('/control/artifacts/')) {

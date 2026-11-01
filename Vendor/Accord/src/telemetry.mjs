@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+import { readHostMemory } from '../vendor/lloom/host-memory.mjs';
 import { performance } from 'node:perf_hooks';
 import { createCollectors } from './telemetry-collectors.mjs';
 
@@ -28,7 +29,7 @@ export function createTelemetry({authority,hostName,collectors=createCollectors(
     }
     return read;
   }
-  return {telemetry:cache(collectors.snapshot,'host',liveTtlMs),metadata:cache(collectors.metadata,'machine',metadataTtlMs)};
+  return {telemetry:cache(collectors.snapshot,'host',liveTtlMs),metadata:cache(collectors.metadata,'machine',metadataTtlMs),memory:cache(()=>readHostMemory({strict:true}),'memory',100)};
 }
 
 // Tessera's MachineVitals uses fractions; LLooM's host metrics use percentages.

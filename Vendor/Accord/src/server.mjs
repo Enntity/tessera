@@ -100,7 +100,7 @@ export function coordinator({ db, claimSecret, driverUrl, driverToken, driverIns
       const session=holder&&store.db.prepare('SELECT label FROM sessions WHERE id=?').get(holder.actor);
       const queue=store.db.prepare("SELECT r.id,r.actor,r.queued_until queuedUntil,t.title purpose,t.created_at queuedAt FROM reservations r JOIN tasks t ON t.id=r.task_id WHERE t.resource=? AND t.state='queued' ORDER BY t.created_at,t.rowid LIMIT 100").all(resource.id);
       return {id:`${store.authority}/${resource.id}`,localId:resource.id,plugin:resource.plugin??'artifact',asset:resource.asset??'builtin:artifact',
-        queue,state:!driverError&&!holder&&!status.claim_id?(queue.length?'queued':'unclaimed'):holder?'held':'unknown',enforcement:resource.enforcement??'artifact-API',driver:driverError||'reachable',
+        label:status?.label??resource.id,hosts:status?.hosts??[],queue,state:!driverError&&!status?.blocked&&!holder&&!status.claim_id?(queue.length?'queued':'unclaimed'):holder?'held':'unknown',enforcement:resource.enforcement??'artifact-API',driver:driverError||'reachable',
         holder:holder?{claim:holder.id,actor:holder.actor,label:session?.label??holder.actor,generation:holder.generation,state:holder.state,deadline:holder.deadline,task:holder.task_id}:null};
     }));
     store.assertLeader();
@@ -136,7 +136,7 @@ export function coordinator({ db, claimSecret, driverUrl, driverToken, driverIns
     return {id:binding?.actor??view.id,role:'worker'};
   }
   async function collaborate(actor,operation,args={}) {
-    if(operation==='telemetry'||operation==='metadata')return telemetry[operation]();
+    if(['telemetry','metadata','memory'].includes(operation))return telemetry[operation]();
     if(operation==='hosts')return {authority:store.authority,hosts:[{authority:store.authority,local:true},...store.db.prepare('SELECT authority FROM links ORDER BY authority').all().map(h=>({...h,local:false}))]};
     if(operation==='bridge-inbox'){requireThat(actor.role==='admin','FORBIDDEN','Host adapter required',403);text(args.source,'source',64);return {deliveries:store.db.prepare('SELECT id,source,external_id FROM session_views WHERE source=? AND private=0 AND hidden=0 ORDER BY observed_at DESC LIMIT 200').all(args.source).flatMap(s=>collaboration.inbox(nativeActor(s)).messages.slice(0,10).map(m=>({...m,session:s.id,externalId:s.external_id}))).slice(0,100)};}
     if(operation==='manager-configure')return managers.configure(actor,args);
@@ -210,7 +210,7 @@ export function coordinator({ db, claimSecret, driverUrl, driverToken, driverIns
       try { store.authenticate(credential); } catch { store.purpose(credential, 'discover'); }
       return host();
     }
-    const telemetryRoute=/^\/v1\/(?:host|hosts\/([^/]+))\/(telemetry|metadata)$/.exec(url.pathname);
+    const telemetryRoute=/^\/v1\/(?:host|hosts\/([^/]+))\/(telemetry|metadata|memory)$/.exec(url.pathname);
     if(telemetryRoute&&req.method==='GET'){
       let reader;try{reader=store.authenticate(credential);}catch{store.purpose(credential,'discover');reader={id:'telemetry-reader'};}
       const [,target,kind]=telemetryRoute;
@@ -219,7 +219,7 @@ export function coordinator({ db, claimSecret, driverUrl, driverToken, driverIns
     if(url.pathname==='/v1/federation'&&req.method==='POST'){
       const peer=collaboration.peer(credential),body=await readBody(req);
       // Observations must not provision proxy actors or write coordination state.
-      if(['telemetry','metadata'].includes(body.operation))return {authority:store.authority,value:await telemetry[body.operation]()};
+      if(['telemetry','metadata','memory'].includes(body.operation))return {authority:store.authority,value:await telemetry[body.operation]()};
       if(['sessions','session-read','jobs','overseer'].includes(body.operation))return {authority:store.authority,value:await collaborate(null,body.operation,body.args)};
       const actor=collaboration.remoteActor(peer,body.actor);
       let value;

@@ -25,7 +25,7 @@ struct Installer {
         }
         try link(bin, to: executable)
         say("install Accord's skill, startup instructions and MCP connection")
-        let (status, output) = Self.run(accord.url, accord.arguments + ["install"] + (dryRun ? ["--dry-run"] : []) + (noStart ? ["--no-start"] : []))
+        let (status, output) = Self.run(accord.url, accord.arguments + ["ensure"] + (dryRun ? ["--dry-run"] : []) + (noStart ? ["--no-start"] : []))
         guard status == 0 else { throw Failure("Accord installation failed: \(output)") }
         print(output)
         try retireSkills()

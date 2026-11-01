@@ -14,6 +14,7 @@ import { homedir, hostname } from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { buildSensors,sensorPath } from './native-sensors.mjs';
 import { install } from './installer.mjs';
+import { ensureAccord } from './product-install.mjs';
 import { installService } from './service.mjs';
 import { profileAt, discover, notice, runAgent, inheritedClient, enrollProfile } from './bootstrap.mjs';
 import { connectHost } from './connect.mjs';
@@ -40,6 +41,8 @@ function readyChild(proc) {
 try {
   if (command === 'init') {
     console.log(JSON.stringify(initialize(directory)));
+  } else if(command==='ensure'){
+    console.log(JSON.stringify(await ensureAccord({home,data:directory,profilePath,dryRun:argv.includes('--dry-run'),start:!argv.includes('--no-start')})));
   } else if (command === 'install') {
     const dryRun=argv.includes('--dry-run');
     if(!existsSync(join(directory,'config.json'))){

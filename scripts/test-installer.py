@@ -63,7 +63,7 @@ with tempfile.TemporaryDirectory(prefix="tessera-install-test-") as temporary:
     assert any("local customization" in (p / "SKILL.md").read_text()
                for p in archive.glob("shared-tessera-*") if p.is_dir())
     assert (home / ".agents/skills/unrelated").is_dir()
-    assert (home / "accord-calls").read_text().splitlines() == ["install --dry-run", "install"]
+    assert (home / "accord-calls").read_text().splitlines() == ["ensure --dry-run", "ensure"]
     assert config.read_text().startswith('model = "existing-model"')
     assert config.read_text().count("[mcp_servers.tessera]") == 1
     assert list(config.parent.glob("config.toml.bak-tessera-*"))

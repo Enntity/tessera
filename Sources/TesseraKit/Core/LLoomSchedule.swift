@@ -185,7 +185,7 @@ public enum LLoomSchedule {
             let left = expires.map { overdue ? "overdue" : "\(now.shortAge(now: $0)) left" } ?? "running out"
             return Item(id: idPrefix + lease.id, title: "\(lease.resource) lease \(overdue ? "overdue" : "expiring")",
                         subtitle: "\(lease.owner) · lease", activity: .needsInput,
-                        detail: "\(left) · lloom renew \(lease.resource)", changedAt: changed, lastActivityAt: changed,
+                        detail: "\(left) · check reservation in Accord", changedAt: changed, lastActivityAt: changed,
                         progress: nil, notes: [], session: lease.session)
         default:
             return nil

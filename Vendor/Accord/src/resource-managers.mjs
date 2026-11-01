@@ -82,6 +82,7 @@ export class ResourceManagers {
           const entry={at:Date.now()};
           entry.flight=this.call(name,'/gateway/schedule').then(board=>{
             requireThat(Array.isArray(board.resources)&&Array.isArray(board.reservations),'MANAGER_RESPONSE','Invalid manager board');
+            if(board.authority==='accord')return {name,state:'migrated',sampledAt:entry.at,board:null};
             return {name,state:'observed',sampledAt:entry.at,readOnly:this.configs[name].readOnly===true,board};
           }).catch(()=>({name,state:'unknown',sampledAt:entry.at,board:null})).then(value=>{entry.value=value;entry.flight=null;return value;});
           this.boardCache.set(name,entry);cached=entry;
@@ -419,6 +420,7 @@ export class ResourceManagers {
               "MANAGER_RESPONSE",
               "Invalid manager board",
             );
+            if(board.authority==='accord')return [];
             return board.resources.map((resource) => {
               const holders = (resource.holders ?? [])
                 .map((id) => {

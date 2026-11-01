@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 // Token hashing/equality adapted from enntity-messenger/src/auth.js (08a788e).
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
-import { DatabaseSync } from 'node:sqlite';
+import { createRequire } from 'node:module';
 import { mkdirSync, chmodSync } from 'node:fs';
 import { dirname } from 'node:path';
 import http from 'node:http';
@@ -44,6 +44,8 @@ export function transaction(db, fn) {
   catch (error) { db.exec('ROLLBACK'); throw error; }
 }
 export function database(file, sql) {
+  // HTTP-only clients must not initialize SQLite (or emit its runtime warning).
+  const { DatabaseSync } = createRequire(import.meta.url)('node:sqlite');
   const migrations = Array.isArray(sql) ? sql : [sql];
   mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
   const db = new DatabaseSync(file);
