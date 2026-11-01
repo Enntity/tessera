@@ -1,0 +1,31 @@
+{
+  "status": "passed",
+  "pid": 36180,
+  "nativeTiles": 25,
+  "nativeTools": [
+    "board",
+    "read_tile",
+    "whoami"
+  ],
+  "freshAccordNativeObservations": 5,
+  "telemetryStale": false,
+  "sourceCommit": "efe08f4bc4cc7ed32c2333adfff538e3c1f965c8",
+  "onlyAccordSkill": true,
+  "setupMarker": true,
+  "tests": {
+    "fullSuiteBeforeLabelChange": 273,
+    "focusedFinalFleetTests": 15
+  },
+  "uiVerified": {
+    "nativePairLabel": true,
+    "nativeDrafterLabel": true,
+    "statusSaysUnclaimed": true,
+    "oldLeaseAlertAbsent": true,
+    "allFourSparkTelemetryBadgesLive": true,
+    "restoredNativeTerminals": 13
+  },
+  "binarySHA256": "31a198a878a308299820fe96d696c7b8b0765d5b4f4a237de97cf66a67d0449b",
+  "headAuthority": "49ef87b9-2ba5-415e-b040-81eeaa8505f3",
+  "headRuntimeSource": "289c97c",
+  "matchingSigningRequirement": true
+}
