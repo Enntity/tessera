@@ -1,0 +1,67 @@
+{
+  "at": "2026-11-01T14:47:51.114892+00:00",
+  "status": "installed-ui-cleanup-verified",
+  "sources": {
+    "tessera": "08b8b679875eb86643fe5123cac62e01ff7cc062",
+    "accord": "7db44e9",
+    "lloom": "b2fff98"
+  },
+  "binarySHA256": "8a318c93fd5cf47ab5d81c7521d03bfa0a658f938ac0942c3a9bbc98d2923407",
+  "tests": {
+    "tessera": 274,
+    "accord": 120,
+    "accordCrashRecoveryDemos": "passed",
+    "lloomFullSuite": "passed",
+    "lloomNewAccordDependencyIntegration": 9,
+    "lloomRateLimit": 35
+  },
+  "live": {
+    "nativeTerminalsRestored": 13,
+    "allFiveHostsFresh": true,
+    "hardwareRules": [
+      {
+        "id": "idle-ennspark01",
+        "enabled": true,
+        "quietMs": 900000,
+        "maxPings": 1
+      },
+      {
+        "id": "idle-ennspark02",
+        "enabled": true,
+        "quietMs": 900000,
+        "maxPings": 1
+      },
+      {
+        "id": "idle-ennspark03",
+        "enabled": true,
+        "quietMs": 900000,
+        "maxPings": 1
+      },
+      {
+        "id": "idle-ennspark04",
+        "enabled": true,
+        "quietMs": 900000,
+        "maxPings": 1
+      }
+    ],
+    "blankCheckinCards": 0,
+    "resourceHolderReadable": true,
+    "claudeQuotaVisible": true,
+    "plannedTesseraRestarts": 1,
+    "macAccordIdentityPreserved": true
+  },
+  "preservation": {
+    "gatewayUnchanged": true,
+    "configUnchanged": true,
+    "routesUnchanged": true,
+    "trainingFinishedDuringCheck": true,
+    "trainingExitCode": 0,
+    "trainingOOMKilled": false,
+    "headRestarted": false,
+    "leaseMutationsByCleanup": false
+  },
+  "remaining": [
+    "External training containers are not registered with the resource provider. Holder contacted; automatic stop/adoption and Spark driver upgrades deferred pending a coordinated workload contract.",
+    "Spark hosts retain their existing qualified Accord release. The updated Mac resolves their holder identities without restarting them."
+  ]
+}
