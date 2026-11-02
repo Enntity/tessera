@@ -243,6 +243,7 @@ public extension View {
 public extension Date {
     /// "now", "12s", "4m", "3h", "2d" — compact enough for a card corner.
     func shortAge(now: Date = Date()) -> String {
+        guard timeIntervalSince1970.isFinite, timeIntervalSince1970 > 0 else { return "unknown" }
         let s = Int(now.timeIntervalSince(self))
         if s < 5 { return "now" }
         if s < 60 { return "\(s)s" }

@@ -197,8 +197,16 @@ public final class FleetService {
             if r["state"] as? String == "unknown" { view["error"] = "Controller unavailable; ownership unknown" }
             rs.append(view)
             if let holder, let claim {
-                leases.append(["id":claim,"resource":id,"owner":holder["label"] ?? holder["actor"] ?? "unknown",
-                    "state":["running":"active","preparing":"acquiring","releasing":"releasing"][holder["state"] as? String ?? ""] ?? "stuck","expiresAt":holder["deadline"] ?? NSNull()])
+                let state = ["running":"active", "preparing":"acquiring", "releasing":"releasing",
+                             "revoking":"recovering", "recovering":"recovering", "stuck":"stuck", "failed":"stuck"][holder["state"] as? String ?? ""] ?? "unknown"
+                var lease: [String:Any] = ["id":claim, "resource":id, "owner":holder["label"] ?? holder["actor"] ?? "unknown",
+                    "state":state, "expiresAt":holder["deadline"] ?? NSNull()]
+                for field in ["startedAt", "updatedAt", "warnedAt", "error", "purpose"] {
+                    if let value = holder[field] { lease[field] = value }
+                }
+                if let address = holder["address"] as? String { lease["session"] = "accord:" + address }
+                if state == "unknown" { rs[rs.count - 1]["error"] = "Lease status unavailable; resource remains held" }
+                leases.append(lease)
             }
         }
         for j in jobs {

@@ -68,7 +68,7 @@ public final class Workspace {
     @ObservationIgnored private var typingInField = false
     public private(set) var groups = TileGroups()
     /// Place the Claude / Codex window where the opened tile would sit when an app session is opened.
-    public var placeNativeWindows = true
+    public var placeNativeWindows = false
     /// Bring terminals back into their conversations when Tessera opens (else they wait, shut down).
     public var resumeOnLaunch = true
     public var defaultDirectory: String = NSHomeDirectory()
@@ -1015,7 +1015,7 @@ public final class Workspace {
         let tiles = saved.tiles.compactMap(\.value)
         if tiles.count < saved.tiles.count { StateFile.keepAside(saveURL) }
         defaultDirectory = saved.defaultDirectory ?? defaultDirectory
-        placeNativeWindows = saved.placeNativeWindows ?? true
+        placeNativeWindows = saved.placeNativeWindows ?? false
         groups = TileGroups(saved.groups ?? [])
         resumeOnLaunch = saved.resumeOnLaunch ?? true
         savedOrder = saved.order ?? []

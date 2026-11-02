@@ -1,0 +1,28 @@
+{
+  "date": "2026-11-02",
+  "tests": {
+    "fullSuite": 280,
+    "failures": 0,
+    "finalFocusedSuite": 22
+  },
+  "installedSHA256": "0aa4ecbcc69b66a92cf8e1b4a761f14dc85c875998573c7df9432790176d62a5",
+  "normalRestart": true,
+  "terminalIdentitiesPreserved": 13,
+  "windowPlacementEnabled": false,
+  "liveChecks": [
+    "Engine rebase card opens matching Claude conversation",
+    "Claude window size preserved during card activation",
+    "Both Spark resource groups show sg-tp4 held with remaining lease time",
+    "All four Spark telemetry chips present"
+  ],
+  "recoveryTests": [
+    "revoking and releasing remain held without failure cards",
+    "unknown lease state remains unavailable",
+    "explicit failure has resource label, hosts, owner and error body",
+    "missing timestamp displays unknown; supplied timestamp preserved"
+  ],
+  "limitations": [
+    "Recovery transitions tested with fixtures; no live workload was interrupted to produce a failure"
+  ],
+  "rollbackAndStateBackup": "~/.local/share/tessera-updates/0aa4ecbcc69b"
+}

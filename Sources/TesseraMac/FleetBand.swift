@@ -79,7 +79,8 @@ struct FleetLaneChip: View {
         }
         var parts = [lane.holders.joined(separator: ", ")]
         if lane.capacity > 1 { parts.append("\(lane.holders.count)/\(lane.capacity)") }
-        if let left = lane.remaining { parts.append(left > 0 ? "\(Date().addingTimeInterval(-left).shortAge()) left" : "overdue") }
+        if let status = lane.status { parts.append(status) }
+        else if let left = lane.remaining { parts.append(left > 0 ? "\(Date().addingTimeInterval(-left).shortAge()) left" : "overdue") }
         if lane.queued > 0 { parts.append("+\(lane.queued) waiting") }
         return parts.joined(separator: " · ")
     }

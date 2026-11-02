@@ -240,3 +240,41 @@ extension AccordBridgeTests {
         XCTAssertEqual(bridge.projectedSessions.first?.snapshot.activity, .done)
     }
 }
+
+extension AccordBridgeTests {
+    func testNativeLeaseRecoveryIsNotFailureAndUnknownOwnershipStaysHeld() throws {
+        for state in ["running", "preparing", "releasing", "revoking", "recovering", "future-state", ""] {
+            let resource: [String:Any] = ["id":"host/gpu", "label":"Spark pair", "state":"held",
+                "holder":["claim":"lease", "label":"worker", "state":state, "deadline":2000]]
+            let board = try FleetService.project(resources:[resource],jobs:[],managers:[])
+            XCTAssertTrue(LLoomSchedule.items(board,lookback:3600).isEmpty, state)
+            let lane = try XCTUnwrap(LLoomSchedule.lanes(board).first)
+            XCTAssertNotEqual(lane.state,.free, state)
+            XCTAssertEqual(lane.holders,["worker"])
+            if ["future-state", ""].contains(state) { XCTAssertEqual(lane.state,.unusable) }
+            if ["revoking", "recovering", "releasing"].contains(state) { XCTAssertEqual(lane.state,.attention) }
+        }
+    }
+    func testActualLeaseFailureHasReadableNameBodyAndHonestTime() throws {
+        var holder: [String:Any] = ["claim":"lease", "label":"worker", "state":"stuck", "error":"Host unreachable", "address":"host/worker"]
+        func project() throws -> LLoomSchedule.Item {
+            let resource: [String:Any] = ["id":"host/opaque-id", "label":"Spark pair", "hosts":["spark01","spark02"], "state":"held", "holder":holder]
+            return try XCTUnwrap(LLoomSchedule.items(FleetService.project(resources:[resource],jobs:[],managers:[]),lookback:3600).first)
+        }
+        let unknown = try project()
+        XCTAssertEqual(unknown.title,"Spark pair restore failed")
+        XCTAssertEqual(unknown.activity,.failed)
+        XCTAssertEqual(unknown.lastActivityAt.shortAge(),"unknown")
+        XCTAssertNil(unknown.notes.first?.timestamp)
+        XCTAssertEqual(unknown.notes.first?.role,.assistant)
+        XCTAssertTrue(unknown.notes.first?.text.contains("Host unreachable") == true)
+        XCTAssertTrue(unknown.notes.first?.text.contains("spark01, spark02") == true)
+        XCTAssertTrue(unknown.notes.first?.text.contains("Update time unavailable") == true)
+        XCTAssertFalse(FleetService.session(unknown).snapshot.items.isEmpty)
+        XCTAssertEqual(unknown.session,"accord:host/worker")
+        holder["updatedAt"] = 1793600000000.0
+        let dated = try project()
+        XCTAssertEqual(dated.changedAt,Date(timeIntervalSince1970:1793600000))
+        XCTAssertEqual(dated.notes.first?.timestamp,dated.changedAt)
+    }
+}
