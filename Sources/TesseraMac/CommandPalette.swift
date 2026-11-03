@@ -27,6 +27,9 @@ struct CommandPalette: View {
                         .font(Style.caption).foregroundStyle(Style.muted).lineLimit(1)
                 }
                 .padding(Style.Space.xl)
+                if let error = model.workspace.accord.searchError, model.workspace.accord.searchQuery == query.trimmingCharacters(in:.whitespacesAndNewlines) {
+                    Text(error).font(Style.caption).foregroundStyle(Style.dim).padding(.horizontal,Style.Space.xl)
+                }
                 Hairline()
                 ScrollViewReader { proxy in
                     ScrollView {
@@ -52,6 +55,11 @@ struct CommandPalette: View {
         }
         .onAppear { focused = true }
         .onChange(of: query) { _, _ in selection = 0 }
+        .task(id:query) {
+            try? await Task.sleep(nanoseconds:250_000_000)
+            guard !Task.isCancelled, model.paletteMode != .url else { return }
+            await model.workspace.accord.search(query)
+        }
         .onKeyPress(.downArrow) { selection = min(selection + 1, max(items.count - 1, 0)); return .handled }
         .onKeyPress(.upArrow) { selection = max(selection - 1, 0); return .handled }
         .onKeyPress(.escape) { dismiss(); return .handled }
@@ -193,6 +201,14 @@ extension AppModel {
         // Keep each append explicit: Xcode 26.0 cannot type-check the chained overloads in
         // reasonable time on the release CI runner.
         var results = tiles
+        if workspace.accord.searchQuery == q {
+            let visible = Set(found.map { $0.tile.id })
+            for session in workspace.accord.searchResults where !visible.contains(session.id) {
+                results.append(PaletteItem(id:"shared-"+session.id,symbol:"network",color:Style.dim,title:session.title,subtitle:"Accord history · " + (session.summary ?? session.cwd)) {
+                    self.workspace.openSharedSession(session)
+                })
+            }
+        }
         if looksLikeURL { results.append(openURL) }
         results.append(contentsOf: presets)
         results.append(contentsOf: triage)

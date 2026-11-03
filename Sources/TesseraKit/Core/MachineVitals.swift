@@ -6,11 +6,13 @@ public struct MachineConfig: Codable, Identifiable, Hashable, Sendable {
     public var name: String
     /// An SSH destination as typed at a shell (`gpu-box-1`, `me@10.0.0.4`). Nil for this Mac.
     public var sshHost: String?
+    public var authority: String?
 
-    public init(id: String = UUID().uuidString, name: String, sshHost: String?) {
+    public init(id: String = UUID().uuidString, name: String, sshHost: String?, authority: String? = nil) {
         self.id = id
         self.name = name
         self.sshHost = sshHost
+        self.authority = authority
     }
 
     /// Host strings go to `ssh` as an argument, never through a shell; still refuse anything that
@@ -94,92 +96,8 @@ public struct MachineVitals: Codable, Identifiable, Hashable, Sendable {
     }
 }
 
-/// Parses the tagged lines `RemoteVitals.script` prints on a Linux host.
-public enum RemoteVitals {
-    /// Cheap, dependency-free probe: /proc for CPU and memory, thermal zones for CPU temperature,
-    /// nvidia-smi when present for the GPU. Each line is `@tag value`.
-    public static let script = """
-    echo "@stat $(head -1 /proc/stat)"; \
-    awk '/^MemTotal:/{print "@memtotal "$2} /^MemAvailable:/{print "@memavail "$2}' /proc/meminfo; \
-    echo "@load $(cut -d' ' -f1 /proc/loadavg)"; echo "@ncpu $(nproc)"; \
-    echo "@ctemp $(cat /sys/class/thermal/thermal_zone*/temp 2>/dev/null | sort -n | tail -1)"; \
-    command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi --query-gpu=name,utilization.gpu,temperature.gpu,power.draw \
-    --format=csv,noheader,nounits 2>/dev/null | sed 's/^/@gpu /'; true
-    """
-
-    public struct CPUSample: Hashable, Sendable {
-        public var busy: UInt64
-        public var total: UInt64
-
-        /// Utilisation between two samples of the aggregate `cpu` line.
-        public func utilization(since previous: CPUSample?) -> Double? {
-            guard let previous, total > previous.total else { return nil }
-            let dt = Double(total - previous.total)
-            return min(1, max(0, Double(busy &- previous.busy) / dt))
-        }
-    }
-
-    public struct Reading: Hashable, Sendable {
-        public var cpuSample: CPUSample?
-        public var memory: Double?
-        public var memoryTotalGB: Double?
-        public var load: Double?
-        public var cores: Int?
-        public var cpuTemperature: Double?
-        public var gpuName: String?
-        public var gpu: Double?
-        public var gpuTemperature: Double?
-        public var gpuPowerW: Double?
-
-        /// The GPU's own temperature when there is one (what nvidia-smi reports); otherwise
-        /// the hottest board sensor, which on GB10 runs well above the GPU.
-        public var temperature: Double? { gpuTemperature ?? cpuTemperature }
-    }
-
-    public static func parse(_ output: String) -> Reading {
-        // A broken or hostile host can print anything; keep numbers finite and sane so nothing
-        // downstream (sums, Int conversions for display) can trap.
-        func number(_ s: String) -> Double? { Double(s).flatMap { $0.isFinite && abs($0) < 1e12 ? $0 : nil } }
-        var r = Reading()
-        var memTotal: Double?, memAvail: Double?
-        for raw in output.split(separator: "\n") {
-            let line = raw.trimmingCharacters(in: .whitespaces)
-            guard line.hasPrefix("@"), let space = line.firstIndex(of: " ") else { continue }
-            let tag = line[line.index(after: line.startIndex)..<space]
-            let value = line[line.index(after: space)...].trimmingCharacters(in: .whitespaces)
-            switch tag {
-            case "stat":
-                // cpu user nice system idle iowait irq softirq steal …
-                let n = value.split(separator: " ").dropFirst().compactMap { UInt64($0) }
-                guard n.count >= 4 else { continue }
-                let idle = n[3] &+ (n.count > 4 ? n[4] : 0)
-                let total = n.prefix(8).reduce(0, &+)
-                r.cpuSample = CPUSample(busy: total &- idle, total: total)
-            case "memtotal": memTotal = number(value)
-            case "memavail": memAvail = number(value)
-            case "load": r.load = number(value)
-            case "ncpu": r.cores = Int(value)
-            case "ctemp":
-                // Thermal zones report millidegrees.
-                if let milli = number(value), milli > 0 { r.cpuTemperature = milli > 1000 ? milli / 1000 : milli }
-            case "gpu":
-                let f = value.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
-                guard f.count >= 4 else { continue }
-                r.gpuName = f[0]
-                r.gpu = number(f[1]).map { $0 / 100 }
-                r.gpuTemperature = number(f[2])
-                r.gpuPowerW = number(f[3])
-            default:
-                break
-            }
-        }
-        if let memTotal, let memAvail, memTotal > 0 {
-            r.memory = min(1, max(0, 1 - memAvail / memTotal))
-            r.memoryTotalGB = memTotal / 1_048_576
-        }
-        return r
-    }
-
+/// Native picker suggestions; host connections and sampling belong to Accord.
+public enum SSHHostSuggestions {
     /// Hosts from `~/.ssh/config` worth offering (no wildcards).
     public static func configuredHosts(in config: String) -> [String] {
         var hosts: [String] = []

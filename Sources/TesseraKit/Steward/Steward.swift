@@ -71,6 +71,9 @@ public enum Steward {
         public var blocked: Bool
         /// What the user would have to do, if anything.
         public var needs: String?
+        public init(summary: String, blocked: Bool, needs: String?) {
+            self.summary = summary; self.blocked = blocked; self.needs = needs
+        }
     }
 
     /// The board in a few lines.
@@ -112,14 +115,6 @@ public enum Steward {
         only describe it.
         """
 
-    public static let tileSystemPrompt = """
-        You watch one tile on a developer's mission-control board (a terminal, an AI coding agent's conversation, \
-        a background job, or a web page) and say in a few words what it is doing. \(guardrail)
-        Reply with JSON only: {"summary": "at most 12 words: what it is doing or just did", \
-        "blocked": true or false (true only if it cannot go on without a person), \
-        "needs": "at most 12 words: what the person must do, or empty"}.
-        """
-
     public static let briefSystemPrompt = """
         You are Tessera's steward. You keep an eye on everything running on a developer's machine (terminals, \
         AI agents, background jobs) so the developer doesn't have to. Your job is to lower their cognitive load: \
@@ -133,21 +128,6 @@ public enum Steward {
         closable: tiles that are finished and seen, idle shells, dead or duplicate sessions. Never a tile \
         that is working or waiting. Use only ids from the input.
         """
-
-    public static func tileMessages(_ digest: Digest) -> [[String: String]] {
-        let body = """
-            <tile>
-            title: \(digest.title)
-            kind: \(digest.kind) (\(digest.flavor))
-            where: \(digest.subtitle)
-            state: \(digest.state)\(digest.detail.map { "\nstatus: \($0)" } ?? "")
-            idle: \(digest.idleMinutes) min
-            screen:
-            \(digest.text)
-            </tile>
-            """
-        return [["role": "system", "content": tileSystemPrompt], ["role": "user", "content": Redactor.redact(body)]]
-    }
 
     public static func briefMessages(_ digests: [Digest], changes: [String]) -> [[String: String]] {
         let lines = digests.map { d in
@@ -193,17 +173,6 @@ public enum Steward {
               let object = try? JSONSerialization.jsonObject(with: Data(content[start...end].utf8)) as? [String: Any]
         else { throw Failure.unreadable(content.preview(80)) }
         return object
-    }
-
-    public static func tileSummary(fromCompletion data: Data) throws -> TileSummary {
-        let object = try object(fromCompletion: data)
-        guard let summary = (object["summary"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines), !summary.isEmpty
-        else { throw Failure.unreadable("no summary") }
-        let needs = (object["needs"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
-        // "none", "nothing" and their kin mean the tile wants nothing: no line, not the word.
-        let empty = needs.map { $0.trimmingCharacters(in: CharacterSet(charactersIn: ".")).lowercased() }
-        let wants = needs.flatMap { $0.isEmpty || ["none", "nothing", "n/a", "no action", "-"].contains(empty ?? "") ? nil : $0.preview(120) }
-        return TileSummary(summary: summary.preview(120), blocked: object["blocked"] as? Bool ?? false, needs: wants)
     }
 
     /// The brief, kept to what the board can stand behind: only ids it was given, nothing suggested

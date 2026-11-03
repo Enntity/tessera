@@ -33,6 +33,44 @@ final class TerminalSessionTests: XCTestCase {
         XCTAssertTrue(waitUntil { session.terminal.screenTail(40).contains { $0.contains("tessera-first-run") } })
     }
 
+    func testRestoredPTYReplayDoesNotRequestReview() throws {
+        let tool = try fakeTool("codex-replay-probe", body: """
+        i=0
+        while [ "$i" -lt 35 ]; do echo "old transcript line $i"; i=$((i+1)); sleep 0.1; done
+        sleep 2
+        i=0
+        while [ "$i" -lt 35 ]; do echo 'Loading history (esc to interrupt)'; i=$((i+1)); sleep 0.1; done
+        printf '\\033[2J\\033[H'
+        printf '\\033[6n'
+        echo '? for shortcuts'
+        exec sleep 30
+        """)
+        defer { try? FileManager.default.removeItem(at: tool.deletingLastPathComponent()) }
+        let home = try isolatedHome()
+        let session = TerminalSession(command: tool.path, cwd: home.url.path, resuming: true,
+                                      shell: "/bin/zsh", environmentOverrides: home.env)
+        defer { session.terminate() }
+        XCTAssertTrue(waitUntil(20) { session.terminal.screenTail(40).contains { $0.contains("? for shortcuts") } })
+        XCTAssertTrue(waitUntil { session.info.activity == .idle })
+        XCTAssertFalse(session.info.attention)
+    }
+
+    func testPreviouslyWorkingRestoredPTYStillRequestsReview() throws {
+        let tool = try fakeTool("codex-active-probe", body: """
+        i=0
+        while [ "$i" -lt 35 ]; do echo "new output $i"; i=$((i+1)); sleep 0.1; done
+        echo 'New result'
+        exec sleep 30
+        """)
+        defer { try? FileManager.default.removeItem(at: tool.deletingLastPathComponent()) }
+        let home = try isolatedHome()
+        let session = TerminalSession(command: tool.path, cwd: home.url.path, resuming: true, resumingWork: true,
+                                      shell: "/bin/zsh", environmentOverrides: home.env)
+        defer { session.terminate() }
+        XCTAssertTrue(waitUntil(20) { session.info.activity == .done })
+        XCTAssertTrue(session.info.attention)
+    }
+
     func testShutDownKeepsTileAndResumeRunsAgain() {
         let dir = (NSTemporaryDirectory() as NSString).resolvingSymlinksInPath
         let session = TerminalSession(command: "echo tessera-resume-check", cwd: dir)
@@ -288,14 +326,17 @@ final class TerminalSessionTests: XCTestCase {
     }
 }
 
-final class LocalSamplerTests: XCTestCase {
-    /// Regression: sensor reads after init must not touch a released HID client.
-    func testRepeatedSamplesAreSafe() {
-        let sampler = LocalSampler()
-        var last: LocalSampler.Sample?
-        for _ in 0..<5 { last = sampler.sample() }
-        XCTAssertNotNil(last?.memory)
-        if let t = last?.temperature { XCTAssert((10...120).contains(t)) }
+@MainActor
+final class AccordTelemetryViewTests: XCTestCase {
+    func testTelemetryFractionsAndStaleness() {
+        let sample: [String:Any] = ["stale":false,"host":["cpu":["utilization":50.0,"logicalCpus":20],"gpu":["utilization":3.0,"temperatureC":53.0],"memory":["pressureUtilization":60.0,"totalBytes":137438953472.0]]]
+        let v = MachineMonitor.project(sample, id:"spark", name:"Spark", local:false)
+        XCTAssertEqual(v.cpu,0.5); XCTAssertEqual(v.gpu,0.03)
+        XCTAssertEqual(v.memoryTotalGB,128); XCTAssertEqual(v.temperature,53)
+        let stale = MachineMonitor.project(["stale":true,"host":sample["host"]!], id:"spark", name:"Spark", local:false)
+        XCTAssertEqual(stale.status,.unreachable); XCTAssertNil(stale.gpu)
+        let missing = MachineMonitor.project(["stale":false,"host":[:]], id:"mac", name:"Mac", local:true)
+        XCTAssertNil(missing.cpu); XCTAssertNil(missing.temperature)
     }
 }
 

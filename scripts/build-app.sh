@@ -4,6 +4,7 @@
 set -euo pipefail
 
 root=$(cd "$(dirname "$0")/.." && pwd)
+python3 "$root/scripts/check-vendor.py" >&2
 configuration=${CONFIGURATION:-release}
 app="${TESSERA_APP_PATH:-$root/.build/app/Tessera.app}"
 contents="$app/Contents"
@@ -16,9 +17,19 @@ bin_dir=$(swift build --package-path "$root" --scratch-path "$scratch" -c "$conf
 /bin/rm -rf "$app"
 mkdir -p "$contents/MacOS" "$contents/Resources" "$contents/Helpers"
 /usr/bin/ditto "$bin_dir/Tessera" "$contents/MacOS/Tessera"
-# Agents' `tessera` command (Settings → Agents installs it on PATH) and the skills it installs.
+# Optional native UI command. Accord alone publishes agent skills.
 /usr/bin/ditto "$bin_dir/tessera-cli" "$contents/Helpers/tessera-cli"
-/usr/bin/ditto "$root/skills" "$contents/Resources/skills"
+# A pinned standalone dependency, not a second Tessera implementation of Accord.
+accord_root="$root/Vendor/Accord"
+[[ -f "$accord_root/src/cli.mjs" ]] || { echo 'Run scripts/vendor-accord.py with a qualified Accord package first.' >&2; exit 1; }
+node_binary=${TESSERA_NODE_BINARY:-$(command -v node)}
+node_root=$(dirname "$(dirname "$node_binary")")
+node_license=${TESSERA_NODE_LICENSE:-$node_root/LICENSE}
+[[ -f "$node_license" ]] || { echo 'Set TESSERA_NODE_LICENSE to the Node distribution license.' >&2; exit 1; }
+"$node_binary" -e 'require("node:sqlite"); if (Number(process.versions.node.split(".")[0]) < 22) process.exit(1)'
+/usr/bin/ditto "$accord_root" "$contents/Resources/Accord"
+/usr/bin/ditto "$node_binary" "$contents/Helpers/node"
+/usr/bin/ditto "$node_license" "$contents/Resources/Accord/LICENSE-NODE"
 /usr/bin/ditto "$root/Resources/Info.plist" "$contents/Info.plist"
 if [[ -f "$root/Resources/AppIcon.icns" ]]; then
   /usr/bin/ditto "$root/Resources/AppIcon.icns" "$contents/Resources/AppIcon.icns"
@@ -45,6 +56,7 @@ if [[ "${TESSERA_DISTRIBUTION:-0}" == 1 ]]; then
   sign_options+=(--options runtime --timestamp)
 fi
 /usr/bin/codesign "${sign_options[@]}" "$contents/Helpers/tessera-cli"
+/usr/bin/codesign "${sign_options[@]}" --entitlements "$root/scripts/node-entitlements.plist" "$contents/Helpers/node"
 /usr/bin/codesign "${sign_options[@]}" "$app"
 /usr/bin/codesign --verify --deep --strict "$app"
 echo "$app"

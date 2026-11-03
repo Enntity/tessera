@@ -1,0 +1,36 @@
+{
+  "status": "passed",
+  "at": "2026-11-01T04:26:57.678737+00:00",
+  "nativeTests": 272,
+  "checks": [
+    "Partial and model-specific quota windows",
+    "Window boundaries and redraws",
+    "Immediate publication without request throttling",
+    "Last-good quota restored with original timestamp",
+    "Failure and refusal preserve cached data",
+    "Invalid cache rejected",
+    "Packaged app startup and restart",
+    "Installed app displayed live overall and model-specific weekly quotas",
+    "Displayed the same quota percentages after normal quit and relaunch",
+    "Cache bytes and original reading timestamp unchanged after restart",
+    "All 13 restored terminal IDs preserved",
+    "Installed signing requirement matches previous app",
+    "Installed native API and Accord publication verified"
+  ],
+  "logs": {
+    "tests": "79d0c22322070f8064787f9be3bd07433888d661dd08232d7b40b861fe4f6639",
+    "build": "8ae6c78c19206bc9e5127e239c01ee6923da7623bba81098200129febfba8445",
+    "package": "a7298f3a5a9f98f31d166ead3cebcc073a0de260f47fcf81dd045d2f17f9f4e6"
+  },
+  "sourceTreeSHA256": "3acf9e3f632b0f776c034beccfb67236f1432576996456e19df8de2e6058913b",
+  "binarySHA256": "8fba0092ecd2b6233db9e8a418d072ab8bd3845f458dcd1e0d81dbd1d7ce450c",
+  "limits": [
+    "Development signature; not notarized"
+  ],
+  "liveVerifiedAt": "2026-11-01T04:28:15.417100+00:00",
+  "installedSource": "fe7179f76350970ada807c56584296da71f78f3b",
+  "liveWindowLabels": [
+    "Week",
+    "Week (Fable)"
+  ]
+}

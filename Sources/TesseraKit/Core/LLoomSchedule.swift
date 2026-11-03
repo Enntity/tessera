@@ -14,6 +14,7 @@ public enum LLoomSchedule {
 
     public struct Resource: Decodable, Equatable, Sendable, Identifiable {
         public var id: String
+        public var label: String?
         public var description: String?
         public var hosts: [String]?
         public var capacity: Int?
@@ -143,7 +144,7 @@ public enum LLoomSchedule {
             out.append(item(job, now: now))
         }
         for lease in board.reservations {
-            if let alert = item(lease, now: now) { out.append(alert) }
+            if let alert = item(lease, now: now, resource: board.resources.first { $0.id == lease.resource }) { out.append(alert) }
         }
         return out
     }
@@ -172,21 +173,28 @@ public enum LLoomSchedule {
                     session: job.session)
     }
 
-    static func item(_ lease: Reservation, now: Date) -> Item? {
-        let changed = date(lease.warnedAt ?? lease.updatedAt ?? lease.startedAt ?? 0)
+    static func item(_ lease: Reservation, now: Date, resource: Resource? = nil) -> Item? {
+        let timestamp = [lease.warnedAt, lease.updatedAt, lease.startedAt].compactMap { $0 }.first { $0.isFinite && $0 > 0 }
+        let changed = date(timestamp ?? 0)
+        let name = resource?.label ?? lease.resource
+        let context = ["Resource: \(name)", resource?.hosts.map { "Hosts: " + $0.joined(separator: ", ") },
+                       "Holder: \(lease.owner)", "Reservation: \(lease.id)", timestamp == nil ? "Update time unavailable." : nil].compactMap { $0 }.joined(separator: "\n")
         switch lease.state {
         case "stuck":
-            return Item(id: idPrefix + lease.id, title: "\(lease.resource) restore failed", subtitle: "\(lease.owner) · lease",
-                        activity: .failed, detail: lease.error ?? "Restore failed; release it again to retry",
-                        changedAt: changed, lastActivityAt: changed, progress: nil, notes: [], session: lease.session)
+            return Item(id: idPrefix + lease.id, title: "\(name) restore failed", subtitle: "\(lease.owner) · lease",
+                        activity: .failed, detail: lease.error ?? "Resource manager reported a recovery failure; the resource remains unavailable.",
+                        changedAt: changed, lastActivityAt: changed, progress: nil,
+                        notes: [ConversationItem(id: lease.id + "-recovery", role: .assistant,
+                            text: context + "\n\n" + (lease.error ?? "Resource manager reported a recovery failure; the resource remains unavailable.") + "\nCheck the resource manager before retrying recovery.",
+                            timestamp: timestamp.map(date))], session: lease.session)
         case "active" where lease.warnedAt != nil:
             let expires = lease.expiresAt.map(date)
             let overdue = expires.map { $0 <= now } ?? false
             let left = expires.map { overdue ? "overdue" : "\(now.shortAge(now: $0)) left" } ?? "running out"
-            return Item(id: idPrefix + lease.id, title: "\(lease.resource) lease \(overdue ? "overdue" : "expiring")",
+            return Item(id: idPrefix + lease.id, title: "\(name) lease \(overdue ? "overdue" : "expiring")",
                         subtitle: "\(lease.owner) · lease", activity: .needsInput,
-                        detail: "\(left) · lloom renew \(lease.resource)", changedAt: changed, lastActivityAt: changed,
-                        progress: nil, notes: [], session: lease.session)
+                        detail: "\(left) · check reservation in Accord", changedAt: changed, lastActivityAt: changed,
+                        progress: nil, notes: [ConversationItem(id: lease.id + "-expiry", role: .assistant, text: context + "\n\nLease " + left + ". Check the reservation in Accord.", timestamp: timestamp.map(date))], session: lease.session)
         default:
             return nil
         }
@@ -199,10 +207,12 @@ public enum LLoomSchedule {
         public enum State: Sendable { case free, held, attention, unusable }
         public var id: String
         public var state: State
+        public var label: String
         /// Who holds it, the soonest-ending first.
         public var holders: [String]
         public var purpose: String?
         public var remaining: TimeInterval?
+        public var status: String?
         public var queued: Int
         public var capacity: Int
         public var help: String
@@ -217,16 +227,21 @@ public enum LLoomSchedule {
             let capacity = resource.capacity ?? 1
             let remaining = held.compactMap { $0.expiresAt.map { date($0).timeIntervalSince(now) } }.min()
             let state: Lane.State = resource.error != nil ? .unusable
-                : held.contains { $0.state == "stuck" || $0.warnedAt != nil } ? .attention
+                : held.contains { ["stuck", "recovering", "releasing"].contains($0.state) || $0.warnedAt != nil } ? .attention
                 : held.isEmpty ? .free : .held
-            var help = [resource.description, resource.hosts.map { $0.joined(separator: ", ") }].compactMap { $0 }
+            var help = [resource.id, resource.description, resource.hosts.map { $0.joined(separator: ", ") }].compactMap { $0 }
             if let error = resource.error { help.append(error) }
             for lease in held {
                 help.append("\(lease.owner) (\(lease.state))" + (lease.purpose.map { ": \($0)" } ?? "") + (lease.error.map { " — \($0)" } ?? ""))
             }
             if !queued.isEmpty { help.append("Waiting: " + queued.map(\.owner).joined(separator: ", ")) }
-            return Lane(id: resource.id, state: state, holders: held.map(\.owner), purpose: held.first?.purpose,
-                        remaining: remaining, queued: queued.count, capacity: capacity, help: help.joined(separator: "\n"))
+            let status: String? = resource.error != nil ? "status unknown"
+                : held.contains { $0.state == "stuck" } ? "recovery failed"
+                : held.contains { $0.state == "recovering" } ? "recovering"
+                : held.contains { $0.state == "releasing" } ? "releasing"
+                : held.contains { $0.state == "acquiring" } ? "preparing" : nil
+            return Lane(id: resource.id, state: state, label: resource.label ?? resource.id, holders: held.map(\.owner), purpose: held.first?.purpose,
+                        remaining: remaining, status: status, queued: queued.count, capacity: capacity, help: help.joined(separator: "\n"))
         }
     }
 

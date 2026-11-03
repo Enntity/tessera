@@ -45,6 +45,13 @@ public protocol TerminalNativePaste: AnyObject {
 open class TesseraTerminalView: TerminalView {
     /// Nil in the rare case a view is used without a session; paste then falls back to SwiftTerm's.
     public weak var pasteContext: TerminalPasteContext?
+    /// Emulator replies (device attributes, cursor position, colors) are not user input.
+    public var onTerminalReply: ((ArraySlice<UInt8>) -> Void)?
+
+    open override func send(source: Terminal, data: ArraySlice<UInt8>) {
+        if let onTerminalReply { onTerminalReply(data) }
+        else { super.send(source: source, data: data) }
+    }
     private var consumedPasteKeyCode: UInt16?
     private var pasteReleaseMonitor: Any?
     private var pasteReleaseGeneration = 0

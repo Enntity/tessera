@@ -27,11 +27,13 @@ public enum WindowPlacer {
             return
         }
         #endif
+        let configuration = NSWorkspace.OpenConfiguration()
+        configuration.activates = true
         if let appURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) {
             if let url {
-                NSWorkspace.shared.open([url], withApplicationAt: appURL, configuration: NSWorkspace.OpenConfiguration())
+                NSWorkspace.shared.open([url], withApplicationAt: appURL, configuration: configuration)
             } else {
-                NSWorkspace.shared.openApplication(at: appURL, configuration: NSWorkspace.OpenConfiguration())
+                NSWorkspace.shared.openApplication(at: appURL, configuration: configuration)
             }
         }
         guard let rect, isTrusted else { return }

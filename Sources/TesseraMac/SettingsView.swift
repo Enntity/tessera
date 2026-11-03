@@ -152,6 +152,8 @@ struct RemoteSettings: View {
                     }
                     .padding(Style.Space.xs)
                 }
+                .disabled(!server.isRunning)
+                if !server.isRunning { Text("Enable the phone link to set up pairing.").note() }
                 if !server.clientNames.isEmpty {
                     Text("Connected: " + server.clientNames.joined(separator: ", "))
                 }
@@ -206,8 +208,9 @@ struct GeneralSettings: View {
                 }
             }
             Section("Claude & Codex apps") {
-                Toggle("Place the app's window where the opened tile would sit", isOn: $workspace.placeNativeWindows)
+                Toggle("Move and resize app windows to match the opened tile", isOn: $workspace.placeNativeWindows)
                     .onChange(of: workspace.placeNativeWindows) { _, _ in workspace.save() }
+                Text("Off: bring the app forward and keep its window size and position.").note()
                 HStack {
                     Image(systemName: trusted ? "checkmark.seal.fill" : "exclamationmark.triangle.fill")
                         .foregroundStyle(trusted ? Style.mint : Style.amber)

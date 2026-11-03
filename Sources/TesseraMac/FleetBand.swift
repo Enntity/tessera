@@ -15,7 +15,7 @@ struct FleetBand: View {
             Image(systemName: AgentFlavor.lloom.symbol)
                 .font(Style.ui(.caption, .semibold))
                 .foregroundStyle(Style.accent(.lloom))
-                .help("Shared hardware on the LLooM head")
+                .help("Shared resources observed through Accord")
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: Style.Space.xxs) {
                     ForEach(fleet.lanes) { FleetLaneChip(lane: $0) }
@@ -52,7 +52,7 @@ struct FleetLaneChip: View {
     var body: some View {
         HStack(spacing: Style.Space.s) {
             Dot(color, lit: lane.state != .free)
-            Text(lane.id).font(Style.ui(.label, .semibold)).foregroundStyle(Style.ink)
+            Text(lane.label).font(Style.ui(.label, .semibold)).foregroundStyle(Style.ink)
             Text(summary).font(Style.caption).foregroundStyle(Style.dim)
         }
         .lineLimit(1)
@@ -75,11 +75,12 @@ struct FleetLaneChip: View {
 
     private var summary: String {
         guard !lane.holders.isEmpty else {
-            return lane.state == .unusable ? "config error" : lane.capacity > 1 ? "free · 0/\(lane.capacity)" : "free"
+            return lane.state == .unusable ? "unknown" : lane.capacity > 1 ? "unclaimed · 0/\(lane.capacity)" : "unclaimed"
         }
         var parts = [lane.holders.joined(separator: ", ")]
         if lane.capacity > 1 { parts.append("\(lane.holders.count)/\(lane.capacity)") }
-        if let left = lane.remaining { parts.append(left > 0 ? "\(Date().addingTimeInterval(-left).shortAge()) left" : "overdue") }
+        if let status = lane.status { parts.append(status) }
+        else if let left = lane.remaining { parts.append(left > 0 ? "\(Date().addingTimeInterval(-left).shortAge()) left" : "overdue") }
         if lane.queued > 0 { parts.append("+\(lane.queued) waiting") }
         return parts.joined(separator: " · ")
     }
@@ -95,7 +96,8 @@ struct FleetSettings: View {
         let fleet = model.workspace.fleet
         VStack(alignment: .leading, spacing: Style.Space.l) {
             Form {
-                TextField("LLooM head", text: $url, prompt: Text("http://lloom.example:8100"))
+                Toggle("Show Accord fleet", isOn: Binding(get: { fleet.isVisible }, set: { fleet.isVisible = $0 }))
+                TextField("LLooM adapter in Accord", text: $url, prompt: Text("http://lloom.example:8100"))
                 SecureField("Admin key", text: $key, prompt: Text(fleet.hasKey ? "saved in Keychain" : "required"))
             }
             .formStyle(.columns)
@@ -103,7 +105,7 @@ struct FleetSettings: View {
                 status(fleet)
                 Spacer()
                 if fleet.config != nil {
-                    Button("Disconnect", role: .destructive) {
+                    Button("Hide Fleet") {
                         fleet.disconnect()
                         url = ""
                         key = ""
@@ -119,7 +121,7 @@ struct FleetSettings: View {
                 .toggleStyle(.switch)
             Text("Off: only jobs that fail and leases that need you appear, in Needs you.")
                 .font(Style.ui(.label)).foregroundStyle(Style.dim)
-            Text("Agents lease shared machines and report long-running jobs to a LLooM head (lloom reserve, lloom job). Jobs show up as tiles, and the band over the board shows who holds what. The key is stored in your login Keychain and only sent to this address.")
+            Text("Accord supplies shared resources, reservations and jobs. Connect an existing LLooM scheduler here to observe its serving jobs and leases through Accord. Existing LLooM ownership stays authoritative until its reservation adapter is explicitly enabled.")
                 .font(Style.ui(.label)).foregroundStyle(Style.dim)
             Spacer()
         }

@@ -161,6 +161,51 @@ final class GridNavigationTests: XCTestCase {
 final class TerminalActivityTrackerTests: XCTestCase {
     let t0 = Date(timeIntervalSince1970: 1_000_000)
 
+    func testRestoredTranscriptIsNotANewResultButNextTurnIs() {
+        var t = TerminalActivityTracker(restoring: true)
+        for i in 0..<40 { t.noteOutput(bytes: 400, at: t0.addingTimeInterval(Double(i) * 0.1)) }
+        t.tick(now: t0.addingTimeInterval(4), screenTail: ["Previous answer", "? for shortcuts"])
+        t.tick(now: t0.addingTimeInterval(6), screenTail: ["Previous answer", "? for shortcuts"])
+        XCTAssertEqual(t.activity, .idle)
+        XCTAssertFalse(t.attention)
+        t.noteNotification(title: "Completed", body: "Previous turn finished")
+        t.noteBell(screenTail: ["Previous answer"])
+        XCTAssertFalse(t.attention)
+        // A later replay/redraw is still history, even if startup animated a spinner.
+        for i in 0..<40 { t.noteOutput(bytes: 400, at: t0.addingTimeInterval(10 + Double(i) * 0.1)) }
+        t.tick(now: t0.addingTimeInterval(14), screenTail: ["Loading (esc to interrupt)"])
+        XCTAssertFalse(t.hasLiveWork)
+        t.tick(now: t0.addingTimeInterval(16), screenTail: ["Previous answer"])
+        XCTAssertEqual(t.activity, .idle)
+        XCTAssertFalse(t.attention)
+        t.noteInput(at: t0.addingTimeInterval(17))
+        for i in 0..<40 { t.noteOutput(bytes: 400, at: t0.addingTimeInterval(18 + Double(i) * 0.1)) }
+        t.tick(now: t0.addingTimeInterval(22), screenTail: [])
+        XCTAssertTrue(t.hasLiveWork)
+        t.tick(now: t0.addingTimeInterval(24), screenTail: ["New answer"])
+        XCTAssertEqual(t.activity, .done)
+        XCTAssertTrue(t.attention)
+    }
+
+    func testRestorationKeepsApprovalAndLiveWorkVisible() {
+        var asking = TerminalActivityTracker(restoring: true)
+        asking.noteOutput(bytes: 100, at: t0)
+        asking.tick(now: t0.addingTimeInterval(2), screenTail: ["Allow command (y/n)"])
+        XCTAssertEqual(asking.activity, .needsInput)
+        XCTAssertTrue(asking.attention)
+        // Previously active sessions are explicitly restored without an idle baseline.
+        var working = TerminalActivityTracker(restoring: false)
+        for i in 0..<40 { working.noteOutput(bytes: 400, at: t0.addingTimeInterval(Double(i) * 0.1)) }
+        working.tick(now: t0.addingTimeInterval(4), screenTail: ["Working (esc to interrupt)"])
+        working.tick(now: t0.addingTimeInterval(6), screenTail: ["New result"])
+        XCTAssertEqual(working.activity, .done)
+        XCTAssertTrue(working.attention)
+        var failed = TerminalActivityTracker(restoring: true)
+        failed.noteExit(code: 1)
+        XCTAssertEqual(failed.activity, .failed)
+        XCTAssertTrue(failed.attention)
+    }
+
     func testSustainedOutputThenSilenceIsDoneWithAttention() {
         var t = TerminalActivityTracker()
         for i in 0..<30 { t.noteOutput(bytes: 400, at: t0.addingTimeInterval(Double(i) * 0.1)) }
@@ -601,9 +646,12 @@ final class UsageAPITests: XCTestCase {
         mirror.feed(Array("Current session\r\n\u{1b}[5C11%\u{1b}[1Cused\r\n".utf8))
         XCTAssertTrue(mirror.terminal.transcriptLines().contains("     11% used"))
         XCTAssertEqual(windows, [.init(label: "5h", usedPercent: 10, resets: "6:50pm"),
-                                 .init(label: "Week", usedPercent: 20, resets: "Oct 7 at 5am")])
+                                 .init(label: "Week", usedPercent: 20, resets: "Oct 7 at 5am"),
+                                 .init(label: "Week (Fable)", usedPercent: 0)])
         // Still loading: nothing yet. Refused: said so.
-        XCTAssertNil(ClaudeUsageScreen.parse(Array(panel.prefix(6))))
+        guard case .windows(let partial) = ClaudeUsageScreen.parse(Array(panel.prefix(6))) else { return XCTFail("missing session-only quota") }
+        XCTAssertEqual(partial.map(\.label), ["5h"])
+        XCTAssertNil(ClaudeUsageScreen.parse(["Current session", "Loading…"]))
         XCTAssertEqual(ClaudeUsageScreen.parse(["Error: Usage endpoint is rate limited. Please try again in a moment."]),
                        .refused("Error: Usage endpoint is rate limited. Please try again in a moment."))
 
@@ -613,7 +661,7 @@ final class UsageAPITests: XCTestCase {
         // One number: what is left of the window nearest its limit, as the gauge shows.
         XCTAssertEqual(r.headline, "80% left")
         XCTAssertEqual(r.remaining!, 0.8, accuracy: 0.001)
-        XCTAssertEqual(r.lines, ["5h 10% used · resets 6:50pm", "Week 20% used · resets Oct 7 at 5am"])
+        XCTAssertEqual(r.lines, ["5h 10% used · resets 6:50pm", "Week 20% used · resets Oct 7 at 5am", "Week (Fable) 0% used"])
         XCTAssertNil(r.message)
         XCTAssertEqual(UsageAPI.claudeUsageReading(windows, readAt: now, config: config, now: now.addingTimeInterval(3600)).message, "As of 1h ago")
     }
@@ -668,6 +716,9 @@ final class UsageAPITests: XCTestCase {
 final class KeychainTests: XCTestCase {
     /// "No such item" is an answer, not a failure: only unreadable items throw.
     func testPresenceWithoutReadingTheSecret() throws {
+        let previous = ProcessInfo.processInfo.environment["TESSERA_DATA_DIR"]
+        setenv("TESSERA_DATA_DIR","/tmp/keychain-test-" + UUID().uuidString,1)
+        defer { if let previous { setenv("TESSERA_DATA_DIR",previous,1) } else { unsetenv("TESSERA_DATA_DIR") } }
         let account = "tessera-test-\(UUID().uuidString)"
         XCTAssertFalse(Keychain.contains(account: account))
         XCTAssertNil(try Keychain.read(account: account))
@@ -804,52 +855,6 @@ final class RemoteVitalsTests: XCTestCase {
         XCTAssertNotEqual(a, b)
     }
 
-    let sample = """
-    @stat cpu  13388591 4655 4582035 301064634 1058763 0 17213 0 0 0
-    @memtotal 127600812
-    @memavail 65669088
-    @load 1.15
-    @ncpu 20
-    @ctemp 59200
-    @gpu NVIDIA GB10, 3, 53, 14.93
-    """
-
-    func testParsesSparkProbe() {
-        let r = RemoteVitals.parse(sample)
-        XCTAssertEqual(r.cores, 20)
-        XCTAssertEqual(r.gpuName, "NVIDIA GB10")
-        XCTAssertEqual(r.gpu!, 0.03, accuracy: 0.0001)
-        XCTAssertEqual(r.cpuTemperature!, 59.2, accuracy: 0.01)
-        XCTAssertEqual(r.temperature!, 53, accuracy: 0.01)  // GPU temperature, like nvidia-smi
-        XCTAssertEqual(r.memory!, 1 - 65669088.0 / 127600812.0, accuracy: 0.0001)
-        XCTAssertEqual(r.memoryTotalGB!, 121.7, accuracy: 0.1)
-    }
-
-    func testHostileOutputCantOverflow() {
-        let r = RemoteVitals.parse("""
-        @stat cpu 18446744073709551615 18446744073709551615 1 18446744073709551615 9
-        @memtotal 1e30
-        @memavail 5
-        @ctemp inf
-        @gpu x, 1e30, nan, 99999999999999999999
-        """)
-        XCTAssertNotNil(r.cpuSample)
-        XCTAssertNil(r.memory)
-        XCTAssertNil(r.cpuTemperature)
-        XCTAssertNil(r.gpu)
-        XCTAssertNil(r.gpuTemperature)
-        XCTAssertNil(r.gpuPowerW)
-        // Memory stays a fraction however the two numbers relate.
-        XCTAssertEqual(RemoteVitals.parse("@memtotal 1e-300\n@memavail 1e11").memory, 0)
-    }
-
-    func testCPUUtilizationFromDeltas() {
-        let a = RemoteVitals.parse("@stat cpu 100 0 100 800 0 0 0 0").cpuSample
-        let b = RemoteVitals.parse("@stat cpu 150 0 150 900 0 0 0 0").cpuSample
-        XCTAssertNil(a?.utilization(since: nil))
-        XCTAssertEqual(b!.utilization(since: a)!, 0.5, accuracy: 0.0001)
-    }
-
     func testHostsFromSSHConfigAndValidation() {
         let config = """
         Host *
@@ -859,7 +864,7 @@ final class RemoteVitalsTests: XCTestCase {
         Host=gpu-box-3
         Host github.com !bad dev-*
         """
-        XCTAssertEqual(RemoteVitals.configuredHosts(in: config), ["gpu-box-1", "gpu-box-2", "gpu-box-3", "github.com"])
+        XCTAssertEqual(SSHHostSuggestions.configuredHosts(in: config), ["gpu-box-1", "gpu-box-2", "gpu-box-3", "github.com"])
         XCTAssertFalse(MachineConfig.isValidHost("-oProxyCommand=evil"))
         XCTAssertFalse(MachineConfig.isValidHost("host; rm -rf /"))
         XCTAssertTrue(MachineConfig.isValidHost("me@10.0.0.4"))

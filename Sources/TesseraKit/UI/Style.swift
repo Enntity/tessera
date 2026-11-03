@@ -57,7 +57,7 @@ public enum Style {
         case .zcodeDesktop: Color(red: 0.78, green: 0.45, blue: 0.96)
         case .omp: Color(red: 0.70, green: 0.52, blue: 1.00)
         case .opencode, .aider: Color(red: 0.95, green: 0.60, blue: 0.85)
-        case .lloom: Color(red: 0.55, green: 0.80, blue: 0.70)
+        case .lloom, .accord: Color(red: 0.55, green: 0.80, blue: 0.70)
         case .agentDesk: Color(red: 0.98, green: 0.80, blue: 0.45)
         case .shell, .custom, .web: dim
         }
@@ -243,6 +243,7 @@ public extension View {
 public extension Date {
     /// "now", "12s", "4m", "3h", "2d" — compact enough for a card corner.
     func shortAge(now: Date = Date()) -> String {
+        guard timeIntervalSince1970.isFinite, timeIntervalSince1970 > 0 else { return "unknown" }
         let s = Int(now.timeIntervalSince(self))
         if s < 5 { return "now" }
         if s < 60 { return "\(s)s" }

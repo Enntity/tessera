@@ -4,18 +4,17 @@
 
 # Tessera
 
-Tessera gives agents on your Mac a shared control and communication plane. They can discover
-other sessions, read their current state, exchange messages, check shared resource leases, and
-ask you for a decision through one queue. The **Steward** turns the board into a short brief of
+Tessera is a native workspace for agents connected through Accord. Discover sessions, inspect
+work, exchange messages, see shared resource leases and answer questions in one queue. The **Steward** turns the board into a short brief of
 what changed and what needs your attention. Live terminal and session tiles let you inspect and
 act on that work.
 
-The macOS app is the host. The iOS companion is an optional source-built client; Linux support is
-future work.
+Accord runs the shared service independently of the Mac app. The iOS companion is an optional
+source-built Tessera client; a native Linux Tessera app remains future work.
 
 ## Start here
 
-**Install from source today:** on macOS 15+ with Xcode 26 or newer, run:
+**Install from source today:** on macOS 15+ with Xcode 26+ and Node 22.13+, run:
 
 ```sh
 git clone https://github.com/Enntity/tessera.git
@@ -25,7 +24,7 @@ open .build/app
 ```
 
 Drag `Tessera.app` from that Finder window into Applications, then open it. In Settings → Agents,
-choose **Install Command, Skill & MCP**, and restart your agent sessions. No Tessera account or
+choose **Connect Agents through Accord**, and restart your agent sessions. No Tessera account or
 cloud service is required. See the [first-run setup](docs/install.md#first-run-setup) to connect
 agents, enable Steward, and try a question in the Needs-you lane.
 
@@ -43,7 +42,7 @@ explicitly development candidates. The source includes the complete macOS featur
 | --- | --- |
 | Communication | Discover agents, inspect a tile, send a message, and receive replies through CLI or MCP |
 | Human decisions | Ask a question with answer choices; retrieve the answer later without blocking other tools |
-| Resource coordination | Inspect LLooM holders, queues, and expiry with `tessera resources`; reserve through LLooM before running work |
+| Resource coordination | Use Accord to discover authoritative resources, inspect holders and queues, and reserve before running work |
 | Steward | Read model-generated tile summaries and a board brief, with suggested cleanup that requires your action |
 | Session workspace | Run terminals, view conversations, resume sessions, and keep selected work visible in a dock |
 
@@ -53,18 +52,17 @@ explicitly development candidates. The source includes the complete macOS featur
 
 ## What it does
 
-- **Agents talk to Tessera, and through it to each other.** A `tessera` command, also an MCP
-  server (`tessera mcp`), lets any agent on the Mac see the board (`board`), read another tile
-  (`read`), find itself (`whoami`), message another agent (`send`, `inbox`), ask you something
-  (`ask`) and leave you a note (`notify`). `resources` exposes the connected Fleet schedule,
-  including holders, queues, lease expiry, and whether the snapshot is stale.
-  - Questions land in the Needs-you lane, as alerts and on the phone, with the agent's options as
-    one-tap answers and a reply field.
-  - A message is typed into a terminal agent's prompt only with your OK, unless you allow it
-    outright.
-  - It listens on 127.0.0.1 behind a token in a file only you can read; browser requests are refused.
-  - Settings → Agents → Install puts `tessera` on your PATH, installs the skill
-    (`skills/tessera`) for Claude Code, Codex and Devin, and registers the MCP server.
+- **Agents coordinate through Accord.** One shared skill handles onboarding, discovery,
+  messages, questions, session summaries, search and resource reservations across hosts.
+  Tessera presents that state as native tiles, alerts and the Needs-you lane. It bundles the
+  standalone Accord service and its runtime for a fresh install, and reuses an existing host.
+  - Questions have the same answer whether handled in Tessera or Accord's web interface.
+  - Messages remain unread until their recipient reads them. Opening Tessera does not consume
+    another agent's inbox. Native typing is an explicit request subject to local approval.
+  - Tessera's optional MCP tools inspect the native board, terminal screens and caller tile.
+    Coordination calls exist only in Accord; no Tessera skill is published.
+  - The installer preserves old skill customizations outside agent discovery and retains
+    existing MCP registrations. Agents need only the Accord skill.
 
 - **Needs-you lane.** Down the left of the board (⌥⌘\, remembered): that queue in sections —
   *Asking* cards with the question itself and the answers right there (the phone's one-tap keys for
@@ -271,7 +269,8 @@ empty name goes back to the tile's own title.
 
 ## Build and run
 
-Requires macOS 15+ and Xcode 26 (Swift 6 toolchain); the iOS companion needs iOS 17+.
+Source builds require macOS 15+, Xcode 26 (Swift 6), and Node 22.13+. The app bundles Node
+and Accord; end users need no separate runtime. The iOS companion needs iOS 17+.
 
 ```bash
 swift test                          # core tests (parsers, attention, layout, usage APIs, TLS channel)
@@ -287,9 +286,8 @@ On first use macOS asks for: **Accessibility** (to place the Claude/Codex window
 opens), **Notifications** (attention alerts while Tessera is in the background), **Local Network**
 (only if you turn on the iPhone link), and **Keychain** access for the API keys you give usage
 providers. Everything else is optional and detected: the agent CLIs, the Claude and Codex apps,
-dsh, zsh or fish for command tracking, and ssh (plus `nvidia-smi` on GPU hosts) for machine chips.
-The SoC temperature on this Mac comes from IOKit's HID sensor SPI, looked up at runtime; if a macOS
-update removes it, the chip just omits the temperature.
+dsh, and zsh or fish for command tracking. Machine chips read the host Accord daemon; sensor
+availability depends on its platform plugin. Missing temperatures or other sensors stay unknown.
 
 iOS (needs XcodeGen and the Metal toolchain SwiftTerm's shaders use):
 

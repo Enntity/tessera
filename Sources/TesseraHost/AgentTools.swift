@@ -3,7 +3,7 @@ import TesseraAPI
 import TesseraKit
 
 /// What agents can do through Tessera, as MCP tools: see the board and read any tile on it, find
-/// themselves, message one another, and ask the user something (answered from the Needs-you lane).
+/// themselves. Shared coordination is available exclusively through Accord.
 /// Everything read goes out with credentials removed; nothing is read while privacy mode is on.
 @MainActor
 public final class AgentTools {
@@ -75,80 +75,25 @@ public final class AgentTools {
     func call(_ name: String, _ args: [String: Any], caller: AgentCaller) async throws -> String {
         guard let workspace else { throw Refusal("Tessera is starting up; try again in a moment.") }
         let me = workspace.agentCaller(caller)
-        if privacy(), ["board", "resources", "read_tile", "whoami", "inbox", "get_answer"].contains(name) {
+        if privacy(), ["board", "read_tile", "whoami"].contains(name) {
             throw Refusal("The developer has privacy mode on; board content can't be read right now.")
         }
         switch name {
         case "board":
             return board(workspace, waitingOnly: args["waiting_only"] as? Bool ?? false, me: me.tile)
-        case "resources":
-            return workspace.fleet.agentReport()
         case "read_tile":
             guard !privacy() else { throw Refusal("The developer has privacy mode on; tiles can't be read right now.") }
             let id = try workspace.resolveTile(args["tile"] as? String ?? "")
+            if id.hasPrefix("accord:") { return try await workspace.accord.read(id) }
             return workspace.readTile(id, lines: max(1, min(400, Self.int(args["lines"]) ?? 60)))
         case "whoami":
             guard let tile = me.tile, let info = workspace.info(tile) else {
                 return Redactor.redact("Tessera can't tell which tile you are (\(me.reason)). You are \"\(me.label)\". "
-                    + "Use board to find your tile, then set TESSERA_TILE_ID to that exact id for inbox access. --as NAME only sets your display name.")
+                    + "Use board to find your tile, then set TESSERA_TILE_ID to that exact id for native inspection. --as NAME only sets your display name.")
             }
             return Redactor.redact("You are tile \(tile): \(info.title) (\(info.flavor.displayName), \(info.subtitle)).")
-        case "send_message":
-            let to = try workspace.resolveTile(args["to"] as? String ?? "")
-            let text = (args["text"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !text.isEmpty else { throw Refusal("text is empty") }
-            guard to != me.tile else { throw Refusal("That is you.") }
-            let wantsTyping = args["type"] as? Bool ?? false
-            if wantsTyping, workspace.terminals[to] == nil { throw Refusal("Only terminal agents can have messages typed in. Nothing was sent; retry without --type for inbox delivery.") }
-            let title = workspace.info(to)?.title ?? to
-            let message = workspace.desk.send(text, from: me.label, fromTile: me.tile, to: to, toTitle: title, type: wantsTyping)
-            switch message.delivery {
-            case "typed": return "Delivered to \(title): typed into its terminal, and in its inbox."
-            case "waiting": return "In \(title)'s inbox. Typing it in waits for the developer's OK in Tessera."
-            default: return "In \(title)'s inbox (\(to)). They see it when they check `inbox`."
-            }
-        case "inbox":
-            guard let tile = me.tile else { throw Refusal("Tessera can't tell which tile you are, so it can't find your inbox (\(me.reason)).") }
-            let all = args["all"] as? Bool ?? false
-            let wait = Self.wait(args["wait_seconds"], default: 0)
-            var found = workspace.desk.inbox(for: tile, unreadOnly: !all, markRead: true)
-            let deadline = Date().addingTimeInterval(wait)
-            while found.isEmpty, Date() < deadline {
-                try await Task.sleep(nanoseconds: 500_000_000)
-                guard !privacy() else { throw Refusal("Privacy mode is on; inbox reading paused.") }
-                found = workspace.desk.inbox(for: tile, unreadOnly: !all, markRead: true)
-            }
-            guard !found.isEmpty else { return "No messages." }
-            return Redactor.redact(found.map { m in
-                "[\(m.sentAt.formatted(date: .omitted, time: .shortened))] from \(m.from)\(m.fromTile.map { " (\($0))" } ?? ""): \(m.text)"
-            }.joined(separator: "\n"))
-        case "ask_human":
-            let text = (args["question"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !text.isEmpty else { throw Refusal("question is empty") }
-            let options = (args["options"] as? [String] ?? []).map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
-            let question = workspace.desk.ask(text, options: options, from: me.label, fromTile: me.tile)
-            return try await answer(question.id, wait: Self.wait(args["wait_seconds"], default: 50), workspace)
-        case "get_answer":
-            return try await answer(args["id"] as? String ?? "", wait: Self.wait(args["wait_seconds"], default: 50), workspace)
-        case "notify_human":
-            let text = (args["text"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !text.isEmpty else { throw Refusal("text is empty") }
-            workspace.desk.note(text, from: me.label)
-            return "The developer will see it in the Needs-you lane."
         default:
             throw Refusal("unknown tool \(name)")
-        }
-    }
-
-    private func answer(_ id: String, wait: TimeInterval, _ workspace: Workspace) async throws -> String {
-        let deadline = Date().addingTimeInterval(wait)
-        while true {
-            guard !privacy() else { throw Refusal("Privacy mode is on; answer reading paused.") }
-            guard let q = workspace.desk.question(id) else { throw Refusal("no question \(id)") }
-            if let answer = q.answer { return Redactor.redact("Answer: \(answer)") }
-            if q.dismissed { return "The developer set the question aside without answering. This is not approval; leave any action requiring approval pending." }
-            if Date() >= deadline { return "Not answered yet. Question id: \(id). Call get_answer with this id to keep waiting." }
-            try await Task.sleep(nanoseconds: 500_000_000)
         }
     }
 
@@ -161,7 +106,7 @@ public final class AgentTools {
         let tiles = workspace.allTiles.filter { !waitingOnly || $0.needsUser }
         lines.append("Tiles (\(tiles.count)):")
         for t in tiles {
-            let what = workspace.steward.summaries[t.id]?.summary ?? t.detail ?? ""
+            let what = workspace.accord.summaries[t.id] ?? workspace.steward.summaries[t.id]?.summary ?? t.detail ?? ""
             lines.append("- \(t.id)\(t.id == me ? " (you)" : "") | \(t.title) | \(t.flavor.displayName) | \(t.activity.label.lowercased())"
                 + "\(t.needsUser ? ", waiting on the developer" : "") | \(t.subtitle)\(what.isEmpty ? "" : " | \(Redactor.redact(what).preview(140))")")
         }
@@ -174,10 +119,7 @@ public final class AgentTools {
         return (value as? String).flatMap(Int.init)
     }
 
-    /// Waits stay under a minute: some agent harnesses time a tool call out at 60 s.
-    static func wait(_ value: Any?, default fallback: Int) -> TimeInterval {
-        TimeInterval(max(0, min(55, int(value) ?? fallback)))
-    }
+
 }
 
 extension Workspace {
@@ -191,7 +133,7 @@ extension Workspace {
         if let cwd = caller.cwd?.standardizedPath {
             let matches = order.filter { id in
                 if let t = terminals[id] { return t.isRunning && t.command != nil && (t.liveDirectory() ?? t.cwd).standardizedPath == cwd }
-                if let a = agents.session(id) { return a.flavor != .lloom && a.flavor != .agentDesk && a.cwd.standardizedPath == cwd }
+                if let a = agents.session(id) { return a.flavor != .lloom && a.flavor != .agentDesk && a.flavor != .accord && a.cwd.standardizedPath == cwd }
                 return false
             }
             if matches.count == 1, let info = info(matches[0]) { return (matches[0], caller.name ?? info.title, "") }

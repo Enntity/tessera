@@ -1,0 +1,40 @@
+{
+  "status": "passed",
+  "at": "2026-10-31T21:15:49.009079+00:00",
+  "nativeTests": 268,
+  "checks": {
+    "restoredTranscriptReplay": true,
+    "emulatorRepliesAreNotUserInput": true,
+    "oldDiscoveryDoesNotRequestReview": true,
+    "newCompletionRequestsReview": true,
+    "automaticCheckinsAreNotHumanQuestions": true,
+    "packagedRestart": true,
+    "fourHostsFreshTelemetry": true
+  },
+  "logs": {
+    "tests": "6ed1173036357a4b4bec4176a267c929c1880bc865d9dd8411f29093f05bea02",
+    "build": "747b98c9c8ae4d46b0072c12cceafb2d898162b512c9f3b7cf9083d345d4aa6e",
+    "package": "66ca4bdd6ea8b900ee5e3f2252c1ac55d6cf558cee26197710771380201a2b41",
+    "tracker": "2ffa1f916e30b501f29ef42908eaf9c8db4afa77e39e25550d15bc84d9d6ef6d"
+  },
+  "sourceTreeSHA256": "5ea3cfe5e181c8bca3d30c9c7953f5222d0f825781b888ea3cf57b08437fa80a",
+  "binarySHA256": "506ec272009d0e92ec90fa478e58225020f2acd265e2a85c462c0d46e021d866",
+  "hostServiceSource": "b07e272",
+  "limits": [
+    "No GPU workload or reservation changed",
+    "Development signature; not notarized"
+  ],
+  "activation": {
+    "installedSource": "75c3e9498ba05930265e278b6e7131cd3721140f",
+    "matchingSigningRequirement": true,
+    "restoredTerminalIDs": 13,
+    "historicalReviewCards": 0,
+    "operatorItems": 1,
+    "remainingItem": "Existing overdue LLooM lease",
+    "configuredHosts": 4,
+    "freshGPUAndMemorySamples": 4,
+    "duplicateHostChips": 0,
+    "sshRecoverySeconds": 24.3,
+    "scope": "SSH transport interruption only; host daemons and GPU workloads kept running"
+  }
+}

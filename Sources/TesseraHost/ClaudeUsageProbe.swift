@@ -4,7 +4,7 @@ import TesseraKit
 
 /// Reads the plan panel of Claude Code's own `/usage` command in a hidden terminal: Claude Code
 /// starts as it would in any terminal (the user's settings and hooks as they are) in the home
-/// folder, `/usage` is typed, the screen is read until both plan windows are on it, and Claude Code
+/// folder, `/usage` is typed, the available quota windows are read as the panel settles, and Claude Code
 /// is quit. No prompt is sent, so no model is asked anything and no conversation is saved; only
 /// the user's own sign-in is used, by Claude Code itself. Runs only once the user has agreed.
 @MainActor
@@ -22,6 +22,8 @@ final class ClaudeUsageProbe {
     private var timer: Timer?
     private var started = Date()
     private var askedAt: Date?
+    private var windows: [ClaudeUsageScreen.Window] = []
+    private var windowsChangedAt = Date.distantPast
     private var done: ((Result) -> Void)?
 
     func run(_ done: @escaping (Result) -> Void) {
@@ -60,7 +62,10 @@ final class ClaudeUsageProbe {
             return
         }
         switch ClaudeUsageScreen.parse(Array(lines.suffix(80))) {
-        case .windows(let windows): finish(.read(windows))
+        case .windows(let windows):
+            if windows != self.windows { self.windows = windows; windowsChangedAt = now }
+            // Model-specific windows can appear after the overall weekly window.
+            if now.timeIntervalSince(windowsChangedAt) >= 2 || now.timeIntervalSince(askedAt) > 20 { finish(.read(windows)) }
         case .refused(let why): finish(.refused(why))
         case nil where now.timeIntervalSince(askedAt) > 20: finish(.failed("Claude Code's usage panel didn't come up"))
         case nil: break

@@ -2,9 +2,8 @@ import Foundation
 import Observation
 import TesseraKit
 
-/// Follows a LLooM head's schedule: who holds which shared hardware (the Fleet band) and the jobs
-/// agents report (tiles on the board). The head's address is saved with the app's state; its admin
-/// key lives in the Keychain and is only ever sent to that address.
+/// Native fleet presentation. Accord owns manager connections and telemetry transport;
+/// LLooM supplies model effects; migrated resources and jobs are owned by Accord.
 @Observable
 @MainActor
 public final class FleetService {
@@ -38,11 +37,16 @@ public final class FleetService {
     @ObservationIgnored private var timer: Timer?
     @ObservationIgnored private var inFlight = false
     @ObservationIgnored private var retryAt = Date.distantPast
-    @ObservationIgnored private let session: URLSession = {
-        let c = URLSessionConfiguration.ephemeral
-        c.timeoutIntervalForRequest = 15
-        return URLSession(configuration: c)
-    }()
+    @ObservationIgnored public var accord: AccordBridge?
+    @ObservationIgnored private var managerInitialized = false
+    @ObservationIgnored private var newConfiguration = false
+
+    public var isVisible = !Preferences.store.bool(forKey:"tessera.hideAccordFleet") {
+        didSet {
+            Preferences.store.set(!isVisible,forKey:"tessera.hideAccordFleet")
+            if isVisible { poll() } else { board = nil; lanes = []; status = .off; updatedAt = nil; onChange?() }
+        }
+    }
 
     static let account = "lloom.head"
     public static let refreshInterval: TimeInterval = 10
@@ -69,17 +73,21 @@ public final class FleetService {
     @discardableResult
     public func connect(url: String, key: String?) -> Bool {
         guard let base = LLoomSchedule.baseURL(url) else { return false }
+        isVisible = true
         config = Config(url: base.absoluteString)
         StateFile.save(config, to: store)
         if let key, !key.isEmpty { Keychain.set(key, account: Self.account) }
         retryAt = .distantPast
+        managerInitialized = false
+        newConfiguration = true
         status = .loading
         poll()
         return true
     }
 
-    /// Stops following the head and forgets its key; its jobs leave the board.
+    /// Hides this native view; never deletes a shared manager or changes its ownership.
     public func disconnect() {
+        isVisible = false
         config = nil
         try? FileManager.default.removeItem(at: store)
         Keychain.set(nil, account: Self.account)
@@ -95,27 +103,6 @@ public final class FleetService {
         board.map { LLoomSchedule.items($0, lookback: lookback) } ?? []
     }
 
-    /// A timestamped observation, never a grant to use hardware. Failed polls retain the last
-    /// schedule in the UI, so agents must also see that it is stale.
-    func agentReport(now: Date = Date()) -> String {
-        guard config != nil else { return "Fleet is not configured. Connect a LLooM head in Settings → Fleet. Resource availability is unknown." }
-        guard let board, let updatedAt else { return "Fleet has no schedule yet. Resource availability is unknown; check Settings → Fleet." }
-        let age = max(0, now.timeIntervalSince(updatedAt))
-        let fresh = status == .ok && age <= 30
-        var lines = ["Fleet snapshot: \(fresh ? "fresh" : "STALE — availability unknown"), fetched \(ISO8601DateFormatter().string(from: updatedAt)).",
-                     "Read-only observation. Use LLooM to reserve before work; a free snapshot is not a reservation."]
-        if case .failed(let reason) = status { lines.append("Last poll failed: \(reason)") }
-        for resource in board.resources {
-            lines.append("- \(resource.id) | capacity \(resource.capacity ?? 1) | holders: \((resource.holders ?? []).joined(separator: ", ")) | queue: \((resource.queue ?? []).joined(separator: ", "))")
-            if let error = resource.error { lines.append("  unavailable: \(error)") }
-            for lease in board.reservations where lease.resource == resource.id && !["released", "failed"].contains(lease.state) {
-                let expiry = lease.expiresAt.map { ISO8601DateFormatter().string(from: Date(timeIntervalSince1970: $0 / 1000)) } ?? "no expiry reported"
-                lines.append("  \(lease.id) | \(lease.owner) | \(lease.state) | expires \(expiry)\(lease.purpose.map { " | \($0)" } ?? "")")
-            }
-        }
-        return Redactor.redact(lines.joined(separator: "\n"))
-    }
-
     /// A job or lease as an app-session tile, so it joins the board, the Needs-you lane, alerts and
     /// the phone like any conversation. Its notes read as its transcript.
     public nonisolated static func session(_ item: LLoomSchedule.Item) -> AgentAppSession {
@@ -126,30 +113,114 @@ public final class FleetService {
     }
 
     private func poll() {
-        guard let config, let base = LLoomSchedule.baseURL(config.url), !inFlight, Date() >= retryAt else { return }
+        guard isVisible, let accord, !inFlight, Date() >= retryAt else { return }
         inFlight = true
         if board == nil, status == .off { status = .loading }
-        let account = Self.account
-        Task { [session] in
+        let config = self.config, account = Self.account
+        Task {
             defer { self.inFlight = false }
-            // Reading a secret can raise a Keychain prompt; keep it off the main thread.
-            let key = await Task.detached(priority: .utility) { Keychain.get(account: account) }.value
             do {
-                let (data, response) = try await session.data(for: LLoomSchedule.request(base: base, token: key))
-                let code = (response as? HTTPURLResponse)?.statusCode ?? 0
-                guard self.config == config else { return }  // reconfigured while asking
-                guard (200..<300).contains(code) else {
-                    throw Failure(code == 401 || code == 403 ? "The head refused the key (HTTP \(code))" : "The head answered HTTP \(code)")
+                if let config, !managerInitialized {
+                    let key = await Task.detached { Keychain.get(account: account) }.value
+                    var args: [String:Any] = ["name":"lloom","type":"lloom","url":config.url,"ifAbsent":!newConfiguration]
+                    if let key { args["key"] = key }
+                    _ = try await accord.request("manager-configure", args:args)
+                    guard self.config == config else { return }
+                    managerInitialized = true; newConfiguration = false
                 }
-                self.apply(try LLoomSchedule.parse(data))
+                let schedules = try await accord.request("manager-schedules")
+                let managers = schedules["managers"] as? [[String:Any]] ?? []
+                guard Self.managersReachable(managers) else { throw Failure("Accord reports an unreachable resource manager; ownership is unknown") }
+                let hosts = try await accord.request("hosts")
+                let fleet = try await Self.nativeFleet(hosts: hosts["hosts"] as? [[String:Any]] ?? []) { operation, host in
+                    try await accord.request(operation, host:host)
+                }
+                guard self.isVisible else { return }
+                self.apply(try Self.project(resources:fleet.resources, jobs:fleet.jobs, managers:managers))
             } catch {
-                guard self.config == config else { return }
-                // Keep showing the last schedule, and ask less often until the head is back.
-                self.retryAt = Date().addingTimeInterval(30)
+                guard self.isVisible else { return }
+                self.retryAt = Date().addingTimeInterval(10)
                 let message = (error as? Failure)?.message ?? error.localizedDescription
                 if self.status != .failed(message) { self.status = .failed(message) }
             }
         }
+    }
+
+    static func managersReachable(_ managers: [[String:Any]]) -> Bool {
+        managers.allSatisfy { ["observed", "migrated"].contains($0["state"] as? String ?? "") }
+    }
+
+    /// Read each authority directly, including migrated managers' native resources.
+    /// A failed host preserves the last board rather than presenting its assets as free.
+    static func nativeFleet(hosts: [[String:Any]], fetch: (String, String) async throws -> [String:Any]) async throws -> (resources: [[String:Any]], jobs: [[String:Any]]) {
+        var resources: [[String:Any]] = [], jobs: [[String:Any]] = []
+        var seen = Set<String>()
+        for host in hosts {
+            guard let authority = host["authority"] as? String, seen.insert(authority).inserted else { continue }
+            let r = try await fetch("resources", authority)
+            let j = try await fetch("jobs", authority)
+            resources += (r["resources"] as? [[String:Any]] ?? []).filter { $0["manager"] == nil }
+            jobs += (j["jobs"] as? [[String:Any]] ?? []).map { job in
+                var item = job
+                if let id = job["id"] as? String { item["id"] = authority + "/" + id }
+                return item
+            }
+        }
+        return (resources, jobs)
+    }
+
+    /// A view projection, never a second scheduler. Preserve every delegated job/lease field.
+    static func project(resources: [[String:Any]], jobs: [[String:Any]], managers: [[String:Any]]) throws -> LLoomSchedule.Board {
+        var rs: [[String:Any]] = [], leases: [[String:Any]] = [], js: [[String:Any]] = []
+        for manager in managers {
+            guard let name = manager["name"] as? String, let board = manager["board"] as? [String:Any] else { continue }
+            let prefix = name + ":"
+            for var r in board["resources"] as? [[String:Any]] ?? [] {
+                r["id"] = prefix + (r["id"] as? String ?? "unknown")
+                r["holders"] = (r["holders"] as? [String] ?? []).map { prefix + $0 }
+                r["queue"] = (r["queue"] as? [String] ?? []).map { prefix + $0 }; rs.append(r)
+            }
+            for var r in board["reservations"] as? [[String:Any]] ?? [] {
+                r["id"] = prefix + (r["id"] as? String ?? "unknown")
+                r["resource"] = prefix + (r["resource"] as? String ?? "unknown"); leases.append(r)
+            }
+            for var j in board["jobs"] as? [[String:Any]] ?? [] {
+                j["id"] = prefix + (j["id"] as? String ?? "unknown")
+                if let r = j["resource"] as? String { j["resource"] = prefix + r }; js.append(j)
+            }
+        }
+        for r in resources where r["manager"] == nil && r["plugin"] as? String != "artifact" {
+            guard let id = r["id"] as? String else { continue }
+            let holder = r["holder"] as? [String:Any]
+            let claim = holder?["claim"] as? String
+            var view: [String:Any] = ["id":id, "label":r["label"] ?? id, "description":r["label"] ?? id, "hosts":r["hosts"] ?? [],"holders":claim.map { [$0] } ?? [],"queue":(r["queue"] as? [[String:Any]] ?? []).compactMap { $0["id"] as? String },"capacity":1]
+            if r["state"] as? String == "unknown" { view["error"] = "Controller unavailable; ownership unknown" }
+            rs.append(view)
+            if let holder, let claim {
+                let state = ["running":"active", "preparing":"acquiring", "releasing":"releasing",
+                             "revoking":"recovering", "recovering":"recovering", "stuck":"stuck", "failed":"stuck"][holder["state"] as? String ?? ""] ?? "unknown"
+                var lease: [String:Any] = ["id":claim, "resource":id, "owner":holder["label"] ?? holder["actor"] ?? "unknown",
+                    "state":state, "expiresAt":holder["deadline"] ?? NSNull()]
+                for field in ["startedAt", "updatedAt", "warnedAt", "error", "purpose"] {
+                    if let value = holder[field] { lease[field] = value }
+                }
+                if let address = holder["address"] as? String { lease["session"] = "accord:" + address }
+                if state == "unknown" { rs[rs.count - 1]["error"] = "Lease status unavailable; resource remains held" }
+                leases.append(lease)
+            }
+        }
+        for j in jobs {
+            guard let id = j["id"] as? String else { continue }
+            let state = j["state"] as? String ?? "unknown"
+            let metrics = (j["metrics"] as? [String:Any] ?? [:]).filter { $0.value is String || $0.value is NSNumber }
+            var item: [String:Any] = ["id":"accord:"+id,"title":j["title"] ?? "Job","owner":j["actor"] ?? "agent",
+                "state":state == "working" ? "running" : state,"startedAt":j["created_at"] ?? 0,"heartbeatAt":j["updated_at"] ?? 0,
+                "note":j["note"] ?? "","notes":[],"metrics":metrics]
+            if let progress = j["progress"] as? [String:Any], progress["done"] is NSNumber { item["progress"] = progress }
+            if j["stalled"] as? Bool == true { item["stalledAt"] = j["updated_at"] }
+            js.append(item)
+        }
+        return try LLoomSchedule.parse(JSONSerialization.data(withJSONObject:["now":Date().timeIntervalSince1970*1000,"resources":rs,"reservations":leases,"jobs":js]))
     }
 
     private struct Failure: Error {

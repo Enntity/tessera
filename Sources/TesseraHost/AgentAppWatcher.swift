@@ -95,8 +95,25 @@ public final class AgentAppWatcher {
     }
 
     /// Writes only what changed: rewriting unchanged data would re-render the whole board every scan.
+    /// Search results are cached history. Prefer newer observations, then live Accord on ties.
+    static func mergeSessions(scanned: [String: AgentAppSession], external: [String: [String: AgentAppSession]]) -> [String: AgentAppSession] {
+        var found = scanned
+        let sources = external.keys.sorted { a, b in
+            if a == "accord" { return false }
+            if b == "accord" { return true }
+            return a < b
+        }
+        for source in sources {
+            for (id, candidate) in external[source] ?? [:] where scanned[id] == nil {
+                if let old = found[id], old.lastActivityAt > candidate.lastActivityAt { continue }
+                found[id] = candidate
+            }
+        }
+        return found
+    }
+
     private func publish(rateLimits: CodexRateLimits?) {
-        let found = external.values.reduce(scanned) { $0.merging($1) { disk, _ in disk } }
+        let found = Self.mergeSessions(scanned: scanned, external: external)
         var changed = false, cameOrWent = false
         var tiles = sessions
         for (id, session) in found {

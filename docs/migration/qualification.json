@@ -1,0 +1,49 @@
+{
+  "status": "passed",
+  "at": "2026-10-31T20:05:19.068609+00:00",
+  "platform": "macOS arm64",
+  "nativeTests": 264,
+  "accordTests": 113,
+  "accordQualifiedAt": "2026-10-31T19:58:40.137Z",
+  "checks": {
+    "nativeTests": {
+      "passed": true,
+      "logSHA256": "a32c632150d1c176ec559d2442a6f672fb8a40d2f1b145145bc27170f0ecbf4b"
+    },
+    "packagedApp": {
+      "passed": true,
+      "logSHA256": "d421f24489cde5786c88e142ebb0db0161a0a83d3df7633eb6d6a40c42101c58"
+    },
+    "build": {
+      "passed": true,
+      "logSHA256": "42b036b57b9dc1baba470094bd169dd083f2ba724f9466fe1c8dd756a9c37ac1"
+    },
+    "signing": {
+      "passed": true,
+      "matchesInstalledDesignatedRequirement": true,
+      "notarized": false
+    },
+    "installer": {
+      "passed": true,
+      "isolatedHome": true,
+      "preservesCustomizations": true,
+      "onlyAccordSkill": true
+    }
+  },
+  "limits": [
+    "Isolated package tests do not activate launchd",
+    "Installed native Tessera has not been replaced or restarted",
+    "No live LLooM model-serving or Spark workload changed",
+    "Native candidate is locally signed, not notarized"
+  ],
+  "sourceTree": {
+    "directories": [
+      "Sources",
+      "Tests",
+      "scripts",
+      "Vendor"
+    ],
+    "algorithm": "SHA-256 of Python json.dumps(path-to-SHA256 map, sort_keys=True)",
+    "sha256": "b6209c713e53ed7e4eed70350a45385b0604c3be204e862fb9eb71e0f531535d"
+  }
+}

@@ -47,6 +47,8 @@ public final class TerminalSession: NSObject {
     /// Each start gets its own process and relay; callbacks from an older generation are dropped.
     @ObservationIgnored private var generation = 0
     @ObservationIgnored private var tracker = TerminalActivityTracker()
+    @ObservationIgnored private var resumeWasWorking = false
+    public var hasLiveWork: Bool { tracker.hasLiveWork }
     @ObservationIgnored private var dirty = false
     /// When output last arrived; screens that have been still for a while need no rescanning.
     @ObservationIgnored private var lastOutputAt: Date = .distantPast
@@ -78,6 +80,7 @@ public final class TerminalSession: NSObject {
     /// `title` is a user-chosen name that always wins.
     public init(id: String = UUID().uuidString, command: String?, cwd: String, title: String? = nil, label: String? = nil,
                 sessionId: String? = nil, resuming: Bool = false, mayContinueLatest: Bool = true, startSuspended: Bool = false,
+                resumingWork: Bool = false,
                 shell: String? = nil, environmentOverrides: [String: String] = [:],
                 initialSize: CGSize = CGSize(width: 1180, height: 740)) {
         self.id = id
@@ -87,6 +90,7 @@ public final class TerminalSession: NSObject {
         // would undo its one-tile-per-conversation rule.
         self.sessionId = resuming ? sessionId : sessionId ?? command.flatMap(SessionResume.sessionId(in:))
         self.hasStarted = resuming
+        self.resumeWasWorking = resumingWork
         self.shell = shell ?? LoginShell.path
         self.environmentOverrides = environmentOverrides
         self.mayContinueLatest = mayContinueLatest
@@ -111,6 +115,7 @@ public final class TerminalSession: NSObject {
     }
 
     private func configureView() {
+        view.onTerminalReply = { [weak self] bytes in self?.process?.send(data: bytes) }
         let theme = TerminalTheme.midnight
         view.terminalDelegate = self
         view.nativeBackgroundColor = NSColor(cgColor: theme.background.cgColor) ?? .black
@@ -201,7 +206,8 @@ public final class TerminalSession: NSObject {
     }
 
     public func start() {
-        tracker.restart()
+        tracker.restart(restoring: hasStarted && !resumeWasWorking && command.flatMap(SessionResume.conversationTool(for:)) != nil)
+        resumeWasWorking = false
         isSuspended = false
         launchedAt = Date()
         let plan = launchPlan()
@@ -281,6 +287,7 @@ public final class TerminalSession: NSObject {
 
     /// Restart keeps the conversation: it's a shut down and resume.
     public func restart() {
+        resumeWasWorking = tracker.hasLiveWork
         terminate()
         resume()
     }

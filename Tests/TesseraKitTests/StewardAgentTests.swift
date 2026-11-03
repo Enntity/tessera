@@ -39,7 +39,7 @@ final class StewardTests: XCTestCase {
     func testTitlesFoldersAndChangeNotesAreRedacted() {
         let tile = TileInfo(id: "t", kind: .terminal, flavor: .shell, title: "password=hunter2hunter2", subtitle: "token=abcdefghi", activity: .idle)
         let d = Steward.Digest(tile, text: "safe", unseen: false)
-        let messages = Steward.tileMessages(d) + Steward.briefMessages([d], changes: [tile.title])
+        let messages = Steward.briefMessages([d], changes: [tile.title])
         for message in messages {
             XCTAssertFalse(message["content"]!.contains("hunter2"))
             XCTAssertFalse(message["content"]!.contains("abcdefghi"))
@@ -53,22 +53,6 @@ final class StewardTests: XCTestCase {
     private func digest(_ id: String, state: String, waiting: Bool = false) -> Steward.Digest {
         Steward.Digest(id: id, title: id, kind: "terminal", flavor: "claude", subtitle: "~/src", state: state,
                        waiting: waiting, unseen: false, idleMinutes: 3, detail: nil, text: "…")
-    }
-
-    func testATileSummaryIsReadFromAFencedAnswer() throws {
-        let data = completion("```json\n{\"summary\": \"running cortex unit tests\", \"blocked\": false, \"needs\": \"\"}\n```")
-        let summary = try Steward.tileSummary(fromCompletion: data)
-        XCTAssertEqual(summary, Steward.TileSummary(summary: "running cortex unit tests", blocked: false, needs: nil))
-        XCTAssertThrowsError(try Steward.tileSummary(fromCompletion: completion("I think it is compiling.")))
-    }
-
-    func testAWantsNothingReadsAsNoNeeds() throws {
-        for word in ["None.", "nothing", "n/a", "no action", "-", "NONE"] {
-            let data = completion("{\"summary\": \"idling\", \"blocked\": false, \"needs\": \"\(word)\"}")
-            XCTAssertNil(try Steward.tileSummary(fromCompletion: data).needs, word)
-        }
-        let data = completion("{\"summary\": \"idling\", \"blocked\": false, \"needs\": \"Merge when green\"}")
-        XCTAssertEqual(try Steward.tileSummary(fromCompletion: data).needs, "Merge when green")
     }
 
     func testAnEmptyHeadlineStaysEmpty() throws {
@@ -98,9 +82,9 @@ final class StewardTests: XCTestCase {
         let d = Steward.Digest(tile, text: long, unseen: false)
         XCTAssertLessThanOrEqual(d.text.count, 1500)
         XCTAssertTrue(d.text.hasSuffix("line 399 token=[secret]"))
-        let messages = Steward.tileMessages(d)
+        let messages = Steward.briefMessages([d],changes:[])
         XCTAssertTrue(messages[0]["content"]!.contains("untrusted data"))
-        XCTAssertTrue(messages[1]["content"]!.hasPrefix("<tile>"))
+        XCTAssertTrue(messages[1]["content"]!.contains("<tile>"))
     }
 
     func testWhatHappenedWhileTheUserWasAway() {
@@ -138,7 +122,42 @@ final class AgentAPITests: XCTestCase {
         addTeardownBlock { [dir] in try? FileManager.default.removeItem(at: dir!) }
         setenv("TESSERA_DATA_DIR", dir.path, 1)
         defer { unsetenv("TESSERA_DATA_DIR") }
-        return Workspace()
+        let workspace = Workspace()
+        XCTAssertFalse(workspace.accord.isConfigured, "Isolated test workspace must never join the installed Accord")
+        return workspace
+    }
+
+    private func connectFixture(_ workspace: Workspace) async throws {
+        let script = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("scripts/accord-fixture.mjs")
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath:"/usr/bin/env")
+        process.arguments = ["node", script.path, dir.appendingPathComponent("accord-host").path, dir.appendingPathComponent("accord-connection.json").path]
+        process.standardOutput = FileHandle.nullDevice
+        try process.run()
+        addTeardownBlock { if process.isRunning { process.terminate(); process.waitUntilExit() } }
+        for _ in 0..<200 where !workspace.accord.isConfigured && process.isRunning { try await Task.sleep(nanoseconds:50_000_000) }
+        XCTAssertTrue(workspace.accord.isConfigured)
+        workspace.accord.digests = { workspace.allTiles.map { Steward.Digest($0, text:"Fixture observation", unseen:false) } }
+        workspace.accord.questions = { workspace.desk.importAccordQuestions($0) }
+        workspace.accord.answers = { workspace.desk.accordAnswers() }
+        workspace.accord.notes = { workspace.desk.importAccordNotes($0) }
+        workspace.accord.noteReads = { workspace.desk.accordNoteReads() }
+        workspace.accord.noteRead = { workspace.desk.confirmNoteRead($0) }
+        await workspace.accord.refresh()
+        XCTAssertTrue(workspace.accord.connected)
+    }
+
+    private func agentOperation(_ operation: String, _ args: [String:Any]) async throws -> [String:Any] {
+        let data = try Data(contentsOf:dir.appendingPathComponent("accord-connection.json.agent"))
+        let agent = try XCTUnwrap(JSONSerialization.jsonObject(with:data) as? [String:String])
+        var request = URLRequest(url:URL(string:agent["url"]! + "/v1/collaboration")!)
+        request.httpMethod = "POST"
+        request.setValue("Bearer " + agent["credential"]!,forHTTPHeaderField:"Authorization")
+        request.setValue("application/json",forHTTPHeaderField:"Content-Type")
+        request.httpBody = try JSONSerialization.data(withJSONObject:["operation":operation,"args":args])
+        let (body,response) = try await URLSession.shared.data(for:request)
+        XCTAssertEqual((response as? HTTPURLResponse)?.statusCode,200)
+        return try XCTUnwrap(JSONSerialization.jsonObject(with:body) as? [String:Any])
     }
 
     private func call(_ workspace: Workspace, _ method: String, _ params: [String: Any] = [:]) async throws -> [String: Any] {
@@ -165,7 +184,7 @@ final class AgentAPITests: XCTestCase {
         XCTAssertEqual((result["serverInfo"] as? [String: Any])?["name"] as? String, "tessera")
         let list = try await call(workspace, "tools/list")
         let names = ((list["result"] as? [String: Any])?["tools"] as? [[String: Any]])?.compactMap { $0["name"] as? String }
-        XCTAssertEqual(names, ["board", "resources", "read_tile", "whoami", "send_message", "inbox", "ask_human", "get_answer", "notify_human"])
+        XCTAssertEqual(names, ["board", "read_tile", "whoami"])
         let unknown = try await call(workspace, "nope")
         XCTAssertNotNil(unknown["error"])
         let malformedCaller = try await call(workspace, "tools/call", ["name": "whoami", "_meta": ["tessera/caller": "invalid scalar"]])
@@ -180,33 +199,30 @@ final class AgentAPITests: XCTestCase {
         let page = dir.appendingPathComponent("p.html")
         try "<title>Page</title>".write(to: page, atomically: true, encoding: .utf8)
         let a = try XCTUnwrap(workspace.openBrowser(page.absoluteString))
-        let b = try XCTUnwrap(workspace.openBrowser(page.absoluteString))
+        _ = try XCTUnwrap(workspace.openBrowser(page.absoluteString))
 
         let (who, _) = try await tool(workspace, "whoami", [:], tile: a)
         XCTAssertTrue(who.hasPrefix("You are tile \(a)"))
 
-        // A question waits in the lane for its answer.
-        let (pending, _) = try await tool(workspace, "ask_human", ["question": "Ship now?", "options": ["Yes", "No"], "wait_seconds": 0], tile: a)
-        let id = try XCTUnwrap(pending.components(separatedBy: "Question id: ").last?.components(separatedBy: ".").first)
-        let tile = AgentDesk.idPrefix + id
-        XCTAssertEqual(workspace.desk.sessions.first?.id, tile)
-        XCTAssertEqual(workspace.desk.choices(for: tile), ["Yes", "No"])
-        workspace.desk.respond(tile, with: "Yes")
-        let (answer, _) = try await tool(workspace, "get_answer", ["id": id, "wait_seconds": 0])
-        XCTAssertEqual(answer, "Answer: Yes")
-        XCTAssertTrue(workspace.desk.sessions.isEmpty)
+        try await connectFixture(workspace)
 
-        // Messages land in the recipient's inbox; only terminals can have them typed in.
-        let (sent, _) = try await tool(workspace, "send_message", ["to": b, "text": "tests are red"], tile: a)
-        XCTAssertTrue(sent.contains("inbox"), sent)
-        let (typed, refused) = try await tool(workspace, "send_message", ["to": b, "text": "x", "type": true], tile: a)
-        XCTAssertTrue(refused, typed)
-        XCTAssertTrue(typed.contains("Nothing was sent"))
-        let (inbox, _) = try await tool(workspace, "inbox", [:], tile: b)
+        // Accord owns the question; Tessera is a native answer surface.
+        let pending = try await agentOperation("ask",["key":"question","question":"Ship now?","options":["Yes","No"]])
+        let id = try XCTUnwrap(pending["id"] as? String)
+        await workspace.accord.refresh()
+        let tile = AgentDesk.idPrefix + "accord:" + id
+        XCTAssertEqual(workspace.desk.sessions.first?.id,tile)
+        XCTAssertEqual(workspace.desk.choices(for:tile),["Yes","No"])
+        workspace.desk.respond(tile,with:"Yes")
+        await workspace.accord.refresh()
+        let answer = try await workspace.accord.request("question",args:["id":id])
+        XCTAssertEqual(answer["answer"] as? String,"Yes")
+        XCTAssertTrue(workspace.desk.sessions.isEmpty)
+        for name in ["send_message","inbox","ask_human","get_answer","notify_human","resources"] {
+            let (_,refused) = try await tool(workspace,name,[:],tile:a)
+            XCTAssertTrue(refused,"Legacy coordination tool must be absent: \(name)")
+        }
         let title = try XCTUnwrap(workspace.info(a)?.title)
-        XCTAssertTrue(inbox.contains("from \(title) (\(a)): tests are red"), inbox)
-        let (empty, _) = try await tool(workspace, "inbox", [:], tile: b)
-        XCTAssertEqual(empty, "No messages.")
         let (ambiguous, isError) = try await tool(workspace, "read_tile", ["tile": title])
         XCTAssertTrue(isError)
         XCTAssertTrue(ambiguous.contains("2 tiles are called"))
@@ -215,14 +231,17 @@ final class AgentAPITests: XCTestCase {
         workspace.agentTools.privacy = { true }
         let (_, privateError) = try await tool(workspace, "read_tile", ["tile": a])
         XCTAssertTrue(privateError)
-        for name in ["board", "resources", "whoami", "inbox", "get_answer"] {
+        for name in ["board", "whoami"] {
             let (text, error) = try await tool(workspace, name, [:], tile: a)
             XCTAssertTrue(error, name)
             XCTAssertTrue(text.contains("privacy"), text)
         }
 
+        workspace.agentTools.privacy = { false }
         // A note is a tile until seen.
-        _ = try await tool(workspace, "notify_human", ["text": "Decode A/B done"], tile: a)
+        _ = try await agentOperation("notify",["key":"note","text":"Decode A/B done"])
+        try await Task.sleep(nanoseconds:1_100_000_000)
+        await workspace.accord.refresh()
         let note = try XCTUnwrap(workspace.desk.sessions.first)
         XCTAssertEqual(note.snapshot.activity, .done)
         workspace.desk.seen(note.id)
@@ -280,14 +299,11 @@ final class AgentAPITests: XCTestCase {
                 return (process.terminationStatus, String(decoding: out.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self))
             }.value
         }
+        // Unidentified callers cannot silently create a second mailbox or impersonate a tile.
         let (askStatus, asked) = await run(["ask", "Merge it?", "--option", "Yes", "--wait", "0"])
-        XCTAssertEqual(askStatus, 2, asked)
-        let question = try XCTUnwrap(workspace.desk.questions.last)
-        XCTAssertEqual(question.from, "test-agent")
-        workspace.desk.respond(AgentDesk.idPrefix + question.id, with: "Yes")
-        let (answerStatus, answered) = await run(["answer", question.id, "--wait", "0"])
-        XCTAssertEqual(answerStatus, 0)
-        XCTAssertEqual(answered.trimmingCharacters(in: .whitespacesAndNewlines), "Answer: Yes")
+        XCTAssertEqual(askStatus, 1, asked)
+        XCTAssertTrue(asked.contains("unknown command ask"), asked)
+        XCTAssertTrue(workspace.desk.questions.isEmpty)
 
         let mcp = await run(["mcp"], stdin: """
             {"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18"}}
@@ -306,21 +322,10 @@ final class AgentAPITests: XCTestCase {
         XCTAssertEqual(gone, 3)
         let offline = await run(["mcp"], stdin: "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/list\"}\n")
         XCTAssertEqual(offline.0, 0)
-        XCTAssertTrue(offline.1.contains("resources"), offline.1)
+        XCTAssertTrue(offline.1.contains("read_tile"), offline.1)
     }
 
-    func testResourceReportDistinguishesUnconfiguredFreshAndStale() throws {
-        let workspace = try board()
-        XCTAssertTrue(workspace.fleet.agentReport().contains("not configured"))
-        try #"{"url":"http://127.0.0.1:1"}"#.write(to: dir.appendingPathComponent("lloom.json"), atomically: true, encoding: .utf8)
-        let fleet = FleetService(directory: dir)
-        XCTAssertTrue(fleet.agentReport().contains("no schedule"))
-        let fixture = #"{"now":1000,"resources":[{"id":"gpu","capacity":1,"holders":["r1"],"queue":["r2"]}],"reservations":[{"id":"r1","resource":"gpu","owner":"builder","state":"active","expiresAt":2000},{"id":"r2","resource":"gpu","owner":"reviewer","state":"queued"}],"jobs":[]}"#
-        fleet.apply(try LLoomSchedule.parse(Data(fixture.utf8)))
-        let report = fleet.agentReport()
-        for value in ["fresh", "builder", "reviewer", "r1", "r2", "expires", "not a reservation"] { XCTAssertTrue(report.contains(value), report) }
-        XCTAssertTrue(fleet.agentReport(now: Date().addingTimeInterval(60)).contains("STALE"))
-    }
+
 }
 
 final class AgentRequestValidationTests: XCTestCase {
@@ -337,8 +342,6 @@ final class AgentRequestValidationTests: XCTestCase {
         XCTAssertNil(AgentTools.int(Double.infinity))
         XCTAssertNil(AgentTools.int(Double.nan))
         XCTAssertNil(AgentTools.int(1e100))
-        XCTAssertEqual(AgentTools.wait(-10, default: 0), 0)
-        XCTAssertEqual(AgentTools.wait(100, default: 0), 55)
     }
 }
 

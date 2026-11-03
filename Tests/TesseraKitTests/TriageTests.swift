@@ -76,6 +76,8 @@ final class AttentionQueueTests: XCTestCase {
         let quiet = tile("d3", .done, attention: true)
         XCTAssertEqual(quiet.laneLine(shown: "All 132 tests passed in 3.1s\n \n"), "All 132 tests passed in 3.1s")
         XCTAssertEqual(quiet.laneLine(shown: "  \n"), "Finished")
+        XCTAssertEqual(quiet.laneLine(shown: "132 tests passed\nWorked for 2m\nAsk Codex to do anything\nGPT-6 High · /work\n? for shortcuts����"), "132 tests passed")
+        XCTAssertEqual(quiet.laneLine(shown: "Fusion · Claude Opus · bypass permissions\nEnter:send | Shift+Tab:mode\n❯"), "Finished")
     }
 
     func testTriageStandsWhereTheLeavingItemWas() {
