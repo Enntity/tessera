@@ -57,9 +57,6 @@ if [[ "${TESSERA_DISTRIBUTION:-0}" == 1 ]]; then
 fi
 /usr/bin/codesign "${sign_options[@]}" "$contents/Helpers/tessera-cli"
 /usr/bin/codesign "${sign_options[@]}" --entitlements "$root/scripts/node-entitlements.plist" "$contents/Helpers/node"
-for sensor in "$contents/Resources/Accord/native/bin/"*; do
-  [[ -f "$sensor" ]] && /usr/bin/codesign "${sign_options[@]}" "$sensor"
-done
 /usr/bin/codesign "${sign_options[@]}" "$app"
 /usr/bin/codesign --verify --deep --strict "$app"
 echo "$app"

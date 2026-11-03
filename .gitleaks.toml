@@ -23,4 +23,6 @@ regexTarget = "secret"
 regexes = [
   '''^cbf6d28d4fb88303a9e3cdbb3fed1d2ee9549cf81050d0b620bdd1e8e9038d92$''',
   '''^5ba860ac82130274ce2e0683a340bb44d628fa453cebc7bb8f2dd629bad61558$''',
+  '''^175d2878eaf17a4631c3a316cbe2255a1f23bdf09e2a36c5307e18ba53ffd347$''',
+  '''^75fa57772d253d2982297244caf6ff77f9f6d9a7a76e983ec5766af54dd52b43$''',
 ]
