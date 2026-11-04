@@ -1,0 +1,27 @@
+{
+  "date": "2026-11-03",
+  "commits": ["f2e13dc", "3616774"],
+  "pullRequest": 10,
+  "tests": {
+    "fullSuite": 280,
+    "failures": 0,
+    "installerChecks": "passed",
+    "gitleaks": "no leaks found",
+    "packagedApp": "partial: install, skill migration, daemon, native API, board tiles, whoami passed; historic-completed-result discovery check times out"
+  },
+  "packagedAppNote": "The historic-discovery check fails identically on the previously installed build (binary 0aa4ecbcc69b, pre-change), so it is pre-existing and not a regression of this change.",
+  "stagedSHA256": "7c30dd2bcde7bf5582cf9cd04cd9c01aa9c1f5bf2313ce844d31b5ba44246e63",
+  "previousSHA256": "0aa4ecbcc69b66a92cf8e1b4a761f14dc85c875998573c7df9432790176d62a5",
+  "deployment": {
+    "staged": "~/.local/share/tessera-updates/7c30dd2bcde7",
+    "state": "waiting-for-app-exit",
+    "agent": "org.enntity.tessera.update-tasks (StartInterval 30)",
+    "note": "Installs on the next Tessera exit; the running app with live shells is never restarted by the update."
+  },
+  "debugHarness": [
+    "Lane, accounts, HUD and tab-strip clicks collapse an open panel",
+    "Board-scrim click still collapses (pre-existing behavior)",
+    "Machine chip click still opens its own terminal instead of collapsing",
+    "ZCode session tile click routes to the ZCode app (AgentAppTests assertion updated)"
+  ]
+}
