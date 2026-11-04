@@ -513,7 +513,7 @@ public final class Workspace {
         selectedId = visible.first
     }
 
-    /// Opens a tile: zoomed open on the board, or, for a Claude or Codex conversation whose app is
+    /// Opens a tile: zoomed open on the board, or, for a Claude, Codex, or Enntity ZCode conversation whose app is
     /// installed, straight in that app, placed at `rect` (AppKit screen coordinates). `inApp: false`
     /// keeps such a conversation in Tessera, as its transcript. An id not on the board opens nothing.
     public func open(_ id: String, inApp: Bool = true, nativeAt rect: CGRect? = nil) {
@@ -562,8 +562,8 @@ public final class Workspace {
         save()
     }
 
-    /// Takes a docked tile out of the dock and opens it full size (a Claude or Codex conversation:
-    /// its transcript).
+    /// Takes a docked tile out of the dock and opens it full size (a Claude, Codex, or
+    /// Enntity ZCode conversation: its transcript).
     public func openFromDock(_ id: String) {
         guard dock.remove(id) else { return }
         open(id, inApp: false)
@@ -626,7 +626,7 @@ public final class Workspace {
         return visited?.id
     }
 
-    /// Claude and Codex conversations open straight in their app; Tessera's transcript panel is only
+    /// Claude, Codex, and Enntity ZCode conversations open straight in their app; Tessera's transcript panel is only
     /// for when that app isn't installed, or when asked for. (dsh's live page lives in the panel.)
     public func opensInApp(_ id: String) -> Bool { app(opening: id) != nil }
 
@@ -659,7 +659,7 @@ public final class Workspace {
     /// started from and is selected.
     @ObservationIgnored private var pendingAppConversation: (app: AgentApp, since: Date, tab: String?)?
 
-    /// Starts a new conversation in the Claude or Codex app (in `folder`, with `prompt` placed in its
+    /// Starts a new conversation in the Claude, Codex, or Enntity ZCode app (in `folder`, with `prompt` placed in its
     /// composer), placing the app window at `rect` (AppKit screen coordinates) when allowed.
     public func newAppConversation(_ app: AgentApp, folder: String?, prompt: String? = nil, placeAt rect: CGRect? = nil) {
         guard app.canCreateConversation, let url = app.newConversationURL(folder: folder, prompt: prompt) else {

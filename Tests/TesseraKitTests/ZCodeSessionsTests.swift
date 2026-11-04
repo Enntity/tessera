@@ -55,7 +55,7 @@ final class ZCodeSessionsTests: XCTestCase {
         let tile = TileInfo(id: session.id, kind: .agentSession, flavor: session.flavor, title: session.title)
         XCTAssertTrue(BoardQuery.Chip.zcode.holds(tile))
         XCTAssertFalse(BoardQuery.Chip.dsh.holds(tile))
-        XCTAssertNil(AgentApp.opening(.zcodeDesktop, installed: [.zcode]))
+        XCTAssertEqual(AgentApp.opening(.zcodeDesktop, installed: [.zcode]), .zcode)
         XCTAssertFalse(AgentApp.zcode.canCreateConversation)
     }
 
