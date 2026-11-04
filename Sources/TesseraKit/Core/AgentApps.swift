@@ -36,7 +36,7 @@ public enum AgentApp: String, Codable, CaseIterable, Sendable {
         return app
     }
 
-    public var routesExistingSessions: Bool { self == .claude || self == .codex }
+    public var routesExistingSessions: Bool { self == .claude || self == .codex || self == .zcode }
 
     public var name: String { flavor.displayName + " app" }
 

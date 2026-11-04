@@ -1205,7 +1205,7 @@ final class AgentAppTests: XCTestCase {
         XCTAssertEqual(AgentApp(flavor: .dsh), .deepseekHarness)
         XCTAssertEqual(AgentApp(flavor: .zcodeDesktop), .zcode)
         XCTAssertNil(AgentApp.opening(.dsh, installed: AgentApp.allCases))
-        XCTAssertNil(AgentApp.opening(.zcodeDesktop, installed: AgentApp.allCases))
+        XCTAssertEqual(AgentApp.opening(.zcodeDesktop, installed: AgentApp.allCases), .zcode)
         XCTAssertEqual(AgentApp.opening(.codexDesktop, installed: [.claude, .codex]), .codex)
         XCTAssertNil(AgentApp.opening(.codexDesktop, installed: [.claude]))
         XCTAssertNil(AgentApp.opening(.shell, installed: AgentApp.allCases))
