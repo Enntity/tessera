@@ -20,11 +20,13 @@ struct DashboardView: View {
                         if columns.lane {
                             AttentionLane()
                                 .frame(width: Style.Metrics.lane)
+                                .backToBoardOnTap()
                                 .transition(.move(edge: .leading).combined(with: .opacity))
                         }
                         VStack(spacing: 0) {
                             TabStrip()
-                            if !model.workspace.fleet.lanes.isEmpty { FleetBand() }
+                                .backToBoardOnTap()
+                            if !model.workspace.fleet.lanes.isEmpty { FleetBand().backToBoardOnTap() }
                             BoardView()
                         }
                         .overlay(alignment: .bottom) {
@@ -36,11 +38,13 @@ struct DashboardView: View {
                         if let dock = columns.dock {
                             WatchDockColumn(width: dock, widest: columns.dockMax)
                                 .frame(width: dock)
+                                .backToBoardOnTap()
                                 .transition(.move(edge: .trailing).combined(with: .opacity))
                         }
                         if columns.accounts {
                             AccountsSidebar()
                                 .frame(width: Style.Metrics.sidebar)
+                                .backToBoardOnTap()
                                 .transition(.move(edge: .trailing).combined(with: .opacity))
                         }
                     }
@@ -68,6 +72,25 @@ struct DashboardView: View {
         .onChange(of: model.showPalette) { _, shown in if !shown { model.restoreFocus() } }
         .onChange(of: model.showTriage) { _, shown in if !shown { model.restoreFocus() } }
     }
+}
+
+/// With a panel open, a click on the chrome around it goes back to the board — the same way any
+/// click on Tessera brings the board in front of an app conversation (see `Workspace.open`).
+/// Buttons, fields, cards and other controls keep their own taps: only the chrome's dead space
+/// answers.
+struct BackToBoardOnTap: ViewModifier {
+    @Environment(AppModel.self) private var model
+
+    func body(content: Content) -> some View {
+        content.onTapGesture {
+            if model.workspace.expandedId != nil { model.collapse() }
+        }
+    }
+}
+
+extension View {
+    /// Clicking the chrome with a panel open: back to the board.
+    func backToBoardOnTap() -> some View { modifier(BackToBoardOnTap()) }
 }
 
 /// After a close: what was closed and the way back, for a few seconds. (Undo stays on the Edit
@@ -199,6 +222,7 @@ struct HUDBar: View {
         }
         .frame(height: Style.Metrics.hud)
         .chromeSurface(rule: .bottom)
+        .backToBoardOnTap()
     }
 
     private func toggle(_ symbol: String, on: Bool, help: String, action: @escaping () -> Void) -> some View {
