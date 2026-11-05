@@ -5,6 +5,7 @@ xcuserdata/
 *.xcuserstate
 Package.resolved.bak
 .DS_Store
+.claude/worktrees/
 
 # Local credentials and application state do not belong in a source checkout.
 .env
