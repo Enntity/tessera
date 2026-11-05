@@ -1,5 +1,9 @@
 # Changes
 
+## Unreleased
+
+- Bundle the published Accord 0.6.1 package, including bounded reservation windows, renewal during preparation, coordinator recovery, and installed-version reporting. The dependency lock records the release archive and every bundled file's SHA-256 digest.
+
 ## 0.2.0 — source release
 
 - Agents can inspect Fleet resources through CLI/MCP, including owner, queue, expiry and freshness.
