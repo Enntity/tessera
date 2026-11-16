@@ -306,7 +306,9 @@ public final class AccordBridge {
                nativeIDs.contains(source == "tessera" ? external : source + ":" + external) { return nil }
             let state = value["state"] as? String ?? "unknown"
             if !includeNativeHistory {
-                guard ["starting", "working", "waiting", "blocked"].contains(state) else { return nil }
+                // Finished and failed sessions are the queue's results and failures; dead and
+                // stale ones are clutter. A tile's age decides whether the result still waits.
+                guard ["starting", "working", "waiting", "blocked", "done", "failed"].contains(state) else { return nil }
                 let progress = (value["progressAt"] as? Double ?? 0) / 1000
                 if ["starting", "working"].contains(state), now.timeIntervalSince1970 - progress > 7200 { return nil }
             }

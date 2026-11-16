@@ -37,7 +37,9 @@ def stop(proc):
             proc.kill()
             proc.wait(timeout=10)
 
-with tempfile.TemporaryDirectory(prefix='tessera-app-test-') as temporary:
+# /tmp keeps the Accord data dir short: <data>/accord.sock must fit the 104-byte socket limit,
+# which a per-user TMPDIR under /var/folders does not.
+with tempfile.TemporaryDirectory(prefix='tessera-app-test-', dir='/tmp') as temporary:
     home = Path(temporary).resolve()
     data = home / 'Library/Application Support/Tessera'
     data.mkdir(parents=True)
@@ -98,6 +100,12 @@ with tempfile.TemporaryDirectory(prefix='tessera-app-test-') as temporary:
             command([node, accord, 'session', 'open', '--label', f'Package agent {i}', '--session-file', session], extra={'TESSERA_TILE_ID': tile})
             agents.append(json.loads(session.read_text()))
         a, b = agents
+        # Results from another agent's own session. The tile-bound agents above are the tiles
+        # themselves (Accord deduplicates a bound session onto its tile); a shared result must
+        # come from a session that is not bound to a native tile.
+        unbound_file = home / 'agent-unbound.json'
+        command([node, accord, 'session', 'open', '--label', 'Package result reporter', '--session-file', unbound_file])
+        reporter = json.loads(unbound_file.read_text())
         for i, agent in enumerate(agents):
             op('announce', {'key': str(uuid.uuid4()), 'label': f'Package agent {i}', 'activity': 'Testing packaged collaboration'}, agent['credential'])
         op('send', {'key': 'restart-message', 'to': p['authority'] + '/' + b['sessionId'], 'text': 'Package restart persistence check'}, a['credential'])
@@ -108,7 +116,7 @@ with tempfile.TemporaryDirectory(prefix='tessera-app-test-') as temporary:
         token = None
         for launch in range(2):
             op('session-report', {'key': f'old-result-{launch}', 'title': 'Historic completed result', 'state': 'done',
-                                 'events': [{'key': f'old-result-event-{launch}', 'kind': 'progress', 'text': 'Finished before Tessera opened'}]}, b['credential'])
+                                 'events': [{'key': f'old-result-event-{launch}', 'kind': 'progress', 'text': 'Finished before Tessera opened'}]}, reporter['credential'])
             with (home / 'app.log').open('a') as log:
                 start = time.monotonic()
                 proc = subprocess.Popen([str(app / 'Contents/MacOS/Tessera'), '-ApplePersistenceIgnoreState', 'YES',
@@ -128,7 +136,7 @@ with tempfile.TemporaryDirectory(prefix='tessera-app-test-') as temporary:
                     eventually(lambda: 'Historic completed result' in run('board'))
                     assert 'Historic completed result' not in run('board', '--waiting'), 'late discovery resurfaced an old completion'
                     op('session-report', {'key': f'new-result-{launch}', 'title': 'Fresh completed result', 'state': 'done',
-                                         'events': [{'key': f'new-result-event-{launch}', 'kind': 'progress', 'text': 'Finished while Tessera was open'}]}, b['credential'])
+                                         'events': [{'key': f'new-result-event-{launch}', 'kind': 'progress', 'text': 'Finished while Tessera was open'}]}, reporter['credential'])
                     eventually(lambda: 'Fresh completed result' in run('board', '--waiting'))
                     for old in ['send', 'inbox', 'ask', 'answer', 'notify', 'resources']:
                         run(old, code=1)

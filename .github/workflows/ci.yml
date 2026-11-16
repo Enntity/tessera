@@ -39,6 +39,12 @@ jobs:
           codesign --verify --deep --strict extracted/Tessera.app
           cd ../..
           python3 scripts/test-installer.py .build/releases/extracted/Tessera.app/Contents/Helpers/tessera-cli
+      - name: Packaged app acceptance
+        run: python3 scripts/test-packaged-app.py .build/releases/extracted/Tessera.app
+      - name: Task board acceptance
+        run: |
+          CONFIGURATION=debug TESSERA_APP_PATH="$PWD/.build/app-debug/Tessera.app" scripts/build-app.sh
+          python3 scripts/test-task-board.py .build/app-debug/Tessera.app
       - uses: actions/upload-artifact@v4
         with:
           name: tessera-development-candidate
