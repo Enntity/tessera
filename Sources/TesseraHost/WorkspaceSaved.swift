@@ -44,6 +44,8 @@ extension Workspace {
         /// The tiles in the watch dock, and how wide the user made it.
         var dock: [String]?
         var dockWidth: Double?
+        /// The overseer's tile.
+        var overseer: String?
     }
 
     /// Where a tile that reappears (an app session found again after launch) goes: right after the

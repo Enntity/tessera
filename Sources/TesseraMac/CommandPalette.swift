@@ -2,8 +2,9 @@ import SwiftUI
 import TesseraHost
 import TesseraKit
 
-/// ⌘K: find any tile, launch any agent, run any command, open any URL, or act on the whole
-/// board — one field.
+/// ⌘K: find any tile, launch any agent, run any command, open any URL, ask the overseer, or act on
+/// the whole board — one field. ⌘N is the same field with only what can be started; either way
+/// what starts, starts in the folder at the field's right, which can be picked there or typed.
 struct CommandPalette: View {
     @Environment(AppModel.self) private var model
     @State private var query = ""
@@ -17,14 +18,13 @@ struct CommandPalette: View {
                 .onTapGesture { dismiss() }
             VStack(spacing: 0) {
                 HStack(alignment: .firstTextBaseline, spacing: Style.Space.gutter) {
-                    Image(systemName: model.paletteMode == .url ? "globe" : "command").foregroundStyle(Style.dim)
-                    TextField(model.paletteMode == .url ? "URL or search" : "Find a tile, launch, run, or open a URL…", text: $query)
+                    Image(systemName: model.paletteMode.symbol).foregroundStyle(Style.dim)
+                    TextField(model.paletteMode.prompt, text: $query)
                         .textFieldStyle(.plain)
                         .font(Style.title)
                         .focused($focused)
                         .onSubmit { run(items) }
-                    Text(model.contextDirectory.abbreviatingHome)
-                        .font(Style.caption).foregroundStyle(Style.muted).lineLimit(1)
+                    if model.paletteMode != .url { folderMenu }
                 }
                 .padding(Style.Space.xl)
                 if let error = model.workspace.accord.searchError, model.workspace.accord.searchQuery == query.trimmingCharacters(in:.whitespacesAndNewlines) {
@@ -37,10 +37,7 @@ struct CommandPalette: View {
                             ForEach(Array(items.enumerated()), id: \.element.id) { i, item in
                                 row(item, selected: i == selection)
                                     .id(i)
-                                    .onTapGesture {
-                                        item.run()
-                                        dismiss()
-                                    }
+                                    .onTapGesture { run(item) }
                             }
                         }
                         .padding(Style.Space.s)
@@ -85,10 +82,45 @@ struct CommandPalette: View {
         .contentShape(Rectangle())
     }
 
+    /// Where what is started next will start: a click picks another folder (as typing a path does).
+    private var folderMenu: some View {
+        let workspace = model.workspace
+        let folder = model.contextDirectory
+        return Menu {
+            Section("Start in") {
+                ForEach(workspace.recentDirectories.filter { $0 != folder }, id: \.self) { dir in
+                    Button(dir.abbreviatingHome) { model.launchDirectory = dir }
+                }
+                Button("Choose Folder…") {
+                    if let dir = model.chooseFolder(from: folder) { model.launchDirectory = dir }
+                    focused = true
+                }
+            }
+            if folder != workspace.defaultDirectory {
+                Button("Make This the Default Folder") {
+                    workspace.defaultDirectory = folder
+                    workspace.save()
+                }
+            }
+        } label: {
+            Label(folder.abbreviatingHome, systemImage: model.launchDirectory == nil ? "folder" : "folder.fill")
+                .font(Style.caption).lineLimit(1)
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .tint(model.launchDirectory == nil ? Style.muted : Style.ink)
+        .fixedSize()
+        .help("New tiles start here. Pick another folder, or type a path (~/…)")
+    }
+
     private func run(_ items: [PaletteItem]) {
-        guard items.indices.contains(selection) else { return }
-        items[selection].run()
-        dismiss()
+        if items.indices.contains(selection) { run(items[selection]) }
+    }
+
+    /// A row that only sets up what comes next (a folder to start in) leaves the field open, and empty.
+    private func run(_ item: PaletteItem) {
+        item.run()
+        if item.stays { query = "" } else { dismiss() }
     }
 
     private func dismiss() {
@@ -103,7 +135,27 @@ struct PaletteItem: Identifiable {
     let color: Color
     let title: String
     let subtitle: String
+    /// The palette stays open after it (see `CommandPalette.run`).
+    var stays = false
     let run: () -> Void
+}
+
+extension AppModel.PaletteMode {
+    var symbol: String {
+        switch self {
+        case .all: "command"
+        case .url: "globe"
+        case .new: "plus"
+        }
+    }
+
+    var prompt: String {
+        switch self {
+        case .all: "Find a tile, launch, run, ask, or open a URL…"
+        case .url: "URL or search"
+        case .new: "Start an agent, a command, a URL — or type a folder (~/…)"
+        }
+    }
 }
 
 extension AppModel {
@@ -120,6 +172,21 @@ extension AppModel {
             self.create { $0.openBrowser(q) }
         }
         if paletteMode == .url { return q.isEmpty ? [] : [openURL] }
+
+        // Where what is started will start: a typed path's folders, and folders used lately whose
+        // name the typing begins (with nothing typed, the launcher lists those last).
+        let typedFolders = StartFolders.completions(of: q, isFolder: StartFolders.isFolder)
+        let recentFolders = workspace.recentDirectories.filter { dir in
+            guard dir != cwd, !typedFolders.contains(dir) else { return false }
+            if q.isEmpty { return paletteMode == .new }
+            return q.count > 1 && (TileSearch.match(q, in: (dir as NSString).lastPathComponent) ?? 2) < 2
+        }
+        let folders = (typedFolders + recentFolders).map { dir in
+            PaletteItem(id: "folder-\(dir)", symbol: "folder", color: Style.dim, title: "Start in \(dir.abbreviatingHome)",
+                        subtitle: dir == cwd ? "Where new tiles start now" : "What you start next opens in this folder", stays: true) {
+                self.launchDirectory = dir
+            }
+        }
 
         let groups = workspace.groups
         func candidate(_ tile: TileInfo, hidden: Bool = false) -> TileSearch.Candidate {
@@ -182,25 +249,39 @@ extension AppModel {
             }
         }
 
-        if q.isEmpty {
-            let urlMode = PaletteItem(id: "url-mode", symbol: "globe", color: Style.dim, title: "Open Web Tile…", subtitle: "⌘L") {
-                DispatchQueue.main.async {
-                    self.paletteMode = .url
-                    self.showPalette = true
-                }
+        // The overseer: its chat, or what was typed put to it.
+        let ask = PaletteItem(id: "overseer", symbol: "sparkles", color: Style.accent(.agentDesk),
+                              title: q.isEmpty ? "Ask Tessera" : "Ask Tessera: “\(q.preview(50))”",
+                              subtitle: "The overseer sees every tile and directs agents through Accord · ⌘O") {
+            self.openOverseer(asking: q.isEmpty ? nil : q)
+        }
+        let urlMode = PaletteItem(id: "url-mode", symbol: "globe", color: Style.dim, title: "Open Web Tile…", subtitle: "⌘L") {
+            DispatchQueue.main.async {
+                self.paletteMode = .url
+                self.showPalette = true
             }
-            return apps + presets + [urlMode] + tiles + triage + commands + reopen
         }
         let looksLikeURL = WebAddress.looksLikeAddress(q)
         let run = PaletteItem(id: "run", symbol: "play.fill", color: Style.dim, title: "Run \(q)", subtitle: "New terminal tile in " + folder) {
             self.create { $0.launch(command: q, cwd: cwd) }
         }
+        // ⌘N: only what starts something, so a few letters and ⏎ always start it.
+        if paletteMode == .new {
+            if q.isEmpty { return presets + apps + [urlMode] + folders }
+            return typedFolders.isEmpty ? presets + apps + folders + (looksLikeURL ? [openURL] : []) + [run] : folders
+        }
+        if q.isEmpty { return apps + presets + [urlMode, ask] + tiles + triage + commands + reopen }
         let search = PaletteItem(id: "search", symbol: "magnifyingglass", color: Style.dim, title: "Search the web for “\(q)”", subtitle: "New web tile") {
             self.create { $0.openBrowser(q) }
         }
         // Keep each append explicit: Xcode 26.0 cannot type-check the chained overloads in
         // reasonable time on the release CI runner.
-        var results = tiles
+        // A path is a folder to start in before it is anything else; a question is the overseer's.
+        var results = typedFolders.isEmpty ? [] : folders
+        let question = q.hasSuffix("?") || q.split(separator: " ").count >= 4
+        if question { results.append(ask) }
+        results.append(contentsOf: tiles)
+        if typedFolders.isEmpty { results.append(contentsOf: folders) }
         if workspace.accord.searchQuery == q {
             let visible = Set(found.map { $0.tile.id })
             for session in workspace.accord.searchResults where !visible.contains(session.id) {
@@ -214,6 +295,7 @@ extension AppModel {
         results.append(contentsOf: triage)
         results.append(contentsOf: commands)
         results.append(contentsOf: reopen)
+        if !question { results.append(ask) }
         results.append(run)
         results.append(contentsOf: apps)
         if !looksLikeURL { results.append(search) }

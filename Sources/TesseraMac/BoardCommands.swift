@@ -9,6 +9,8 @@ struct BoardCommands: Commands {
     var body: some Commands {
         let workspace = model.workspace
         CommandGroup(replacing: .newItem) {
+            Button("New…") { model.openLauncher() }
+                .keyboardShortcut("n")
             Button("New Shell") { model.create { $0.launch(command: nil, cwd: model.contextDirectory) } }
                 .keyboardShortcut("t")
             Button("New Claude Code") { model.create { $0.launch(command: "claude", cwd: model.contextDirectory) } }
@@ -20,6 +22,9 @@ struct BoardCommands: Commands {
             }
             Button(model.openPage == nil ? "Open Web Tile…" : "Edit Address") { model.openLocation() }
                 .keyboardShortcut("l")
+            Divider()
+            Button("Ask Tessera") { model.openOverseer() }
+                .keyboardShortcut("o")
             Divider()
             Button("Close") { model.closeFront(key: NSApp.keyWindow) }
                 .keyboardShortcut("w")

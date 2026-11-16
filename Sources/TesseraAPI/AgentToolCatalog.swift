@@ -18,7 +18,7 @@ public enum AgentToolCatalog {
 
     public static let tools: [Tool] = [
         Tool(name: "board",
-             description: "Everything on the board: each tile's id, title, kind, state and a one-line summary, plus the steward's brief of what needs the developer. Use Accord to discover collaborators across hosts.",
+             description: "Everything on the board: each tile's id, title, kind, state, the Accord address of its session and a one-line summary with its age, plus the steward's brief of what needs the developer. Use Accord to discover collaborators across hosts.",
              properties: ["waiting_only": ["type": "boolean", "description": "Only tiles waiting on the developer."]], required: []),
         Tool(name: "read_tile",
              description: "What a tile shows now: a terminal's screen, a conversation's latest messages, a job's notes. Credentials are removed.",

@@ -106,11 +106,22 @@ public final class AgentTools {
         let tiles = workspace.allTiles.filter { !waitingOnly || $0.needsUser }
         lines.append("Tiles (\(tiles.count)):")
         for t in tiles {
-            let what = workspace.accord.summaries[t.id] ?? workspace.steward.summaries[t.id]?.summary ?? t.detail ?? ""
-            lines.append("- \(t.id)\(t.id == me ? " (you)" : "") | \(t.title) | \(t.flavor.displayName) | \(t.activity.label.lowercased())"
-                + "\(t.needsUser ? ", waiting on the developer" : "") | \(t.subtitle)\(what.isEmpty ? "" : " | \(Redactor.redact(what).preview(140))")")
+            let shared = workspace.accord.summaries[t.id]
+            lines.append(Self.boardLine(t, isCaller: t.id == me, summary: shared ?? workspace.steward.summaries[t.id]?.summary ?? t.detail ?? "",
+                                        fromAccord: shared != nil, record: workspace.accord.tileRecords[t.id]))
         }
         return Redactor.redact(lines.joined(separator: "\n"))
+    }
+
+    /// One tile in the listing: what it is, where Accord reaches it, and its summary with the age
+    /// of what the summary describes (Accord's is as old as the change it was written for).
+    static func boardLine(_ t: TileInfo, isCaller: Bool, summary: String, fromAccord: Bool, record: AccordBridge.TileRecord?,
+                          now: Date = Date()) -> String {
+        let asOf = (fromAccord ? record?.changedAt : nil) ?? t.lastActivityAt
+        let age = asOf.shortAge(now: now)
+        return "- \(t.id)\(isCaller ? " (you)" : "") | \(t.title) | \(t.flavor.displayName) | \(t.activity.label.lowercased())"
+            + "\(t.needsUser ? ", waiting on the developer" : "") | \(t.subtitle)\(record.map { " | accord \($0.address)" } ?? "")"
+            + (summary.isEmpty ? "" : " | \(Redactor.redact(summary).preview(140)) (\(age == "now" ? age : age + " ago"))")
     }
 
     static func int(_ value: Any?) -> Int? {

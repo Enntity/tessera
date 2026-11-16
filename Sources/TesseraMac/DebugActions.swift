@@ -20,6 +20,7 @@ extension AppModel {
 
     /// Actions, separated by `;`:
     /// - set-up, straight into the workspace: `cwd=<dir>` (where the next tiles start), `launch=<cmd>`,
+    ///   `overseercmd=<cmd>` (what runs in the overseer's tile), `ask[=<question>]` (⌘O, or a question put to it),
     ///   `url=<url>`, `tab=<name>` (a tab holding the first two tiles), `shutdown`, `rename=<title>` (the
     ///   selected tile), `machine=<ssh host>`, `vitals=<file>` and `accounts=<file>` (machine and account
     ///   readings, JSON `[MachineVitals]` and `[UsageReading]`, shown as they are from then on), `remote`, `pairurl=<file>`, `privacy[=off]`, `lane[=off]`,
@@ -51,6 +52,8 @@ extension AppModel {
             case "tab":
                 let id = workspace.createGroup(named: arg)
                 for tile in workspace.allTiles.prefix(2) { workspace.move(tile: tile.id, toGroup: id) }
+            case "overseercmd": workspace.overseerCommand = arg
+            case "ask": openOverseer(asking: arg.isEmpty ? nil : arg)
             case "shutdown": if let id = workspace.selectedId { workspace.shutDown(id) }
             case "rename": if let id = workspace.selectedId { workspace.rename(id, to: arg) }
             case "machine": workspace.machines.add(host: arg, name: nil)
@@ -230,7 +233,9 @@ extension AppModel {
                 return "\(title(id)): \(Int(view.frame.minX)),\(Int(view.frame.minY)) \(Int(view.frame.width))x\(Int(view.frame.height)) in \(Int(host.frame.width))x\(Int(host.frame.height))\(cells)"
             },
             "lane": showLane, "places": workspace.allTiles.map { "\($0.title): \($0.subtitle)" },
-            "palette": showPalette ? "\(paletteMode)" : "",
+            "palette": showPalette ? "\(paletteMode)" : "", "startFolder": contextDirectory,
+            "recentFolders": workspace.recentDirectories, "overseer": title(workspace.overseerId),
+            "overseerScreen": workspace.overseerId.flatMap { workspace.shownText($0, lines: 12) } ?? "",
             "firstResponder": window?.firstResponder.map { String(describing: type(of: $0)) } ?? "",
             "keyWindow": key === window ? "board" : key?.title ?? "",
             // Hidden (behind other windows, the screen locked), continuous effects stop and nothing is drawn.

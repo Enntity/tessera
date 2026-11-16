@@ -183,7 +183,7 @@ struct EmptyBoard: View {
                         }
                     }
                 }
-                Text("⌘K for everything · ⌘T shell · ⌘L web tile").font(Style.caption).foregroundStyle(Style.muted)
+                Text("⌘K for everything · ⌘N to start anything, anywhere · ⌘T shell · ⌘O ask Tessera").font(Style.caption).foregroundStyle(Style.muted)
             }
         }
     }
