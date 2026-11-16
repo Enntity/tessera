@@ -4,6 +4,9 @@
 
 - Hovering an account card now shows its full text, and clicking it opens the provider's account
   page (or Copy Link from its menu).
+- Fixed: Accord display names and summaries stopped reaching the board whenever Accord rejected one
+  tile's report (its clock can run a fraction of a second behind ours). One bad report no longer
+  stalls the sync.
 - Fixed: tiles no longer hang silently in shell startup. A tile waits out a macOS folder-permission
   dialog instead of spawning into a blocked open, flags a shell still in its startup files after
   15 seconds, and no longer leaves earlier tiles' PTY masters open in every new shell.
