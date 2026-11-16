@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Fixed: a machine that was answering no longer flashes offline over one missed poll (a Wi-Fi or
+  tunnel hiccup). Its last reading holds for up to 10 seconds of misses before it shows offline.
 - **Names and addresses from Accord**: a name given to a tile's session in Accord (`accord_title`,
   from Accord's next release) shows as the tile's title unless you named the tile yourself. The
   `board` listing agents read now gives each tile's Accord address and the age of its summary.

@@ -338,6 +338,23 @@ final class AccordTelemetryViewTests: XCTestCase {
         let missing = MachineMonitor.project(["stale":false,"host":[:]], id:"mac", name:"Mac", local:true)
         XCTAssertNil(missing.cpu); XCTAssertNil(missing.temperature)
     }
+
+    /// One missed poll (a Wi-Fi or tunnel hiccup) keeps the last reading; only a sustained miss is offline.
+    func testBriefMissKeepsLastReadingUntilGraceExpires() {
+        let t0 = Date(timeIntervalSince1970: 1_000)
+        var online = MachineVitals(id:"spark", name:"Spark", isLocal:false, status:.ok); online.gpu = 0.8
+        let miss = MachineVitals(id:"spark", name:"Spark", isLocal:false, status:.unreachable)
+        let grace = MachineMonitor.offlineGrace
+        XCTAssertEqual(MachineMonitor.held(miss, previous:online, lastOK:t0, now:t0 + grace - 1), online)
+        XCTAssertEqual(MachineMonitor.held(miss, previous:online, lastOK:t0, now:t0 + grace), miss)
+        // Never seen online: no reading to hold, so the miss shows at once.
+        XCTAssertEqual(MachineMonitor.held(miss, previous:nil, lastOK:nil, now:t0), miss)
+        let connecting = MachineVitals(id:"spark", name:"Spark", isLocal:false)
+        XCTAssertEqual(MachineMonitor.held(miss, previous:connecting, lastOK:nil, now:t0), miss)
+        // A good reading always replaces the held one.
+        var fresh = online; fresh.gpu = 0.1
+        XCTAssertEqual(MachineMonitor.held(fresh, previous:online, lastOK:t0, now:t0 + 1), fresh)
+    }
 }
 
 final class ClaudeLocalUsageTests: XCTestCase {

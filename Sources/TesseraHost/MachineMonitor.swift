@@ -21,6 +21,7 @@ public final class MachineMonitor {
     @ObservationIgnored private var hidden: Set<String> = []
     @ObservationIgnored private var connecting: Set<String> = []
     @ObservationIgnored private var lastConnect: [String: Date] = [:]
+    @ObservationIgnored private var lastOK: [String: Date] = [:]
 
     public init(directory: URL) {
         store = directory.appendingPathComponent("machines.json")
@@ -160,10 +161,21 @@ public final class MachineMonitor {
         v.cores = cpu["logicalCpus"] as? Int
         return v
     }
+    /// How long a machine that was answering may miss polls before it shows offline. A dropped 2 s
+    /// poll is usually a Wi-Fi or tunnel hiccup, not a machine going away.
+    static let offlineGrace: TimeInterval = 10
+    /// The reading to show: the last good one through a miss shorter than `offlineGrace`.
+    static func held(_ reading: MachineVitals, previous: MachineVitals?, lastOK: Date?, now: Date) -> MachineVitals {
+        if reading.status != .ok, let previous, previous.status == .ok, let lastOK,
+           now.timeIntervalSince(lastOK) < offlineGrace { return previous }
+        return reading
+    }
     /// Stores a reading and the words it is shown in, each only when it would look different, so an
     /// unchanged poll re-renders nothing.
     private func publish(_ reading: MachineVitals) {
-        var v = reading
+        let now = Date()
+        var v = Self.held(reading, previous: vitals[reading.id], lastOK: lastOK[reading.id], now: now)
+        if reading.status == .ok { lastOK[reading.id] = now }
         v.quantize()
         if vitals[v.id] != v { vitals[v.id] = v }
         if faces[v.id] != v.face { faces[v.id] = v.face }
