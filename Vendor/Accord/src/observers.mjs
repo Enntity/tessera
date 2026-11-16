@@ -3,7 +3,7 @@
 import fs from "node:fs/promises";
 import { join, basename } from "node:path";
 import { hash } from "./common.mjs";
-import { redact } from "./session-awareness.mjs";
+import { redact, staleSessionMs } from "./session-awareness.mjs";
 const content = (value) =>
   typeof value === "string"
     ? value
@@ -198,13 +198,15 @@ export class TranscriptObserver {
             .get(root.source)?.private === 1
         )
           continue;
-        const known=this.awareness.db.prepare('SELECT external_id FROM session_views WHERE source=? AND hidden=0').all(root.source).map(r=>r.external_id).filter(Boolean);
+        const known=new Map();
+        for(const {external_id:id} of this.awareness.db.prepare('SELECT external_id FROM session_views WHERE source=? AND hidden=0').all(root.source))if(id){if(!known.has(id.length))known.set(id.length,new Set());known.get(id.length).add(id);}
+        const knownFile=name=>[...known].some(([length,ids])=>ids.has(name.slice(-length)));
         for (const path of await filesUnder(root.path)) {
           const stat = await fs.stat(path).catch(() => null);
-          const old=stat&&this.now()-stat.mtimeMs>(root.lookbackMs??36*3600000);
+          const old=stat&&this.now()-stat.mtimeMs>(root.lookbackMs??staleSessionMs);
           if (
             !stat ||
-            old&&!known.some(id=>basename(path,'.jsonl').endsWith(id))
+            old&&!knownFile(basename(path,'.jsonl'))
           )
             continue;
           const fingerprint = `${stat.ino}:${stat.size}:${stat.mtimeMs}`;
@@ -213,20 +215,16 @@ export class TranscriptObserver {
           try {
             handle = await fs.open(path, "r");
             const head = Buffer.alloc(Math.min(stat.size, 65536)),
-              tail = Buffer.alloc(Math.min(stat.size, 256 * 1024));
+              tail = Buffer.alloc(Math.min(Math.max(0,stat.size-head.length), 256 * 1024));
             await handle.read(head, 0, head.length, 0);
             const start = stat.size - tail.length;
             await handle.read(tail, 0, tail.length, start);
-            const tailText = tail.toString("utf8"),
-              lines = [
-                ...head.toString("utf8").split("\n").slice(0, -1),
-                ...(start > 0
-                  ? tailText.slice(tailText.indexOf("\n") + 1)
-                  : tailText
-                )
-                  .split("\n")
-                  .slice(0, -1),
-              ];
+            // Adjacent windows form one byte stream: joining before UTF-8
+            // decoding also preserves a multibyte character at the boundary.
+            const lines=start===head.length
+              ? Buffer.concat([head,tail]).toString('utf8').split('\n').slice(0,-1)
+              : [...head.toString('utf8').split('\n').slice(0,-1),
+                ...tail.toString('utf8').split('\n').slice(1,-1)];
             const report = parseTranscript(root.source, lines, {
               externalId: basename(path, ".jsonl"),
               now: this.now(),

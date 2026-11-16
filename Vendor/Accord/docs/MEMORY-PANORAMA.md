@@ -132,3 +132,10 @@ reservations. That waits until the read-only panorama proves insufficient.
 Out of scope, deliberately: vector retrieval (fused keyword + frontmatter match is
 enough at this scale), auto-harvesting transcripts into memory, cross-store merging
 or dedup beyond flagging, and any write path into native stores.
+
+
+Index scans run in a reusable worker thread so filesystem traversal and hashing
+cannot stall ownership timers. Only index metadata crosses back to the coordinator;
+body reads still revalidate the original file and privacy/path rules. An idle
+worker exits after one minute and is recreated on demand. Closing the panorama
+stops an in-flight scan without writing into a closed store.

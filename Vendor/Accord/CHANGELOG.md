@@ -1,5 +1,97 @@
 # Changelog
 
+## 0.6.9
+
+- `accord_title` (through `accord_more`; CLI `title`) gives any session a display name
+  for the operator and other agents, addressed by id or by an adapter's source and
+  external id. The name is attributed (`givenTitle`, `titledBy`, `titledAt`), redacted,
+  searchable, and removed with an empty title. It is not progress, leaves the owner's
+  own title in place, is cleared when a session becomes private, and cannot be set
+  from a linked host. Compact session lists show the given name. Adds one migration.
+- `sessions` accepts `source` to list one adapter's sessions, live ones first, so an
+  adapter can read back everything it reported regardless of how long ago it progressed.
+
+## 0.6.8
+
+- Discovery compaction counts serialized bytes incrementally and groups pools once.
+  Local resources now appear in `find`, alongside linked resources.
+- Migration 17 adds indexes for active claims, queues, sessions, mail and manager
+  requests. Closed history no longer dominates reconciliation queries.
+- Ownership changes trigger reconciliation immediately. Up to four independent
+  resources progress concurrently, with one driver operation per resource.
+- Concurrent host reads share their in-flight observation; later reads remain fresh.
+  Window capability checks no longer fetch the full resource catalog.
+- MCP inbox, resources and board reads use pages. Session search returns compact
+  metadata, with full records and older activity available explicitly. Message
+  bodies and durable history remain complete. Legacy HTTP defaults are preserved.
+- Memory indexing runs in a reusable worker, transcript reads avoid overlapping
+  windows, and quiet-session checks skip resolved historical sessions.
+
+See [performance evidence](docs/PERFORMANCE.md) for measurements and tradeoffs.
+
+## 0.6.7
+
+- A session that has sent no heartbeat for 36 hours, the same window observers use for
+  transcripts, now shows as exited. Before, it stayed "working" on the board and the overseer
+  kept checking in with it. If it later heartbeats again, it comes back as idle.
+- A coordinator restart that resumes a window no longer tells the holder its window "is
+  running", since it already knew.
+- A window that reaches its deadline is reported as "reached its deadline and ended" instead
+  of "ended as failed".
+
+No schema change.
+
+## 0.6.6
+
+- A coordinator delayed past its leadership lease can continue if no replacement
+  took over. It records the gap and preserves live claims; expired claims and
+  replaced leadership tokens remain fenced.
+- A failed managed-provider restore retries restoration without repeating a
+  confirmed workload stop. A coordinator takeover or driver restart reconfirms
+  the stop, and the resource stays held until restoration succeeds.
+- CI fixtures use the production leadership lease on every platform. Wake tests
+  bind their setup through the admin API instead of the hook's 500 ms deadline.
+
+## 0.6.5
+
+- Upgrading no longer stops with "Existing Codex Accord MCP registration differs" after Codex
+  has re-saved `~/.codex/config.toml` in its own style. The installer now compares the Accord
+  entry's values, not its exact text.
+
+No schema change: a 0.6.4 database upgrades in place.
+
+## 0.6.4
+
+- `accord resource remove --id NAME` retires a resource nobody needs any more, such as a second
+  name for something that already has one. It refuses while anyone holds or waits for the
+  resource, removes its history and driver files like a withdrawal, and keeps fencing safe if the
+  name is registered again. Removing a name that is already gone changes nothing.
+
+Run it on the host that owns the resource, after upgrading that host. A 0.6.3 database upgrades
+in place.
+
+## 0.6.3
+
+- A `managed-http` resource its provider no longer offers no longer stays forever. The provider
+  answers `availability` with 404 `resource_unknown`, and the resource is removed once it is idle,
+  together with its finished history and driver files. Fencing stays safe: a name registered again
+  starts above every generation it issued. Unreachable providers keep their resources.
+
+Upgrade the host that owns a resource for its withdrawals to take effect. A 0.6.2 database
+upgrades in place.
+
+## 0.6.2
+
+- A coordinator restart, such as a supervisor restart after an OOM kill, no longer ends an
+  unexpired reservation window. The same claim and generation return to `preparing` and the
+  driver reconfirms them; managed and cooperative drivers do so across their own restart.
+  A driver that cannot resume the generation, such as a restarted process driver, gets it
+  revoked at once instead of left preparing until the deadline.
+- A holder that did not release is told when its reservation ends.
+
+Upgrade the host that owns a resource to keep its windows across restarts. Restarting into
+0.6.2 already resumes unexpired windows recorded by 0.6.1.
+
 ## 0.6.1
 
 - CLI and MCP reservations use a one-hour bounded window by default. Extend the same

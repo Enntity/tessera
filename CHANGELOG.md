@@ -21,7 +21,7 @@
 - New tiles can start in any folder: type a path or a recent folder's name in the launcher, or pick
   one from the folder shown there. A selected conversation's folder is used the way a terminal's is.
 - Fixed: reading Claude Code's `/usage` in the background could leave a finished Claude Code process behind each time, one every ten minutes or so, until Tessera quit. Tessera now waits for every process it starts in a terminal, including one it had to stop.
-- Bundle the published Accord 0.6.1 package, including bounded reservation windows, renewal during preparation, coordinator recovery, and installed-version reporting. The dependency lock records the release archive and every bundled file's SHA-256 digest.
+- Bundle the published Accord 0.6.9 package, including session display names (`accord_title`), migration-17/18 schema updates, discovery compaction, local resources in `find`, concurrent resource progress, and quieter session checks. The dependency lock records the release archive and every bundled file's SHA-256 digest.
 
 ## 0.2.0 — source release
 

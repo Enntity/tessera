@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+import { singleFlight } from './async-work.mjs';
 import { ResourceManagers } from './resource-managers.mjs';
 import { awarenessRuntime } from './awareness-runtime.mjs';
 import { SessionAwareness } from './session-awareness.mjs';
@@ -18,27 +19,42 @@ import { bootstrapView } from './bootstrap-view.mjs';
 import { find as compactFind } from './compact.mjs';
 import { createHttp, bearer, readBody, hash, request, integer, requireThat, loopbackUrl, text } from './common.mjs';
 
-export function coordinator({ db, claimSecret, driverUrl, driverToken, driverInstance, leaderMs = 5000, tickMs = 100, hostName = 'local', telemetryCollectors }) {
+export function coordinator({ db, claimSecret, driverUrl, driverToken, driverInstance, leaderMs = 5000, tickMs = 100, hostName = 'local', telemetryCollectors, driverRequest=request }) {
   integer(leaderMs, 'leaderMs', 500, 30000); integer(tickMs, 'tickMs', 10, 1000);
   const parsed = new URL(driverUrl);
   requireThat(parsed.protocol === 'http:' && ['127.0.0.1', 'localhost'].includes(parsed.hostname) && !parsed.username && !parsed.password,
     'BAD_DRIVER_URL', 'This release supports a loopback HTTP driver only', 400);
   const store = new Store(db, { leaderMs });
-  try { store.takeLeadership(); } catch (e) { store.close(); throw e; }
-  const collaboration=new Collaboration(store,db);
-  const memory=new MemoryPanorama(store,memoryConfig());
-  const managers=new ResourceManagers(store,dirname(db));
-  const awareness=new SessionAwareness(store),overseer=new Overseer(store,awareness,collaboration);
+  let collaboration,memory,managers,awareness,overseer,attention,telemetry;
+  try {
+    // Synchronous mailbox migrations and config reads can outlast a lease. Finish
+    // them before taking leadership; no timer can renew while they block startup.
+    collaboration=new Collaboration(store,db);
+    memory=new MemoryPanorama(store,memoryConfig());
+    managers=new ResourceManagers(store,dirname(db));
+    awareness=new SessionAwareness(store);
+    attention=new Attention(store,collaboration,join(dirname(db),'attention'),{perHour:Number(process.env.ACCORD_WAKE_PER_HOUR||6)});
+    telemetry=createTelemetry({authority:store.authority,hostName,collectors:telemetryCollectors??createCollectors({nativeHelper:sensorPath(dirname(db))})});
+    store.takeLeadership();
+    overseer=new Overseer(store,awareness,collaboration);
+  } catch (error) {
+    attention?.close();
+    try { collaboration?.close(); } finally {
+      try { if(store.leaderToken)store.releaseLeadership(); } finally { store.close(); }
+    }
+    throw error;
+  }
   managers.onRunning=row=>{try{collaboration.granted(overseer.actor,{key:`grant:${row.id}`,reservation:row.id,actor:row.actor,resource:row.resource,queuedAt:row.created_at});}catch{/* A notice is a hint. */}};
-  const attention=new Attention(store,collaboration,join(dirname(db),'attention'),{perHour:Number(process.env.ACCORD_WAKE_PER_HOUR||6)});
-  const telemetry=createTelemetry({authority:store.authority,hostName,collectors:telemetryCollectors??createCollectors({nativeHelper:sensorPath(dirname(db))})});
   const observationRuntime=awarenessRuntime(dirname(db),awareness);
   const secretFor = claim => createHmac('sha256', claimSecret).update(claim.id).digest('base64url');
   const sessionSecret = sessionId => createHmac('sha256', claimSecret).update(`session:${sessionId}`).digest('base64url');
   const instanceFor=resource=>resource==='artifact'?driverInstance:store.binding(resource)?.instance;
   const driverPath=(path,resource='artifact')=>resource==='artifact'?path:`${path}?resource=${encodeURIComponent(resource)}`;
   const grant = claim => ({ instance: instanceFor(claim.resource), authority: store.authority, epoch: store.epoch, generation: claim.generation, claimId: claim.id });
-  let closed = false, busy = false, unhealthy = false;
+  let closed = false, busy = false, unhealthy = false,timer,reconcileAgain=false;
+  const queueReconcile=delay=>{clearTimeout(timer);if(!closed&&!unhealthy)timer=setTimeout(reconcile,delay);};
+  // Schedule after the emitting transaction commits; no work runs inside it.
+  store.onEvent=()=>{if(busy)reconcileAgain=true;else queueReconcile(0);};
   let reportFailure;
   const failed = new Promise(resolve => { reportFailure = resolve; });
   function fail(error) {
@@ -47,39 +63,59 @@ export function coordinator({ db, claimSecret, driverUrl, driverToken, driverIns
     reportFailure(error);
   }
 
-  // Pending claim states are a durable outbox: retries use the exact attempt and generation.
+  const claimFlights=new Map(),retryAfter=new Map();
+  // Pending claim states are a durable outbox. One flight per resource preserves
+  // ordering; independent arrivals can use an empty slot without waiting for a
+  // slow batch. Failed destinations yield their slot before retrying.
   async function reconcile() {
     if (busy || closed || unhealthy) return;
-    busy = true;
+    busy = true;clearTimeout(timer);
     try {
       store.sweep();
       collaboration.schedule();
       void managers.reconcile().catch(()=>{});
-      for (const claim of store.pending()) {
-        if (closed) break;
-        try {
-          store.assertLeader();
-          const activating = claim.state === 'preparing';
-          const response = await request(driverUrl, driverToken, driverPath(activating ? '/control/activate' : '/control/revoke',claim.resource), {
-            ...grant(claim), ...(activating ? { credentialHash: hash(secretFor(claim)) } : {})
-          }, 600);
-          requireThat(response.instance === instanceFor(claim.resource) && response.claimId === claim.id && response.generation === claim.generation && (activating ? response.active === true : response.released === true),
-            'BAD_DRIVER_RECEIPT', 'Driver did not confirm this generation', 503);
-          if (activating) {
-            store.activated(claim.id);
-            // Activation is a no-op if the claim changed meanwhile; never report a grant that didn't happen.
-            try { if(store.claim(claim.id).state==='running')collaboration.grantedClaim(overseer.actor,claim); } catch { /* A notice is a hint. */ }
-          } else store.released(claim.id);
-        } catch (error) {
-          store.driverError(claim.id, ['DRIVER_REPLACED','STALE_FENCE','WRONG_AUTHORITY','REVOKED'].includes(error.code) ? error.code : 'DRIVER_UNAVAILABLE');
-        }
+      const pending=store.pending(),ids=new Set(pending.map(c=>c.id));
+      for(const id of retryAfter.keys())if(!ids.has(id))retryAfter.delete(id);
+      for(const claim of pending){
+        if(claimFlights.size>=4)break;
+        if(claimFlights.has(claim.resource)||(retryAfter.get(claim.id)??0)>store.now())continue;
+        const flight=Promise.resolve().then(async()=>{
+          if(closed||unhealthy)return;
+          try {
+            store.assertLeader();
+            const activating = claim.state === 'preparing';
+            const response = await driverRequest(driverUrl, driverToken, driverPath(activating ? '/control/activate' : '/control/revoke',claim.resource), {
+              ...grant(claim), ...(activating ? { credentialHash: hash(secretFor(claim)) } : {})
+            }, 600);
+            requireThat(response.instance === instanceFor(claim.resource) && response.claimId === claim.id && response.generation === claim.generation && (activating ? response.active === true : response.released === true),
+              'BAD_DRIVER_RECEIPT', 'Driver did not confirm this generation', 503);
+            if (activating) {
+              store.activated(claim.id);
+              // Activation is a no-op if the claim changed meanwhile; never report a grant that didn't happen.
+              try { if(store.claim(claim.id).state==='running')collaboration.grantedClaim(overseer.actor,claim); } catch { /* A notice is a hint. */ }
+            } else {
+              store.released(claim.id);
+              try { collaboration.endedClaim(overseer.actor,claim); } catch { /* A notice is a hint. */ }
+            }
+            retryAfter.delete(claim.id);
+          } catch (error) {
+            retryAfter.set(claim.id,store.now()+tickMs);
+            // This generation can never activate there, so waiting for its deadline only idles the resource.
+            if (claim.state === 'preparing' && ['REVOKED','RECOVERING'].includes(error.code)) store.refused(claim.id, error.code);
+            else store.driverError(claim.id, ['DRIVER_REPLACED','STALE_FENCE','WRONG_AUTHORITY','REVOKED'].includes(error.code) ? error.code : 'DRIVER_UNAVAILABLE');
+          }
+        }).catch(fail).finally(()=>{claimFlights.delete(claim.resource);queueReconcile(0);});
+        claimFlights.set(claim.resource,flight);
       }
-    } catch (error) { fail(error); } finally { busy = false; }
+    } catch (error) { fail(error); } finally {
+      busy=false;
+      if(!closed&&!unhealthy)try{const delay=reconcileAgain?0:store.pending().length?tickMs:Math.max(0,Math.min(1000,store.nextDeadline()-store.now()));reconcileAgain=false;queueReconcile(delay);}catch(error){fail(error);}
+    }
   }
   const heartbeat = setInterval(() => {
     if (!closed && !unhealthy) { try { store.beat(); } catch (error) { fail(error); } }
   }, Math.min(500, leaderMs / 3));
-  const timer = setInterval(reconcile, tickMs);
+  queueReconcile(tickMs);
   let monitoring=false;
   const overseerTimer=setInterval(async()=>{if(closed||unhealthy||monitoring)return;monitoring=true;try{
     overseer.quiet();
@@ -99,6 +135,26 @@ export function coordinator({ db, claimSecret, driverUrl, driverToken, driverIns
     }
     overseer.dispatch();
   }catch{/* Keep ownership reconciliation independent of observation failures. */}finally{monitoring=false;}},10000);
+  // A provider that no longer offers a resource says so; the resource leaves once idle.
+  // The coordinator forgets it first, so no new claim can reach a driver being removed.
+  let pruning=false;
+  async function prune(){
+    if(closed||unhealthy||pruning)return;pruning=true;
+    try{awareness.expireStale();}catch{/* The next pass retries. */}
+    try{
+      const managed=store.db.prepare("SELECT id FROM resource_bindings WHERE plugin='managed-http'").all().map(r=>r.id);
+      const installed=(await request(driverUrl,driverToken,'/control/resources')).resources.filter(r=>r.plugin==='managed-http').map(r=>r.id);
+      for(const id of new Set([...managed,...installed])){
+        if(closed)break;
+        try{
+          const status=await request(driverUrl,driverToken,driverPath('/control/status',id),undefined,2000);
+          if(!status.withdrawn||status.claim_id||(store.binding(id)&&!store.removeResource(id)))continue;
+          await request(driverUrl,driverToken,'/control/resources/withdraw',{id},5000);
+        }catch{/* The next pass retries. */}
+      }
+    }catch{/* The next pass retries. */}finally{pruning=false;}
+  }
+  const pruneStart=setTimeout(prune,1000),pruneTimer=setInterval(prune,600000);
   const mailTimer=setInterval(()=>{if(!closed&&!unhealthy)void collaboration.flush().catch(()=>{});},1000);
   memory.start();
   function describe(actor, claimId) {
@@ -106,35 +162,38 @@ export function coordinator({ db, claimSecret, driverUrl, driverToken, driverIns
     return { ...claim, task: store.task(claim.task_id), driverUrl,
       ...(claim.state === 'running' && claim.deadline > store.now() ? { resourceToken: secretFor(claim) } : {}) };
   }
-  async function host() {
+  async function readHost() {
     // Host discovery needs current ownership, not the entire retained journal.
     store.assertLeader();
     const board={paused:store.db.prepare("SELECT value FROM meta WHERE key='paused'").get().value==='true',
-      claims:store.db.prepare("SELECT * FROM claims WHERE state!='closed'").all(),
-      resources:store.db.prepare('SELECT r.id,b.plugin,b.asset,b.enforcement,p.pool FROM resources r LEFT JOIN resource_bindings b ON b.id=r.id LEFT JOIN resource_pools p ON p.resource=r.id ORDER BY r.id').all()};
+      claims:store.db.prepare("SELECT c.*,coalesce(p.label,s.label,c.actor) label,o.authority origin_authority,o.session_id origin_session FROM claims c LEFT JOIN participants p ON p.actor=c.actor LEFT JOIN sessions s ON s.id=c.actor LEFT JOIN remote_routes o ON o.actor=c.actor WHERE c.state!='closed'").all(),
+      resources:store.db.prepare('SELECT r.id,b.instance,b.plugin,b.asset,b.enforcement,b.max_ownership_ms,b.allow_indefinite,p.pool FROM resources r LEFT JOIN resource_bindings b ON b.id=r.id LEFT JOIN resource_pools p ON p.resource=r.id ORDER BY r.id').all()};
+    const held=new Map(board.claims.map(c=>[c.resource,c])),queues=new Map();
+    const queued=store.db.prepare(`SELECT * FROM (SELECT r.id,r.actor,r.queued_until queuedUntil,t.title purpose,t.created_at queuedAt,t.resource,
+      row_number() OVER(PARTITION BY t.resource ORDER BY t.created_at,t.rowid) position FROM tasks t JOIN reservations r ON r.task_id=t.id
+      WHERE t.state='queued' AND r.pool IS NULL) WHERE position<=100 ORDER BY resource,position`).all();
+    for(const {resource,position,...row} of queued){if(!queues.has(resource))queues.set(resource,[]);queues.get(resource).push(row);}
     const resources=await Promise.all(board.resources.map(async resource=>{
       let status,driverError;
       try {
         status=await request(driverUrl,driverToken,driverPath('/control/status',resource.id),undefined,600);
-        requireThat(status.instance===instanceFor(resource.id)&&(!status.authority||status.authority===store.authority),'DRIVER_REPLACED','Driver identity mismatch');
+        requireThat(status.instance===(resource.id==='artifact'?driverInstance:resource.instance)&&(!status.authority||status.authority===store.authority),'DRIVER_REPLACED','Driver identity mismatch');
       }catch(error){driverError=error.code==='DRIVER_REPLACED'?error.code:'DRIVER_UNAVAILABLE';}
-      const holder=board.claims.find(c=>c.resource===resource.id&&c.state!=='closed');
-      const session=holder&&(store.db.prepare('SELECT label FROM participants WHERE actor=?').get(holder.actor)??store.db.prepare('SELECT label FROM sessions WHERE id=?').get(holder.actor));
-      const origin=holder&&store.db.prepare('SELECT authority,session_id FROM remote_routes WHERE actor=?').get(holder.actor);
-      const queue=store.db.prepare("SELECT r.id,r.actor,r.queued_until queuedUntil,t.title purpose,t.created_at queuedAt FROM reservations r JOIN tasks t ON t.id=r.task_id WHERE t.resource=? AND r.pool IS NULL AND t.state='queued' ORDER BY t.created_at,t.rowid LIMIT 100").all(resource.id);
+      const holder=held.get(resource.id),queue=queues.get(resource.id)??[];
       return {id:`${store.authority}/${resource.id}`,localId:resource.id,...(resource.pool?{pool:resource.pool}:{}),plugin:resource.plugin??'artifact',asset:resource.asset??'builtin:artifact',
-        label:status?.label??resource.id,maxOwnershipMs:store.ownershipLimit(resource.id),externalWorkloads:status?.externalWorkloads??null,hosts:status?.hosts??[],queue,state:!driverError&&!status?.blocked&&!holder&&!status.claim_id?(queue.length?'queued':'unclaimed'):holder?'held':'unknown',enforcement:resource.enforcement??'artifact-API',driver:driverError||'reachable',
-        holder:holder?{claim:holder.id,actor:holder.actor,address:origin?`${origin.authority}/${origin.session_id}`:`${store.authority}/${holder.actor}`,label:session?.label??holder.actor,generation:holder.generation,state:holder.state,deadline:holder.deadline,task:holder.task_id}:null};
+        label:status?.label??resource.id,maxOwnershipMs:resource.allow_indefinite?null:resource.max_ownership_ms??28800000,externalWorkloads:status?.externalWorkloads??null,hosts:status?.hosts??[],queue,state:!driverError&&!status?.blocked&&!holder&&!status.claim_id?(queue.length?'queued':'unclaimed'):holder?'held':'unknown',enforcement:resource.enforcement??'artifact-API',driver:driverError||'reachable',
+        holder:holder?{claim:holder.id,actor:holder.actor,address:holder.origin_authority?`${holder.origin_authority}/${holder.origin_session}`:`${store.authority}/${holder.actor}`,label:holder.label,generation:holder.generation,state:holder.state,deadline:holder.deadline,task:holder.task_id}:null};
     }));
     store.assertLeader();
     return {protocol:'accord/1',authority:store.authority,name:hostName,epoch:store.epoch,observedAt:store.now(),paused:board.paused,pools:collaboration.pools(resources),
       resource:resources.find(r=>r.localId==='artifact'),resources,capabilities:['sessions','checkpoints','fenced-artifacts','peer-discovery','registered-processes','collaboration','messaging','reservations','host-telemetry','host-metadata','session-search','session-summaries','overseer','jobs','questions','resource-managers'],
       admission:'Availability is an observation. Only a successful claim grants ownership.'};
   }
-  async function catalog() {
+  const host=singleFlight(readHost);
+  const catalog=singleFlight(async()=>{
     const resources=[...(await host()).resources,...await managers.resources()],pools=collaboration.pools(resources);
     return {resources,capabilities:['reservation-windows-v1'],...(pools.length?{pools}:{})};
-  }
+  });
   async function network() {
     const peers = store.db.prepare('SELECT * FROM peers ORDER BY authority').all();
     return Promise.all(peers.map(async peer => {
@@ -195,6 +254,7 @@ export function coordinator({ db, claimSecret, driverUrl, driverToken, driverIns
     if(operation==='memories')return memory.list(args);
     if(operation==='memory-read')return memory.read(args.id);
     if(operation==='session-snooze')return awareness.snooze(actor,args);
+    if(operation==='session-title')return awareness.title(actor,args);
     if(operation==='jobs')return awareness.jobs();
     if(operation==='job')return awareness.job(actor,args);
     if(operation==='ask')return awareness.ask(actor,args);
@@ -204,16 +264,21 @@ export function coordinator({ db, claimSecret, driverUrl, driverToken, driverIns
     if(operation==='overseer-rule')return overseer.configure(actor,args);
     if(operation==='overseer-signal')return overseer.signal(actor,args);
     if(operation==='announce'){const result=collaboration.announce(actor,args);awareness.announce(actor,args);return result;}
-    if(operation==='find'){const result=await collaboration.find(args.query??'',true,collaboration.address(actor));return args.detail===true?result:compactFind(result,args.query??'');}
+    if(operation==='find'){
+      const [result,local]=await Promise.all([collaboration.find(args.query??'',true,collaboration.address(actor)),catalog()]);
+      result.hosts[0].resources=local.resources;
+      return args.detail===true?result:compactFind(result,args.query??'');
+    }
     if(operation==='send'){const r=collaboration.send(actor,args);void collaboration.flush().catch(()=>{});return collaboration.sent(actor,r.id);}
     if(operation==='inbox'){
       integer(args.waitMs??0,'waitMs',0,3600000);
       if(args.waitMs)await attention.wait(()=>collaboration.pendingCount(actor)>0||null,args.waitMs,signal,actor.id);
-      return collaboration.inbox(actor,{all:args.all===true});
+      return args.limit!==undefined||args.cursor!==undefined?collaboration.inboxPage(actor,args):collaboration.inbox(actor,{all:args.all===true});
     }
     if(operation==='notify')return collaboration.notify(actor,args);
     if(operation==='read')return collaboration.read(actor,args);
     if(operation==='sent')return collaboration.sent(actor,args.id);
+    if(operation==='capabilities')return {capabilities:['reservation-windows-v1']};
     if(operation==='resources')return catalog();
     if(operation==='reserve'&&!store.db.prepare('SELECT 1 FROM session_views WHERE id=?').get(actor.id))awareness.report(actor,{key:'reservation-session-view',title:actor.session?.label??'Resource holder',state:'working'});
     if(operation==='reserve'&&managers.owns(args.resource))return managers.reserve(actor,args);
@@ -283,7 +348,7 @@ export function coordinator({ db, claimSecret, driverUrl, driverToken, driverIns
         requireThat(body.args?.from===`${peer.authority}/${body.actor}`,'FORBIDDEN','Sender does not match linked host',403);
         value=collaboration.deliver(body.args);
       }else{
-        requireThat(['resources','reserve','reservation','release','renew','start','process','workload-register','workload-launch','workload-list','telemetry','metadata','sessions','session-read','jobs','job','overseer','session-snooze','memories','memory-read'].includes(body.operation),'FORBIDDEN','Operation cannot be forwarded',403);
+        requireThat(['capabilities','resources','reserve','reservation','release','renew','start','process','workload-register','workload-launch','workload-list','telemetry','metadata','sessions','session-read','jobs','job','overseer','session-snooze','memories','memory-read'].includes(body.operation),'FORBIDDEN','Operation cannot be forwarded',403);
         value=await collaborate(actor,body.operation,body.args);
       }
       store.assertLeader();return {authority:store.authority,value};
@@ -300,7 +365,7 @@ export function coordinator({ db, claimSecret, driverUrl, driverToken, driverIns
     if(url.pathname==='/v1/collaboration'&&req.method==='POST'){
       const body=await readBody(req);
       if(body.host&&body.host!==store.authority){
-        requireThat(['resources','reserve','reservation','release','renew','start','process','workload-register','workload-launch','workload-list','telemetry','metadata','sessions','session-read','jobs','job','overseer','session-snooze','memories','memory-read'].includes(body.operation),'FORBIDDEN','Operation cannot be forwarded',403);
+        requireThat(['capabilities','resources','reserve','reservation','release','renew','start','process','workload-register','workload-launch','workload-list','telemetry','metadata','sessions','session-read','jobs','job','overseer','session-snooze','memories','memory-read'].includes(body.operation),'FORBIDDEN','Operation cannot be forwarded',403);
         return collaboration.forward(body.host,body.operation,body.args,actor);
       }
       if(body.operation==='sessions'&&!body.host)return sessionsAcrossHosts(actor,body.args);
@@ -323,6 +388,14 @@ export function coordinator({ db, claimSecret, driverUrl, driverToken, driverIns
       requireThat(claim&&['running','revoking'].includes(claim.state)&&body.generation===claim.generation&&body.authority===store.authority,'STALE_GRANT','Name the exact held claim, generation and authority');
       const result=await request(driverUrl,driverToken,driverPath('/control/workloads',claim.resource),{...grant(claim),key:body.key,targets:body.targets},30000);
       store.assertLeader();return result;
+    }
+    if(url.pathname==='/v1/resources/remove'&&req.method==='POST'){
+      requireThat(actor.role==='admin','FORBIDDEN','Administrator required',403);
+      const {id}=await readBody(req);text(id,'id',64);requireThat(id!=='artifact','INVALID_INPUT','The artifact resource is built in',400);
+      // As with a withdrawal, the coordinator forgets it first; a retry finishes the driver.
+      if(store.binding(id))requireThat(store.removeResource(id),'RESOURCE_BUSY','Release or cancel every reservation on this resource first',409);
+      else if(!(await request(driverUrl,driverToken,'/control/resources')).resources.some(r=>r.id===id))return {id,removed:false};
+      return request(driverUrl,driverToken,'/control/resources/withdraw',{id,requested:true},5000);
     }
     if(url.pathname==='/v1/resources'&&req.method==='POST'){
       requireThat(actor.role==='admin','FORBIDDEN','Administrator required',403);
@@ -367,7 +440,7 @@ export function coordinator({ db, claimSecret, driverUrl, driverToken, driverIns
     if (url.pathname === '/health' && req.method === 'GET') return { status: 'ready', epoch: store.epoch };
     if (url.pathname === '/v1/board' && req.method === 'GET') {
       const after = integer(Number(url.searchParams.get('after') || 0), 'after', 0, Number.MAX_SAFE_INTEGER);
-      return store.board(after);
+      return store.board(after,{active:url.searchParams.get('active')==='true',...(url.searchParams.has('limit')?{limit:Number(url.searchParams.get('limit'))}:{}),...(url.searchParams.has('before')?{before:Number(url.searchParams.get('before'))}:{})});
     }
     if (url.pathname === '/v1/tasks' && req.method === 'POST') return store.submit(actor, await readBody(req));
     if (url.pathname === '/v1/claim' && req.method === 'POST') {
@@ -427,10 +500,10 @@ export function coordinator({ db, claimSecret, driverUrl, driverToken, driverIns
   return {
     server, store, reconcile, failed,
     async close() {
-      closed = true; attention.close(); await observationRuntime.close();clearInterval(timer); clearInterval(heartbeat);clearInterval(mailTimer);clearInterval(overseerTimer);memory.close();
+      closed = true; attention.close(); await observationRuntime.close();clearInterval(timer); clearInterval(heartbeat);clearInterval(mailTimer);clearInterval(overseerTimer);clearTimeout(pruneStart);clearInterval(pruneTimer);memory.close();
       server.closeAllConnections();
       await new Promise(resolve => server.close(resolve));
-      while (busy||collaboration.sending||monitoring||managers.busy) await new Promise(resolve => setTimeout(resolve, 10));
+      while (busy||claimFlights.size||collaboration.sending||monitoring||pruning||managers.busy) await new Promise(resolve => setTimeout(resolve, 10));
       collaboration.close();try { store.releaseLeadership(); } finally { store.close(); }
     }
   };

@@ -26,7 +26,7 @@ claim never returns its old resource credential.
 | --- | --- | --- |
 | GET | `/health` | Authenticated leadership health |
 | GET | `/v1/me` | Authenticated `{id,role}` |
-| GET | `/v1/board?after=0` | Current tasks, claims, hold, admission state, up to 500 events, cursor and hasMore |
+| GET | `/v1/board?after=0` | Tasks, claims, holds, admission state and up to 500 events; optional `active=true`, `limit=1..100`, `before` |
 | POST | `/v1/tasks` | `{key,title,input,expectedHash,dependency?,maxAttempts?}` → `{taskId}` |
 | POST | `/v1/claim` | `{key,taskId?,leaseMs?}` → claim, task, driver URL; resourceToken only when active |
 | GET | `/v1/claims/{id}` | Owner-only claim status, task and active resource credential |
@@ -46,6 +46,38 @@ characters; checkpoint notes are at most 4,000. Tasks are immutable after submit
 apart from their lifecycle, checkpoint and result. This release has a 5,000-task
 limit, 100,000 accepted-command limit, and 100,000-artifact limit. History is not
 pruned. It is a bounded database, not a long-lived retention service.
+
+## Bounded reads
+
+Legacy HTTP reads retain their full records. Optional paging selects a smaller view;
+no history is deleted and reading never acknowledges a message.
+
+- Board: `limit` selects the newest task page; pass `nextBefore` as `before` for
+  older tasks. Tasks within each page remain oldest first. `active=true` selects
+  live tasks and claims. Resource holders always include all open claims, even
+  when their tasks are outside the page. The event `after`/`cursor` is independent
+  of task paging. MCP defaults to 20 task previews; `detail:true` returns the same
+  page with complete task records. The web board requests the active view.
+- Collaboration `inbox`: `limit` (default 20 when paging, maximum 100) or `cursor`
+  opts into pages capped near 24 KiB, retaining complete message bodies. Pass the
+  returned `cursor` unchanged for the next page. It identifies a delivery owned
+  by this inbox and remains valid after that delivery is acknowledged. MCP opts
+  into paging by default. Without these arguments the legacy HTTP read is
+  unchanged. Only `read` acknowledges. A single oversized legacy delivery is
+  returned whole with `oversized:true` so paging always makes progress.
+- MCP resources: pages default to 20 records within roughly 8 KiB, including pool
+  summaries. Pass `cursor` for more. An oversized single record remains whole
+  and is marked `oversized:true`. HTTP catalogs remain complete.
+- MCP sessions: summaries are bounded to 8 KiB; `detail:true` returns full session
+  metadata for the requested search and limit. `session-read` defaults to 10
+  complete events. Pass its `previous` as `before` for older events, or use `after`
+  for newer ones. Both event directions accept `limit=1..200`. Raw HTTP retains
+  its default of 60 events.
+
+Pages describe a changing system, not a snapshot. New records before a cursor
+appear on a fresh first-page read. Paging on an older linked host may return its
+legacy response until that host is upgraded. These views do not change ownership,
+privacy checks, receipt validation, or durable retention.
 
 ## Driver API
 
@@ -146,8 +178,10 @@ separately provisioned credential, not merely seeing a UUID.
 
 ## Reservation windows (0.6)
 
-`resources` on `/v1/collaboration` advertises `reservation-windows-v1` in
-`capabilities`. Verify this on the owning host before sending a window to it;
+`capabilities` on `/v1/collaboration` returns `reservation-windows-v1` without
+fetching the resource catalog. Older hosts advertise it through `resources`; the
+client falls back only when the lightweight operation is unsupported. Verify this
+on the owning host before sending a window to it;
 older hosts do not understand the new field. `reserve` accepts `durationMs`
 (1 second to 30 days), mutually exclusive with `leaseMs`. CLI, MCP and
 `AccordClient.reserve` default to a one-hour window. Raw legacy HTTP requests
