@@ -74,6 +74,12 @@ enum ShellIntegration {
 
     static func isZsh(_ shell: String) -> Bool { (shell as NSString).lastPathComponent == "zsh" }
     static func isFish(_ shell: String) -> Bool { LaunchScript.dialect(forShell: shell) == .fish }
+    /// Whether an interactive launch of `shell` reports its prompts (and so its readiness)
+    /// through Tessera's hooks: zsh with the installed ZDOTDIR, or fish with its hooks file.
+    static func reportsPrompts(_ shell: String) -> Bool {
+        if isZsh(shell) { return installed != nil }
+        return isFish(shell) && fishHooksFile != nil
+    }
 
     /// fish loads its own config normally; Tessera's hooks come in via `--init-command`.
     static let fishHooks = """

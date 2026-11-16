@@ -324,6 +324,44 @@ final class TerminalSessionTests: XCTestCase {
         session.terminate()
         XCTAssertTrue(waitUntil { !running() })
     }
+
+    /// A spawned shell must not inherit the PTY masters of tiles opened before it.
+    func testAShellInheritsNoOtherTilesPTYMasters() {
+        let sessionA = TerminalSession(command: "sleep 30", cwd: NSTemporaryDirectory())
+        defer { sessionA.terminate() }
+        XCTAssertTrue(waitUntil { sessionA.isRunning })
+        let sessionB = TerminalSession(command: "ls -l /dev/fd | grep -c ptmx; sleep 5", cwd: NSTemporaryDirectory())
+        defer { sessionB.terminate() }
+        XCTAssertTrue(waitUntil { sessionB.terminal.screenTail(40).contains { $0.trimmingCharacters(in: .whitespaces) == "0" } })
+    }
+
+    /// A login shell still in its startup files after `startupPatience` is flagged for attention.
+    func testAShellStuckInStartupIsFlagged() throws {
+        let home = try isolatedHome()
+        try "sleep 30\n".write(to: home.url.appendingPathComponent(".zshrc"), atomically: true, encoding: .utf8)
+        let old = TerminalSession.startupPatience
+        TerminalSession.startupPatience = 1
+        defer { TerminalSession.startupPatience = old }
+        let session = TerminalSession(command: nil, cwd: NSTemporaryDirectory(), shell: "/bin/zsh", environmentOverrides: home.env)
+        defer { session.terminate() }
+        XCTAssertTrue(waitUntil(10) { session.info.detail?.contains("startup hasn't finished") == true })
+        XCTAssertEqual(session.info.activity, .needsInput)
+        XCTAssertTrue(session.info.attention)
+    }
+
+    /// A shell whose startup finishes (the ready report or first prompt arrives) is never flagged.
+    func testAHealthyShellIsNotFlagged() throws {
+        let home = try isolatedHome()
+        let old = TerminalSession.startupPatience
+        TerminalSession.startupPatience = 1
+        defer { TerminalSession.startupPatience = old }
+        let session = TerminalSession(command: "echo tessera-no-stall", cwd: NSTemporaryDirectory(),
+                                      shell: "/bin/zsh", environmentOverrides: home.env)
+        defer { session.terminate() }
+        XCTAssertTrue(waitUntil { session.terminal.screenTail(40).contains { $0.contains("tessera-no-stall") } })
+        RunLoop.main.run(until: Date().addingTimeInterval(1.5))
+        XCTAssertFalse(session.info.detail?.contains("startup hasn't finished") == true)
+    }
 }
 
 @MainActor

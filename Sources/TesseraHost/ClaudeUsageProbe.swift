@@ -50,6 +50,7 @@ final class ClaudeUsageProbe {
                              environment: environment.map { "\($0.key)=\($0.value)" }, execName: nil,
                              currentDirectory: NSHomeDirectory())
         guard process.shellPid > 0 else { return finish(.failed("Couldn't start Claude Code")) }
+        process.closeMasterOnExec()
         timer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.tick() }
         }
