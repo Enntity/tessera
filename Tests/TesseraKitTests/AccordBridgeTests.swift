@@ -138,9 +138,10 @@ extension AccordBridgeTests {
         let board: [String:Any] = ["authority":"local","sessions":[
             ["address":"local/done","source":"agent","title":"Finished result","state":"done","progressAt":9990000.0],
             ["address":"local/failed","source":"agent","title":"Failed run","state":"failed","progressAt":9990000.0],
+            ["address":"local/olddone","source":"agent","title":"Stale result","state":"done","progressAt":1000000.0],
             ["address":"local/exited","source":"agent","title":"Ended","state":"exited","progressAt":9990000.0],
             ["address":"local/cancelled","source":"agent","title":"Stopped","state":"cancelled","progressAt":9990000.0]]]
-        let sessions = AccordBridge.project(board,nativeIDs:[],now:Date(timeIntervalSince1970:10000))
+        let sessions = AccordBridge.project(board,nativeIDs:[],lookback:3600,now:Date(timeIntervalSince1970:10000))
         XCTAssertEqual(sessions.map(\.title),["Finished result","Failed run"])
         XCTAssertEqual(sessions[0].snapshot.activity,.done)
         XCTAssertEqual(sessions[1].snapshot.activity,.failed)

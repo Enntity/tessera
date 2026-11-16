@@ -173,6 +173,7 @@ public final class Workspace {
         overseerChat.start()
         accord.digests = { [weak self] in self?.stewardDigests().filter { !$0.id.hasPrefix("accord:") && ![AgentFlavor.lloom.rawValue, AgentFlavor.agentDesk.rawValue, AgentFlavor.accord.rawValue].contains($0.flavor) } ?? [] }
         accord.nativeAliases = { [weak self] in self?.nativeSessionAliases ?? [] }
+        accord.lookback = { [weak self] in self?.agents.lookback ?? 36 * 3600 }
         accord.sessions = { [weak self] values in self?.agents.setExternal(values, source: "accord") }
         accord.paused = { [weak self] in self?.agentTools.privacy() ?? true }
         accord.deliver = { [weak self] delivery, tile, sender, text, wantsTyping in

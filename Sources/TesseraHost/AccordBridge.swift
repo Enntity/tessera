@@ -31,6 +31,7 @@ public final class AccordBridge {
     public var retainedSessionIDs: Set<String> = []
     @ObservationIgnored public var sessions: (([AgentAppSession]) -> Void)?
     @ObservationIgnored public var nativeAliases: (() -> Set<String>)?
+    @ObservationIgnored public var lookback: () -> TimeInterval = { 36 * 3600 }
     @ObservationIgnored public var digests: (() -> [Steward.Digest])?
     @ObservationIgnored public var paused: (() -> Bool)?
     @ObservationIgnored public var deliver: ((String, String, String, String, Bool) -> Bool)?
@@ -282,7 +283,7 @@ public final class AccordBridge {
             let host = String(value.id.dropFirst(7)).split(separator:"/").first.map(String.init) ?? ""
             return missing.contains(host)
         }
-        let live = Self.project(board,nativeIDs:nativeIDs,now:now)
+        let live = Self.project(board,nativeIDs:nativeIDs,lookback:lookback(),now:now)
         let present = Set(live.map(\.id))
         let opened = Self.project(board,nativeIDs:[],includeNativeHistory:true,now:now)
             .filter { retainedSessionIDs.contains($0.id) && !present.contains($0.id) }
@@ -291,7 +292,7 @@ public final class AccordBridge {
     }
 
     /// Shared sessions are view-only tiles. No shell command is inferred from remote text.
-    static func project(_ board: [String: Any], nativeIDs: Set<String>, includeNativeHistory: Bool = false, now: Date = Date()) -> [AgentAppSession] {
+    static func project(_ board: [String: Any], nativeIDs: Set<String>, includeNativeHistory: Bool = false, lookback: TimeInterval = 36 * 3600, now: Date = Date()) -> [AgentAppSession] {
         let authority = board["authority"] as? String
         return ((board["sessions"] as? [[String: Any]]) ?? []).compactMap { value in
             guard value["private"] as? Bool != true, let address = value["address"] as? String,
@@ -311,6 +312,8 @@ public final class AccordBridge {
                 guard ["starting", "working", "waiting", "blocked", "done", "failed"].contains(state) else { return nil }
                 let progress = (value["progressAt"] as? Double ?? 0) / 1000
                 if ["starting", "working"].contains(state), now.timeIntervalSince1970 - progress > 7200 { return nil }
+                // Accord keeps done and failed forever; the board only wants recent results.
+                if ["done", "failed"].contains(state), now.timeIntervalSince1970 - progress > lookback { return nil }
             }
             let activity: TileActivity = state == "waiting" ? .idle : state == "blocked" ? .needsInput : state == "cancelled" ? .exited : TileActivity(rawValue: state) ?? .idle
             let at = Date(timeIntervalSince1970: (value["progressAt"] as? Double ?? 0) / 1000)
