@@ -114,8 +114,20 @@ public final class AccordBridge {
         guard identity["authority"] as? String == c.2 else { throw URLError(.userAuthenticationRequired) }
         return try await call(c, path: "v1/collaboration", body: ["operation": op, "args": args])
     }
-    private func fingerprint(_ digest: Steward.Digest) -> String {
+    private static func fingerprint(_ digest: Steward.Digest) -> String {
         SHA256.hash(data: Data((digest.state + "\n" + (digest.detail ?? "") + "\n" + digest.text).utf8)).map { String(format: "%02x", $0) }.joined()
+    }
+    /// The `session-report` arguments for a digest. `sourceProgressAt` goes out only once the tile
+    /// has been idle: for an active tile Accord's own now is the right progress time, and ours may
+    /// be a fraction of a second ahead of the coordinator's clock, which it rejects.
+    static func reportArgs(_ digest: Steward.Digest, key: String, nowMs: Int) -> [String: Any] {
+        let state = digest.state == "needsInput" ? "waiting" : digest.state
+        var args: [String: Any] = ["key": key, "source": "tessera", "externalId": digest.id,
+            "title": String(digest.title.prefix(180)), "state": ["starting", "working", "idle", "waiting", "done", "failed", "exited"].contains(state) ? state : "unknown",
+            "location": digest.subtitle, "detail": digest.detail ?? "", "private": false,
+            "events": digest.text.isEmpty ? [] : [["key": fingerprint(digest), "kind": "observation", "text": String(digest.text.suffix(12000))]]]
+        if digest.idleMinutes > 0 { args["sourceProgressAt"] = max(0, nowMs - digest.idleMinutes * 60000) }
+        return args
     }
     public func refresh() async {
         guard !busy, FileManager.default.fileExists(atPath: profile.path) else { return }
@@ -133,22 +145,29 @@ public final class AccordBridge {
             }
             if privacy { summaries.removeAll(); tileSummaries.removeAll(); tileRecords.removeAll(); incidents.removeAll(); projectedSessions = []; sessions?([]); connected = true; return }
             let values = digests?() ?? []
-            for digest in values.filter({ seen[$0.id] != fingerprint($0) }).sorted(by: { (published[$0.id] ?? .distantPast) < (published[$1.id] ?? .distantPast) }).prefix(16) {
-                let state = digest.state == "needsInput" ? "waiting" : digest.state
-                let result = try await operation(c, "session-report", ["key": UUID().uuidString, "source": "tessera", "externalId": digest.id,
-                    "title": String(digest.title.prefix(180)), "state": ["starting", "working", "idle", "waiting", "done", "failed", "exited"].contains(state) ? state : "unknown",
-                    "location": digest.subtitle, "detail": digest.detail ?? "", "private": false,
-                    "sourceProgressAt": max(0, Int(Date().timeIntervalSince1970 * 1000) - digest.idleMinutes * 60000),
-                    "events": digest.text.isEmpty ? [] : [["key": fingerprint(digest), "kind": "observation", "text": String(digest.text.suffix(12000))]]])
+            for digest in values.filter({ seen[$0.id] != Self.fingerprint($0) }).sorted(by: { (published[$0.id] ?? .distantPast) < (published[$1.id] ?? .distantPast) }).prefix(16) {
+                var args = Self.reportArgs(digest, key: UUID().uuidString, nowMs: Int(Date().timeIntervalSince1970 * 1000))
+                var result: [String: Any]?
+                do {
+                    result = try await operation(c, "session-report", args)
+                } catch {
+                    // One rejected report must not stall the pass: try once without progress time
+                    // (a coordinator a fraction behind our clock refuses progress-at-now), and if it
+                    // still fails count the digest published so it returns only when it changes.
+                    args.removeValue(forKey: "sourceProgressAt")
+                    result = try? await operation(c, "session-report", args)
+                }
                 published[digest.id] = Date()
-                seen[digest.id] = fingerprint(digest)
-                records[digest.id] = result["id"] as? String
+                seen[digest.id] = Self.fingerprint(digest)
+                if let result { records[digest.id] = result["id"] as? String }
             }
             let current = Set(values.map(\.id))
             for tile in Array(records.keys) where !current.contains(tile) {
-                _ = try await operation(c, "session-report", ["key": UUID().uuidString, "source": "tessera", "externalId": tile,
-                    "title": "Closed native session", "state": "exited"])
-                records.removeValue(forKey: tile); seen.removeValue(forKey: tile)
+                do {
+                    _ = try await operation(c, "session-report", ["key": UUID().uuidString, "source": "tessera", "externalId": tile,
+                        "title": "Closed native session", "state": "exited"])
+                    records.removeValue(forKey: tile); seen.removeValue(forKey: tile)
+                } catch { continue }
             }
             let board = try await call(c, path: "v1/awareness")
             summaries = Dictionary(((board["sessions"] as? [[String: Any]]) ?? []).compactMap { value -> (String, String)? in
