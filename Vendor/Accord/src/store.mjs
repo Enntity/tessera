@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+import { querySchema } from './query-schema.mjs';
 import { messageAttentionSchema } from './message-attention.mjs';
 import { managerSchema } from './resource-managers.mjs';
 import { awarenessSchema } from './session-awareness.mjs';
@@ -59,7 +60,9 @@ export class Store {
       // NULL declares nothing, so the reservation default applies.
       "ALTER TABLE resource_bindings ADD COLUMN max_ownership_ms INTEGER;ALTER TABLE resource_bindings ADD COLUMN allow_indefinite INTEGER NOT NULL DEFAULT 0;",
       // Migration 16: a finite window is owned by the daemon, not a chat heartbeat.
-      "ALTER TABLE reservations ADD COLUMN duration_ms INTEGER;"]); this.now = now; this.leaderMs = leaderMs;
+      "ALTER TABLE reservations ADD COLUMN duration_ms INTEGER;",querySchema,
+      // A name another participant gives a session. The owner's own title is never overwritten.
+      "ALTER TABLE session_views ADD COLUMN given_title TEXT;ALTER TABLE session_views ADD COLUMN titled_by TEXT;ALTER TABLE session_views ADD COLUMN titled_at INTEGER;"]); this.now = now; this.leaderMs = leaderMs;
     transaction(this.db, () => {
       this.db.prepare("INSERT OR IGNORE INTO meta VALUES('authority',?)").run(id());
       this.db.prepare("INSERT OR IGNORE INTO meta VALUES('paused','false')").run();
@@ -111,8 +114,7 @@ export class Store {
   revokeSession(sessionId) {
     this.db.prepare("UPDATE session_views SET state='exited',revision=revision+1,summary_kind='extractive',summary='Session closed' WHERE id=? AND state NOT IN ('done','failed','cancelled')").run(sessionId);
     for (const claim of this.db.prepare("SELECT * FROM claims WHERE actor=? AND state IN ('preparing','running')").all(sessionId)) {
-      this.db.prepare("UPDATE claims SET state='revoking',outcome=?,error='session ended' WHERE id=?").run(this.retryOutcome(claim.task_id), claim.id);
-      this.db.prepare("UPDATE tasks SET state='recovering' WHERE id=?").run(claim.task_id);
+      this.fence(claim, 'session ended');
       this.emit('claim.session_ended', {claim: claim.id, session: sessionId});
     }
   }
@@ -141,11 +143,30 @@ export class Store {
     return this.command(actor,body,'resource.register',()=>{
       const old=this.db.prepare('SELECT * FROM resource_bindings WHERE id=? OR asset=?').get(binding.id,binding.asset);
       requireThat(!old||['id','instance','plugin','asset','enforcement'].every(k=>old[k]===binding[k]),'RESOURCE_CONFLICT','Resource binding changed');
-      this.db.prepare('INSERT OR IGNORE INTO resources(id) VALUES(?)').run(binding.id);
+      // A name used before starts above every generation it issued, so an old holder stays fenced.
+      this.db.prepare("INSERT OR IGNORE INTO resources(id,generation) VALUES(?,coalesce((SELECT CAST(value AS INTEGER) FROM meta WHERE key='generation_floor'),0))").run(binding.id);
       this.db.prepare('INSERT OR IGNORE INTO resource_bindings(id,instance,plugin,asset,enforcement) VALUES(?,?,?,?,?)').run(binding.id,binding.instance,binding.plugin,binding.asset,binding.enforcement);
       this.db.prepare('UPDATE resource_bindings SET max_ownership_ms=?,allow_indefinite=? WHERE id=?').run(binding.maxOwnershipMs??null,binding.allowIndefinite?1:0,binding.id);
       if(body.pool)this.db.prepare('INSERT OR IGNORE INTO resource_pools VALUES(?,?)').run(binding.id,body.pool);
       this.emit('resource.registered',binding);return binding;
+    });
+  }
+  // Forget a withdrawn or retired resource once nothing holds, awaits or depends on it.
+  removeResource(resource){
+    return this.mutate(()=>{
+      const b=this.binding(resource),busy="SELECT 1 FROM tasks WHERE resource=? AND state IN ('queued','preparing','running','releasing','recovering','cancelling')";
+      if(!b||this.db.prepare("SELECT 1 FROM claims WHERE resource=? AND state!='closed'").get(resource)||this.db.prepare(busy).get(resource)
+        ||this.db.prepare('SELECT 1 FROM tasks t JOIN tasks d ON d.id=t.dependency WHERE d.resource=? AND t.resource!=?').get(resource,resource))return false;
+      const {generation}=this.db.prepare('SELECT generation FROM resources WHERE id=?').get(resource);
+      this.db.prepare("INSERT INTO meta VALUES('generation_floor',?) ON CONFLICT(key) DO UPDATE SET value=max(CAST(value AS INTEGER),CAST(excluded.value AS INTEGER))").run(String(generation));
+      // Its registration replays as new, so the same command registers it again.
+      this.db.prepare("DELETE FROM commands WHERE json_extract(response,'$.id')=? AND json_extract(response,'$.asset')=?").run(resource,b.asset);
+      this.db.prepare('DELETE FROM reservations WHERE task_id IN (SELECT id FROM tasks WHERE resource=?)').run(resource);
+      for(const table of ['claims','tasks'])this.db.prepare(`DELETE FROM ${table} WHERE resource=?`).run(resource);
+      this.db.prepare('DELETE FROM resource_pools WHERE resource=?').run(resource);
+      this.db.prepare('DELETE FROM resource_bindings WHERE id=?').run(resource);
+      this.db.prepare('DELETE FROM resources WHERE id=?').run(resource);
+      this.emit('resource.removed',{id:resource,asset:b.asset,generation});return true;
     });
   }
   binding(resource){return this.db.prepare('SELECT * FROM resource_bindings WHERE id=?').get(resource);}
@@ -158,26 +179,53 @@ export class Store {
       requireThat(!old || old.until_ms <= this.now(), 'LEADER_ACTIVE', 'Another coordinator still owns the leadership lease', 503);
       this.epoch = (old?.epoch || 0) + 1;
       this.db.prepare('INSERT OR REPLACE INTO leader VALUES(1,?,?,?)').run(this.leaderToken, this.epoch, this.now() + this.leaderMs);
-      // A restart never assumes the old attempt stopped. Revoke every unfinished grant.
-      for (const claim of this.db.prepare("SELECT * FROM claims WHERE state IN ('preparing','running')").all()) {
-        this.db.prepare("UPDATE claims SET state='revoking',outcome=?,error='coordinator restarted' WHERE id=?").run(this.retryOutcome(claim.task_id),claim.id);
-        this.db.prepare("UPDATE tasks SET state='recovering' WHERE id=?").run(claim.task_id);
+      // A restart never assumes the old attempt stopped. Revoke every unfinished grant,
+      // except a bounded window: it promised its holder the resource until its deadline,
+      // so the driver reconfirms the same generation for the same holder instead.
+      for (const claim of this.db.prepare(`SELECT c.*,(r.duration_ms IS NOT NULL AND c.deadline>?) AS resume FROM claims c
+        LEFT JOIN reservations r ON r.task_id=c.task_id WHERE c.state IN ('preparing','running')`).all(this.now())) {
+        if (claim.resume) {
+          this.db.prepare("UPDATE claims SET state='preparing',error='coordinator restarted' WHERE id=?").run(claim.id);
+          this.db.prepare("UPDATE tasks SET state='preparing' WHERE id=?").run(claim.task_id);
+          this.emit('claim.resuming', { claim: claim.id, generation: claim.generation, reason: 'coordinator restarted' });
+          continue;
+        }
+        this.fence(claim, 'coordinator restarted');
         this.emit('claim.recovering', { claim: claim.id, reason: 'coordinator restarted' });
       }
       upgradeSessionContinuity(this);
       this.emit('coordinator.started', { epoch: this.epoch });
     });
   }
-  assertLeader() {
+  leaderRow() {
     const row = this.db.prepare('SELECT * FROM leader').get();
-    requireThat(row?.token === this.leaderToken && row.until_ms > this.now(), 'LEADER_LOST', 'Coordinator authority expired; restart and reconcile', 503);
+    requireThat(row?.token === this.leaderToken && row.until_ms > 0, 'LEADER_LOST', 'Coordinator authority replaced or released; restart and reconcile', 503);
+    return row;
   }
-  mutate(fn) { return transaction(this.db, () => { this.assertLeader(); return fn(); }); }
-  beat() { this.mutate(() => this.db.prepare('UPDATE leader SET until_ms=? WHERE token=?').run(this.now() + this.leaderMs, this.leaderToken)); }
+  // Called only with the SQLite write lock held. An expired election lease lets
+  // a contender take over, but an unchanged token proves none has done so yet.
+  renewLeadership(row) {
+    const now = this.now();
+    this.db.prepare('UPDATE leader SET until_ms=? WHERE token=?').run(now + this.leaderMs, this.leaderToken);
+    if (row.until_ms <= now) this.emit('coordinator.lease_recovered', {
+      epoch: this.epoch, expiredAt: row.until_ms, resumedAt: now, gapMs: now - row.until_ms
+    });
+  }
+  assertLeader() {
+    if (this.leaderRow().until_ms <= this.now()) this.beat();
+  }
+  mutate(fn) {
+    return transaction(this.db, () => {
+      const row = this.leaderRow();
+      if (row.until_ms <= this.now()) this.renewLeadership(row);
+      return fn();
+    });
+  }
+  beat() { transaction(this.db, () => this.renewLeadership(this.leaderRow())); }
   releaseLeadership() {
     this.db.prepare('UPDATE leader SET until_ms=0 WHERE token=?').run(this.leaderToken);
   }
-  emit(kind, data) { this.db.prepare('INSERT INTO events(at,kind,data) VALUES(?,?,?)').run(this.now(), kind, JSON.stringify(data)); }
+  emit(kind, data) { this.db.prepare('INSERT INTO events(at,kind,data) VALUES(?,?,?)').run(this.now(), kind, JSON.stringify(data)); this.onEvent?.(); }
   command(actor, body, operation, fn) {
     text(body.key, 'key', 128);
     const fingerprint = hash(JSON.stringify({ operation, body }));
@@ -207,6 +255,10 @@ export class Store {
     requireThat(claim.actor === actor.id, 'NOT_OWNER', 'Claim belongs to another actor', 403);
     if (active) requireThat(claim.state === 'running' && claim.deadline > this.now(), 'STALE_CLAIM', 'Claim is not active');
     return claim;
+  }
+  fence(claim, reason) {
+    this.db.prepare("UPDATE claims SET state='revoking',outcome=?,error=? WHERE id=?").run(this.retryOutcome(claim.task_id), reason, claim.id);
+    this.db.prepare("UPDATE tasks SET state='recovering' WHERE id=?").run(claim.task_id);
   }
   retryOutcome(taskId) {
     const attempts = this.db.prepare('SELECT count(*) AS n FROM claims WHERE task_id=?').get(taskId).n;
@@ -322,11 +374,16 @@ export class Store {
         this.revokeSession(session.id); this.emit('session.expired', {session: session.id});
       }
       for (const claim of this.db.prepare("SELECT * FROM claims WHERE state IN ('preparing','running') AND deadline<=?").all(this.now())) {
-        this.db.prepare("UPDATE claims SET state='revoking',outcome=?,error='lease expired' WHERE id=?").run(this.retryOutcome(claim.task_id),claim.id);
-        this.db.prepare("UPDATE tasks SET state='recovering' WHERE id=?").run(claim.task_id);
+        this.fence(claim, 'lease expired');
         this.emit('claim.expired', { claim: claim.id, generation: claim.generation });
       }
     });
+  }
+  nextDeadline(){
+    const session=this.db.prepare('SELECT min(expires_at) at FROM sessions WHERE closed_at IS NULL').get().at;
+    const claim=this.db.prepare("SELECT min(deadline) at FROM claims WHERE state IN ('preparing','running')").get().at;
+    const queue=this.db.prepare("SELECT min(r.queued_until) at FROM tasks t JOIN reservations r ON r.task_id=t.id WHERE t.state='queued'").get().at;
+    return Math.min(session??Infinity,claim??Infinity,queue??Infinity);
   }
   pending() { return this.db.prepare("SELECT * FROM claims WHERE state IN ('preparing','releasing','revoking') ORDER BY created_at").all(); }
   activated(claimId) {
@@ -347,6 +404,15 @@ export class Store {
       this.emit('claim.released', { claim: claimId, generation: claim.generation, outcome: claim.outcome });
     });
   }
+  // A driver that cannot reconfirm a resumed generation fences it as a restart always did.
+  refused(claimId, code) {
+    this.mutate(() => {
+      const claim = this.claim(claimId);
+      if (claim.state !== 'preparing') return;
+      this.fence(claim, code);
+      this.emit('claim.recovering', { claim: claimId, reason: code });
+    });
+  }
   driverError(claimId, code) {
     this.mutate(() => {
       const claim = this.claim(claimId);
@@ -355,16 +421,34 @@ export class Store {
       this.emit('driver.unavailable', { claim: claimId, reason: code });
     });
   }
-  board(after = 0) {
+  board(after = 0, {active=false,limit,before}={}) {
     this.assertLeader();
-    const tasks = this.db.prepare('SELECT * FROM tasks ORDER BY created_at,rowid').all();
-    const claims = this.db.prepare('SELECT * FROM claims ORDER BY created_at,rowid').all();
-    const events = this.db.prepare('SELECT * FROM events WHERE seq>? ORDER BY seq LIMIT 500').all(after).map(e => ({ ...e, data: JSON.parse(e.data) }));
-    const holders = claims.filter(c => c.state !== 'closed');
-    for (const task of tasks) task.blockedBy = task.dependency && this.task(task.dependency).state !== 'succeeded' ? 'dependency' : task.state === 'queued' && holders.some(c=>c.resource===task.resource) ? 'resource held' : null;
-    return { authority: this.authority, epoch: this.epoch, observedAt: this.now(), paused: this.db.prepare("SELECT value FROM meta WHERE key='paused'").get().value === 'true',
-      tasks, claims, sessions:this.db.prepare('SELECT * FROM sessions ORDER BY created_at').all(), resource: { id: 'artifact', capacity: 1, enforcement: 'enforced-at-artifact-API', holders: holders.filter(c=>c.resource==='artifact').map(c => c.id) },
-      resources:this.db.prepare('SELECT r.id,b.plugin,b.asset,b.enforcement FROM resources r LEFT JOIN resource_bindings b ON b.id=r.id ORDER BY r.id').all().map(r=>({...r,capacity:1,holders:holders.filter(c=>c.resource===r.id).map(c=>c.id)})), events,
-      cursor: events.at(-1)?.seq ?? after, hasMore: events.length === 500 };
+    if(limit!==undefined)integer(limit,'limit',1,100);
+    if(before!==undefined)integer(before,'before',1,Number.MAX_SAFE_INTEGER);
+    const conditions=[];if(active)conditions.push("state IN ('queued','preparing','running','recovering','releasing','cancelling')");
+    if(before!==undefined)conditions.push('rowid<?');
+    const paged=limit!==undefined;
+    const rows=this.db.prepare(`SELECT ${paged?'rowid boardRow,*':'*'} FROM tasks ${conditions.length?'WHERE '+conditions.join(' AND '):''} ORDER BY ${paged?'rowid DESC':'created_at,rowid'} ${paged?'LIMIT ?':''}`)
+      .all(...(before!==undefined?[before]:[]),...(paged?[limit+1]:[]));
+    const moreTasks=paged&&rows.length>limit;if(moreTasks)rows.pop();
+    const nextBefore=moreTasks?rows.at(-1).boardRow:undefined;
+    const tasks=paged?rows.reverse().map(({boardRow,...task})=>task):rows;
+    const holders=this.db.prepare("SELECT * FROM claims WHERE state!='closed'").all();
+    const claims=active?holders:paged?this.db.prepare(`SELECT * FROM claims WHERE task_id IN (${tasks.map(()=>'?').join(',')}) ORDER BY created_at,rowid`).all(...tasks.map(t=>t.id))
+      :this.db.prepare('SELECT * FROM claims ORDER BY created_at,rowid').all();
+    const events=this.db.prepare('SELECT * FROM events WHERE seq>? ORDER BY seq LIMIT 500').all(after).map(e=>({...e,data:JSON.parse(e.data)}));
+    const held=new Map();for(const c of holders){if(!held.has(c.resource))held.set(c.resource,[]);held.get(c.resource).push(c.id);}
+    const states=new Map(tasks.some(t=>t.dependency)?tasks.map(t=>[t.id,t.state]):[]);
+    for(const task of tasks){
+      if(task.dependency&&!states.has(task.dependency))states.set(task.dependency,this.task(task.dependency).state);
+      task.blockedBy=task.dependency&&states.get(task.dependency)!=='succeeded'?'dependency':task.state==='queued'&&held.has(task.resource)?'resource held':null;
+    }
+    const actors=active||paged?[...new Set(claims.map(c=>c.actor))]:[];
+    const sessions=active||paged?this.db.prepare(`SELECT * FROM sessions WHERE id IN (${actors.map(()=>'?').join(',')}) ORDER BY created_at`).all(...actors)
+      :this.db.prepare('SELECT * FROM sessions ORDER BY created_at').all();
+    return {authority:this.authority,epoch:this.epoch,observedAt:this.now(),paused:this.db.prepare("SELECT value FROM meta WHERE key='paused'").get().value==='true',
+      tasks,claims,sessions,resource:{id:'artifact',capacity:1,enforcement:'enforced-at-artifact-API',holders:held.get('artifact')??[]},
+      resources:this.db.prepare('SELECT r.id,b.plugin,b.asset,b.enforcement FROM resources r LEFT JOIN resource_bindings b ON b.id=r.id ORDER BY r.id').all().map(r=>({...r,capacity:1,holders:held.get(r.id)??[]})),events,
+      cursor:events.at(-1)?.seq??after,hasMore:events.length===500,...(paged?{moreTasks,...(moreTasks?{nextBefore}:{})}:{}),...(active?{active:true}:{})};
   }
 }

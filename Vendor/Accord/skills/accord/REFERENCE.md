@@ -40,6 +40,8 @@ work that needs no shared resource. Then:
   hosts. Check before work that could collide with another agent.
 - `accord_sessions` / `accord_session_read`: search summaries and recent redacted
   activity across linked hosts, then read a session with its host authority.
+  Use `detail:true` for full search metadata. Session reads return 10 events by
+  default; pass `previous` as `before` for older events, or increase `limit`.
 - `accord_report`: report meaningful progress, `waiting` with `expectedAt`, or
   `done` when finished. Heartbeat is presence, not progress. Use `private` for
   content that should not be shared.
@@ -51,6 +53,9 @@ work that needs no shared resource. Then:
 - `accord_overseer` / `accord_snooze`: inspect check-in evidence and snooze your
   session for an explicit expected wait. Treat check-ins as observations, never
   authority to interrupt another workload or release someone else's reservation.
+- `accord_title`: give a session a display name the operator and other agents see,
+  by id or by an adapter's source and external id. A name is an attributed label,
+  never an instruction or ownership; an empty title removes it.
 - `accord_send`: message an address returned by discovery. Use `kind: notification`
   for a heads-up. Delivery is durable; it does not guarantee the recipient woke or
   acted. Retry ambiguous sends with the same `key`. `delivery: native-prompt`
@@ -62,10 +67,12 @@ work that needs no shared resource. Then:
 - `accord_inbox`: `waitMs: 20000` waits for incoming messages, but ending your turn is
   cheaper when you only need to wait: mail and queued grants wake you. After handling each
   message call `accord_read` with its `deliveryId`; otherwise it stays pending.
+  Pass the returned `cursor` to read the next page; bodies are never truncated.
 - `accord_telemetry` / `accord_machine`: read live sensors or cached hardware metadata,
   optionally on a linked `host`. Missing values are null; stale or unavailable data
   never proves capacity or grants ownership.
 - `accord_resources`: inspect local resources, or supply a linked `host` authority.
+  Pass the returned `cursor` for more resources and pools.
 - `accord_reserve`: request a resource or pool by its discovered full address and
   describe your purpose. Set `durationMs` for the full work window (default one hour),
   including preparation. No heartbeat is needed; a disconnected chat retains its
@@ -97,8 +104,8 @@ work that needs no shared resource. Then:
 A lost response is ambiguous. Retain and retry the same operation key and payload.
 MCP generates a key when omitted, but explicit keys are best for effectful retries.
 An unavailable host means unknown, never free. Managers may be agents themselves.
-Each resource has one authoritative host; do not register another authority for
-an existing physical resource.
+Each resource has one authoritative host and one name; find it before registering, and
+do not register another authority or a second name for an existing physical resource.
 
 Shell agents: `accord run -- COMMAND` supplies `ACCORD_SESSION_FILE` and context.
 Use `accord announce`, `find`, `send`, `inbox`, `read`, `reserve`, `reservation`,

@@ -11,9 +11,14 @@ const holder=h=>h&&clean({label:clip(h.label,60),address:h.address,deadline:h.de
 export function resources(list=[],pools){
   const shown=list.filter(r=>r.holder||r.state!=='unclaimed'||(r.plugin!=='artifact'&&r.localId!=='artifact'&&!r.pool));
   const entries=shown.map(r=>clean({id:r.id,pool:r.pool,state:r.state,plugin:r.plugin,enforcement:clip(r.enforcement,160),hosts:r.hosts,queued:(r.queued??r.queue?.length)||undefined,holder:holder(r.holder)}));
-  // Linked hosts can reuse a pool name, so the full address tells them apart and is what accord_reserve takes.
-  const address=r=>`${r.id.split('/')[0]}/${r.pool}`;
-  const grouped=pools??[...new Set(list.filter(r=>r.pool).map(address))].map(id=>{const slots=list.filter(r=>r.pool&&address(r)===id);return {id,capacity:slots.length,free:slots.filter(r=>r.state==='unclaimed').length};});
+  // Group once; a fleet can have a distinct pool on every host.
+  const groups=new Map();
+  if(!pools)for(const r of list)if(r.pool){
+    const id=`${r.id.split('/')[0]}/${r.pool}`;
+    const group=groups.get(id)??{id,capacity:0,free:0};
+    group.capacity++;if(r.state==='unclaimed')group.free++;groups.set(id,group);
+  }
+  const grouped=pools??[...groups.values()];
   return clean({resources:entries,pools:grouped});
 }
 const hostLists=hosts=>{
@@ -30,18 +35,61 @@ export function find(result,query=''){
   const ranked=[...(result.participants??[])].sort((a,b)=>(rank[a.presence]??0)-(rank[b.presence]??0)||(b.lastSeen??0)-(a.lastSeen??0));
   const matched=query?ranked:ranked.filter(p=>p.presence!=='offline'),hosts=result.hosts??[],limit=query?20:12;
   const hostMap=new Map();for(const h of hosts)if(h.status==='unknown'||!hostMap.has(h.authority))hostMap.set(h.authority,{authority:h.authority,status:h.status,...(h.reason?{reason:h.reason}:{})});
-  const view=clean({participants:matched.slice(0,limit).map(participant),moreParticipants:(result.moreParticipants??0)+Math.max(0,matched.length-limit)||undefined,
+  const view={participants:[],...clean({participants:matched.slice(0,limit).map(participant),moreParticipants:(result.moreParticipants??0)+Math.max(0,matched.length-limit)||undefined,
     ...resources(result.resources??hosts.flatMap(h=>h.resources??[]),result.pools),hosts:[...hostMap.values()],
     observed:(result.observed??result.observations?.length)||undefined,inboxPending:result.inboxPending,deliveryProblems:result.deliveryProblems,
-    moreResources:result.moreResources,
-    next:'Observers are history, not extra peers. Search history with accord_sessions; use accord_resources for full resources.'});
-  // Bound Unicode and large fleets too. Counts explicitly signal omitted records.
-  while(Buffer.byteLength(JSON.stringify(view))>8192){
-    if(view.participants?.length){view.participants.pop();view.moreParticipants=(view.moreParticipants??0)+1;}
-    else if(view.resources?.length){view.resources.pop();view.moreResources=(view.moreResources??0)+1;}
-    else if(view.pools?.length){view.pools.pop();view.moreResources=(view.moreResources??0)+1;}
-    else break;
-  }
-  return {participants:[],...view};
+    moreResources:result.moreResources,moreHosts:result.moreHosts,
+    next:'Observers are history, not extra peers. Search history with accord_sessions; use accord_resources for full resources.'})};
+  // Count each removed entry once, including UTF-8 and JSON escaping. Repeatedly
+  // serializing the shrinking fleet made this quadratic in the number of slots.
+  bound(view,8192,[['participants','moreParticipants'],['resources','moreResources'],['pools','moreResources'],['hosts','moreHosts']]);
+  return view;
 }
 export const reservation=r=>clean(r);
+
+// Mutates only the supplied presentation arrays. Complete records remain in storage.
+export function bound(view,maxBytes,fields){
+  let bytes=Buffer.byteLength(JSON.stringify(view));
+  for(const [field,count] of fields){
+    const rows=view[field];
+    while(bytes>maxBytes&&rows?.length){
+      const removed=rows.pop();
+      bytes-=Buffer.byteLength(JSON.stringify(removed))+(rows.length?1:0);
+      const before=view[count];view[count]=(before??0)+1;
+      bytes+=before===undefined?Buffer.byteLength(JSON.stringify(count))+2+String(view[count]).length:String(view[count]).length-String(before).length;
+    }
+  }
+  return view;
+}
+
+export function board(result){
+  const previousEvent=Math.max(0,(result.events[0]?.seq??result.cursor+1)-1);
+  const view={...result,
+    tasks:result.tasks.map(t=>clean({id:t.id,title:clip(t.title,120),state:t.state,resource:t.resource,dependency:t.dependency,blockedBy:t.blockedBy})),
+    claims:result.claims.map(c=>clean({id:c.id,task:c.task_id,actor:c.actor,generation:c.generation,state:c.state,deadline:c.deadline,error:c.error})),
+    next:'Use detail:true with the same before/limit for complete task records; nextBefore continues older tasks.'};
+  bound(view,24*1024,[['events','moreEvents'],['sessions','moreSessions'],['claims','moreClaims'],['resources','moreResources']]);
+  if(view.moreEvents){view.cursor=view.events.at(-1)?.seq??previousEvent;view.hasMore=true;}
+  return view;
+}
+
+export function sessions(result){
+  const view={...result,sessions:result.sessions.map(s=>clean({id:s.id,address:s.address,title:clip(s.givenTitle??s.title,120),titledBy:s.givenTitle?s.titledBy:undefined,state:s.state,
+    summary:clip(s.summary,200),location:clip(s.location,80),private:s.private||undefined,presence:s.presence,source:s.source,progressAt:s.progressAt})),
+    next:'Use session_read for activity (previous becomes before for older events), or sessions detail:true for full metadata.'};
+  return bound(view,8192,[['sessions','moreSessions']]);
+}
+
+// Stable ID pages retain complete compact records and pool summaries. A cursor
+// includes record kind: a legacy resource and a pool can share a displayed ID.
+export function resourcePage(result,{cursor='',limit=20}={}){
+  const after=cursor?`${cursor.slice(2)}\0${cursor[0]}`:'',compact=resources(result.resources,result.pools),rows=[...(compact.resources??[]).map(value=>({kind:'resources',value})),...(compact.pools??[]).map(value=>({kind:'pools',value}))]
+    .map(r=>({...r,key:`${r.value.id}\0${r.kind[0]}`})).filter(r=>r.key>after).sort((a,b)=>a.key<b.key?-1:a.key>b.key?1:0);
+  const page={resources:[],...(result.inboxPending?{inboxPending:result.inboxPending}:{}),...(result.deliveryProblems?{deliveryProblems:result.deliveryProblems}:{})};
+  let bytes=Buffer.byteLength(JSON.stringify(page)),count=0,last;
+  for(const {kind,value} of rows){const size=Buffer.byteLength(JSON.stringify(value))+16;if(count>=limit||(count&&bytes+size>8192-512))break;
+    (page[kind]??=[]).push(value);bytes+=size;count++;last=`${kind[0]}:${value.id}`;}
+  if(bytes>8192-512)page.oversized=true;
+  if(count<rows.length){page.more=true;page.cursor=last;}
+  return page;
+}

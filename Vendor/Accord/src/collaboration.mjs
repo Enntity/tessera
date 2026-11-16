@@ -39,20 +39,28 @@ export class Collaboration {
   directory(query='') {
     requireThat(typeof query==='string'&&query.length<=200,'INVALID_INPUT','Search must be <=200 characters',400);
     const found=[];
-    const rows=this.db.prepare(`SELECT p.*,s.harness,s.expires_at,s.closed_at,v.source,v.external_id,v.private,v.state observed_state,v.progress_at FROM participants p
+    const needle=query.toLowerCase();
+    const sql=`SELECT p.*,s.harness,s.expires_at,s.closed_at,v.source,v.external_id,v.private,v.state observed_state,v.progress_at,b.actor binding_actor FROM participants p
       LEFT JOIN sessions s ON s.id=p.actor LEFT JOIN session_views v ON v.id=p.actor
+      LEFT JOIN session_bindings b ON b.source=v.source AND b.external_id=v.external_id AND v.private=0
       WHERE NOT EXISTS (SELECT 1 FROM remote_routes r WHERE r.actor=p.actor)
-      AND NOT EXISTS (SELECT 1 FROM session_views v WHERE v.id=p.actor AND v.hidden=1)
-      ORDER BY CASE WHEN v.source IS NULL OR v.source='agent' THEN 0 ELSE 1 END,p.updated_at DESC`).iterate();
+      AND NOT EXISTS (SELECT 1 FROM session_views hidden WHERE hidden.id=p.actor AND hidden.hidden=1)`;
+    // Preserve participant-before-observation ordering without sorting the entire
+    // retained directory before yielding its first row.
+    function* ordered(db){
+      for(const predicate of ["(v.source IS NULL OR v.source='agent')","v.source IS NOT NULL AND v.source!='agent'"])
+        yield* db.prepare(sql+' AND '+predicate+' ORDER BY p.updated_at DESC').iterate();
+    }
+    const rows=ordered(this.db);
     for(const p of rows){
       const native=['codex','claude','tessera'].includes(p.source),lastSeen=native?p.progress_at:p.updated_at;
       const ended=p.closed_at!==null||(p.expires_at!==null&&p.expires_at<=this.store.now())||native&&['done','failed','exited','cancelled'].includes(p.observed_state);
       const observed=p.source && p.source!=='agent';
-      const binding=observed&&!p.private?this.db.prepare('SELECT actor FROM session_bindings WHERE source=? AND external_id=?').get(p.source,p.external_id):null;
+      const binding=observed&&!p.private&&p.binding_actor?{actor:p.binding_actor}:null;
       const value={kind:observed?'observation':p.harness?'participant':'service',source:p.source??'agent',state:p.observed_state??'unknown',
         ...(observed?{externalId:p.private?null:p.external_id}:{}),...(binding?{participantAddress:this.store.authority+'/'+binding.actor}:{}),address:`${this.store.authority}/${p.actor}`,label:p.label,capabilities:JSON.parse(p.capabilities),activity:p.activity,location:p.location,harness:p.harness??'service',lastSeen,
         presence:ended?'offline':native&&p.observed_state==='unknown'||this.store.now()-lastSeen>120000?'unknown':'recent'};
-      if(JSON.stringify(value).toLowerCase().includes(query.toLowerCase()))found.push(value);
+      if(JSON.stringify(value).toLowerCase().includes(needle))found.push(value);
       if(found.length===200)break;
     }
     return found;
@@ -222,6 +230,39 @@ export class Collaboration {
     const ordered=messages.sort((a,b)=>Date.parse(a.at)-Date.parse(b.at)||a.id.localeCompare(b.id));
     return {messages:all?ordered.slice(-100):ordered.slice(0,100)};
   }
+  // Cursor paging is a view over canonical deliveries; it never claims or reads
+  // a delivery. Acknowledging earlier pages cannot shift the remaining page.
+  inboxPage(actor,{limit=20,cursor}={}) {
+    integer(limit,'limit',1,100);
+    const principals=this.inboxActors(actor).flatMap(id=>{
+      const principal=this.messages.principalByHandle('a'+hash(this.address({id})).slice(0,60));return principal?[principal.id]:[];
+    });
+    let after;
+    if(cursor!==undefined){
+      text(cursor,'cursor',100);
+      const row=this.messages.db.prepare(`SELECT d.recipient_id,m.created_at at,m.seq,d.id
+        FROM deliveries d JOIN messages m ON m.id=d.message_id WHERE d.id=?`).get(cursor);
+      requireThat(row&&principals.includes(row.recipient_id),'NOT_OWNER','Cursor does not belong to this inbox',403);
+      after=[row.at,row.seq,row.id];
+    }
+    const at=new Date().toISOString(),rows=[];
+    for(const principal of principals){
+      rows.push(...this.messages.db.prepare(`SELECT d.id deliveryId,m.body text,m.data_json data,m.created_at at,m.seq
+        FROM deliveries d JOIN messages m ON m.id=d.message_id WHERE ${pendingDelivery}
+        ${after?'AND (m.created_at,m.seq,d.id)>(?,?,?)':''} ORDER BY m.created_at,m.seq,d.id LIMIT ?`)
+        .all(principal,at,at,...(after??[]),limit+1));
+    }
+    rows.sort((a,b)=>(a.at<b.at?-1:a.at>b.at?1:0)||a.seq-b.seq||(a.deliveryId<b.deliveryId?-1:a.deliveryId>b.deliveryId?1:0));
+    const messages=[];let bytes=0,last;
+    for(const row of rows){
+      const message={...JSON.parse(row.data),deliveryId:row.deliveryId,text:row.text,at:row.at,read:false},size=Buffer.byteLength(JSON.stringify(message))+1;
+      // A legal message (at most 4000 UTF-16 code units) always fits whole.
+      if(messages.length>=limit||(messages.length&&bytes+size>24*1024-1024))break;
+      messages.push(message);bytes+=size;last=row;
+    }
+    const more=messages.length<rows.length;
+    return {messages,...(bytes>24*1024-1024?{oversized:true}:{}),...(more?{more:true,cursor:last.deliveryId}:{})};
+  }
   notify(actor,body) {
     // Operator notifications use the existing Messenger inbox, not another notice store.
     const operator={id:'admin',role:'admin'};
@@ -286,29 +327,44 @@ export class Collaboration {
       this.store.emit('reservation.release_requested',{id:reservationId});return this.reservation(actor,reservationId);
     });
   }
+  holder(actor) {
+    const route=this.db.prepare('SELECT * FROM remote_routes WHERE actor=?').get(actor);
+    if(!route&&!this.db.prepare('SELECT 1 FROM participants WHERE actor=?').get(actor))return null;
+    return route?`${route.authority}/${route.session_id}`:this.address({id:actor});
+  }
   // A queued holder can sit idle at no cost: its grant arrives as ordinary mail.
   // An immediate grant already answered the caller, so it adds nothing to the inbox.
   granted(sender,{key,reservation,actor,resource,queuedAt}) {
     if(this.store.now()-queuedAt<5000)return;
-    const route=this.db.prepare('SELECT * FROM remote_routes WHERE actor=?').get(actor);
-    if(!route&&!this.db.prepare('SELECT 1 FROM participants WHERE actor=?').get(actor))return;
-    const to=route?`${route.authority}/${route.session_id}`:this.address({id:actor});
+    const to=this.holder(actor);if(!to)return;
     const window = this.db.prepare('SELECT duration_ms FROM reservations WHERE id=?').get(reservation)?.duration_ms;
     this.send(sender,{key,to,kind:'message',text:`Accord reports reservation ${reservation} is running on ${resource}. Confirm with accord_reservation before use. ${window?'Its bounded window needs no heartbeat; extend only if you need more time.':'Renew before its deadline.'} Release when finished.`});
     void this.flush().catch(()=>{});
   }
   grantedClaim(sender,claim) {
+    // A window resumed after a coordinator restart was granted before; its holder was never told otherwise.
+    if(claim.error==='coordinator restarted')return;
     const row=this.db.prepare('SELECT r.id,r.actor,t.created_at FROM reservations r JOIN tasks t ON t.id=r.task_id WHERE r.task_id=?').get(claim.task_id);
     if(row)this.granted(sender,{key:`grant:${claim.id}:${claim.generation}`,reservation:row.id,actor:row.actor,resource:claim.resource,queuedAt:row.created_at});
   }
+  // A holder that did not release must not find out by surprise that its hold is gone.
+  endedClaim(sender,claim) {
+    const row=this.db.prepare('SELECT id,actor FROM reservations WHERE task_id=?').get(claim.task_id);
+    const session=row&&this.db.prepare('SELECT closed_at,expires_at FROM sessions WHERE id=?').get(row.actor);
+    if(!row||claim.outcome==='released'||session&&(session.closed_at!==null||session.expires_at<=this.store.now()))return;
+    const to=this.holder(row.actor);if(!to)return;
+    const how=claim.deadline<=this.store.now()?'reached its deadline and ended':`ended as ${claim.outcome}: Accord revoked it before its deadline`;
+    this.send(sender,{key:`ended:${claim.id}:${claim.generation}`,to,kind:'message',text:`Accord reports reservation ${row.id} on ${claim.resource} ${how}. Confirm with accord_reservation; the resource is no longer held for you, so reserve again if you still need it.`});
+    void this.flush().catch(()=>{});
+  }
   slots(pool){return this.db.prepare('SELECT resource FROM resource_pools WHERE pool=? ORDER BY length(resource),resource').all(pool).map(r=>r.resource);}
   pools(resources){
-    const rows=this.db.prepare('SELECT pool,resource FROM resource_pools').all(),queued=this.db.prepare("SELECT r.pool,count(*) n FROM reservations r JOIN tasks t ON t.id=r.task_id WHERE r.pool IS NOT NULL AND t.state='queued' GROUP BY r.pool").all();
-    return [...new Set(rows.map(r=>r.pool))].sort().map(id=>{
-      const slots=resources.filter(r=>r.pool===id);
-      return {id:`${this.store.authority}/${id}`,capacity:slots.length,free:slots.filter(r=>r.state==='unclaimed').length,queued:queued.find(q=>q.pool===id)?.n??0};
-    });
+    const groups=new Map(this.db.prepare('SELECT DISTINCT pool FROM resource_pools ORDER BY pool').all().map(r=>[r.pool,{id:`${this.store.authority}/${r.pool}`,capacity:0,free:0,queued:0}]));
+    for(const r of resources){const group=groups.get(r.pool);if(group){group.capacity++;if(r.state==='unclaimed')group.free++;}}
+    for(const row of this.db.prepare("SELECT r.pool,count(*) n FROM tasks t JOIN reservations r ON r.task_id=t.id WHERE t.state='queued' AND r.pool IS NOT NULL GROUP BY r.pool").all())if(groups.has(row.pool))groups.get(row.pool).queued=row.n;
+    return [...groups.values()];
   }
+
   schedule() {
     const waiting=this.db.prepare("SELECT r.*,t.resource FROM reservations r JOIN tasks t ON t.id=r.task_id WHERE t.state='queued' ORDER BY t.created_at,t.rowid").all();
     const seen=new Set(),full=new Set();

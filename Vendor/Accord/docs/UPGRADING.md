@@ -3,19 +3,20 @@
 ## Before restarting
 
 Finish or release active reservations on the host you are upgrading. Coordinate with
-agents using resources on linked hosts. A coordinator restart fences unfinished grants;
-it does not preserve a running workload's permission to continue. Managed release can
-stop a workload and restore its provider.
+agents using resources on linked hosts. A coordinator restart fences unfinished tasks and
+heartbeat reservations; it does not preserve their permission to continue. An unexpired
+reservation window resumes once its driver reconfirms the same generation. Managed release
+can stop a workload and restore its provider.
 
 Keep the existing private data directory and connection profile. Do not initialize a
 second authority or copy tokens between hosts. Keep the previous package available for
 binary rollback; database rollback is a separate recovery operation and can invalidate
 fencing history. See [recovery](RECOVERY.md).
 
-## Install 0.6.1
+## Install 0.6.9
 
 ```sh
-npm install -g https://github.com/Enntity/accord/releases/download/v0.6.1/enntity-accord-0.6.1.tgz
+npm install -g https://github.com/Enntity/accord/releases/download/v0.6.9/enntity-accord-0.6.9.tgz
 accord install
 ```
 
@@ -46,13 +47,80 @@ accord --version
 accord doctor
 ```
 
-The CLI should report `0.6.1`; the doctor should report `ready`. The CLI version identifies
+The CLI should report `0.6.9`; the doctor should report `ready`. The CLI version identifies
 the package invoked by your shell, so also check the running service's command line
 against the new install path. Restart your agent sessions to load the updated MCP bridge.
 
 On linked hosts, verify `accord find`, send and acknowledge a test message, and exercise
 reserve, extend and release on a dedicated cooperative resource. Check that extension
 keeps the claim and generation. Do not use an active GPU workload as a smoke test.
+
+## Changes from 0.6.8
+
+Migration 18 adds three nullable `session_views` columns for the given session title
+and upgrades a 0.6.8 database in place; existing migration checksums and stored
+records are unchanged. The old 0.6.8 binary does not understand migration 18 and
+will refuse that database; keep the normal upgrade/recovery precautions above.
+Never delete the migration record or restore older fencing history just to make a
+downgrade start.
+
+`session-title` names are local to each authority and never cross a link, so upgrade
+all linked hosts together. See [API](API.md) and [session backplane](SESSION-BACKPLANE.md).
+
+## Changes from 0.6.7
+
+Migration 17 adds indexes without changing existing migration checksums or stored
+records. The old 0.6.7 binary does not understand migration 17 and will refuse that
+database; keep the normal upgrade/recovery precautions above. Never delete the
+migration record or restore older fencing history just to make a downgrade start.
+
+MCP reads use smaller pages and explicit detail requests. Update the coordinator
+and MCP bridge together for the new inbox and history paging contracts. Legacy
+HTTP defaults still return their previous full records. See [API](API.md#bounded-reads)
+and [performance measurements](PERFORMANCE.md).
+
+## Changes from 0.6.6
+
+The prune pass that runs every ten minutes marks a session `exited` once it has sent no
+heartbeat for 36 hours, the observer's transcript lookback. The first pass after upgrading
+clears sessions that died before 0.6.7, which stops the overseer's check-ins to them. A later
+heartbeat brings a session back as `idle`. A coordinator restart that resumes a window no longer
+sends its holder a second "is running" notice. No schema migration is added.
+
+## Changes from 0.6.5
+
+A coordinator stalled past its leadership lease renews only if it still owns the
+leadership token; a replacement or explicitly released token remains fenced.
+The service records the gap as `coordinator.lease_recovered`. Resource deadlines
+still apply. Managed-provider restoration retries retain a confirmed stop; a new
+coordinator epoch or driver restart reconfirms it. No schema migration is added.
+
+## Changes from 0.6.4
+
+The installer compares the Codex Accord entry in `~/.codex/config.toml` by value, so an
+upgrade no longer stops with "Existing Codex Accord MCP registration differs" after Codex has
+re-saved the file. No schema change, so a 0.6.4 database upgrades in place.
+
+## Changes from 0.6.3
+
+`accord resource remove --id NAME` lets the administrator of the host that owns a resource
+retire it. It works for every plugin and refuses while anything holds, queues on or depends
+on the resource. No schema migration is added, so a 0.6.3 database upgrades in place.
+
+## Changes from 0.6.2
+
+A `managed-http` resource whose provider answers availability with 404 `resource_unknown`
+is removed once nothing holds, queues on or depends on it; the first pass runs a second
+after the coordinator starts. Providers that never answer that way are unaffected. No
+schema migration is added, so a 0.6.2 database upgrades in place. Upgrade the host that
+owns a resource for its withdrawals to take effect.
+
+## Changes from 0.6.1
+
+A coordinator restart keeps an unexpired reservation window: its claim returns to
+`preparing` under the same generation and deadline until the driver reconfirms it.
+Heartbeat reservations and tasks are still fenced. No schema migration is added, so a
+0.6.1 database upgrades in place; the first 0.6.2 start resumes windows recorded by 0.6.1.
 
 ## Changes from 0.5
 

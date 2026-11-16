@@ -16,6 +16,7 @@ export class AccordClient {
   registerResource(manifest,key=randomUUID()){return request(this.url,this.credential,'/v1/resources',{key,manifest});}
   adoptWorkloads(body){return request(this.url,this.credential,'/v1/workloads/adopt',body,30000);}
   resources(){return request(this.url,this.credential,'/v1/resources');}
+  removeResource(id){return request(this.url,this.credential,'/v1/resources/remove',{id});}
   startProcess(claimId,key){return request(this.url,this.credential,`/v1/claims/${claimId}/process`,{key});}
   processStatus(claimId){return request(this.url,this.credential,`/v1/claims/${claimId}/process`);}
   bootstrap() { return request(this.url, this.credential, '/v1/bootstrap',undefined,6000); }
@@ -46,7 +47,14 @@ export class AccordClient {
   read(deliveryId){return this.collaborate('read',{deliveryId});}
   sent(id){return this.collaborate('sent',{id});}
   async requireWindows(host) {
-    const catalog = await this.collaborate('resources', {}, host);
+    let catalog;
+    try{catalog=await this.collaborate('capabilities',{},host);}
+    catch(error){
+      // Older hosts only advertise through their catalog. Never turn a transport
+      // or authentication failure into permission to mutate an unknown host.
+      if(!['UNKNOWN_OPERATION','FORBIDDEN'].includes(error.code))throw error;
+      catalog=await this.collaborate('resources',{},host);
+    }
     requireThat(catalog.capabilities?.includes(windowCapability), 'WINDOW_UNSUPPORTED',
       'The owning Accord host must be upgraded for reservation windows; no reservation was changed');
   }
@@ -65,16 +73,16 @@ export class AccordClient {
   }
   reservation(id,host){return this.collaborate('reservation',{id},host);}
   release(id,{host,key=randomUUID()}={}){return this.collaborate('release',{id,key},host);}
-  async waitInbox(waitMs=20000){
+  async waitInbox(waitMs=20000,paging={}){
     requireThat(Number.isInteger(waitMs)&&waitMs>=0&&waitMs<=3600000,'INVALID_INPUT','waitMs must be 0..3600000');
     // Fetch gives up on a response with no headers after five minutes, so long waits are segments.
     for(const until=performance.now()+waitMs;;){
       const left=Math.max(0,Math.round(until-performance.now())),segment=Math.min(left,240000);
-      const inbox=await this.collaborate('inbox',{waitMs:segment},undefined,segment+4000);
+      const inbox=await this.collaborate('inbox',{waitMs:segment,...paging},undefined,segment+4000);
       if(inbox.messages.length||left<=segment)return inbox;
     }
   }
-  board(after = 0) { return request(this.url, this.credential, `/v1/board?after=${after}`); }
+  board(after = 0,options={}) { return request(this.url,this.credential,'/v1/board?'+new URLSearchParams({after,...options})); }
   submit(input, key = randomUUID()) { return request(this.url, this.credential, '/v1/tasks', { ...input, key }); }
   claim({ taskId, resource, leaseMs = 10000, key = randomUUID() } = {}) {
     return request(this.url, this.credential, '/v1/claim', { ...(taskId ? { taskId } : {}), ...(resource?{resource}:{}), leaseMs, key });

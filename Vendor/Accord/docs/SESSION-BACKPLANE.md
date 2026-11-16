@@ -18,6 +18,7 @@ and the native conversation ID are separate identities.
 | Ask the operator | `accord_ask`, `accord_question` | `ask --input question.json`, `question --id ...` |
 | Track a job | `accord_job`, `accord_jobs` | `job --input job.json`, `jobs` |
 | Inspect / snooze monitoring | `accord_overseer`, `accord_snooze` | `overseer`, `snooze --input snooze.json` |
+| Give a session a display name | `accord_title` | `title --input title.json` |
 | Reserve / renew / release | `accord_reserve`, `accord_extend`, `accord_release` | `reserve`, `extend`, `release` |
 
 Session search includes directly linked hosts that share with you and reports the rest

@@ -56,6 +56,9 @@ export function redact(value) {
     );
 }
 const terminal = new Set(["done", "failed", "exited", "cancelled"]);
+// A live MCP session heartbeats every 30 s and observers stop reading transcripts this
+// old, so a session silent this long has nobody left to report for it.
+export const staleSessionMs = 36 * 3600000;
 export const sessionStates = [
   "starting",
   "working",
@@ -131,6 +134,7 @@ export class SessionAwareness {
       ...(!row.private && row.parent_session ? {parentSession:JSON.parse(row.parent_session)} : {}),
       ...(!row.private && origin ? {originAddress:origin.authority+'/'+origin.session_id} : {}),
       ...(binding ? {nativeSession:{source:binding.source,externalId:binding.external_id}} : {}),
+      ...(!row.private && row.given_title ? {givenTitle:row.given_title,titledBy:`${this.store.authority}/${row.titled_by}`,titledAt:row.titled_at} : {}),
       id: row.id,
       address: `${this.store.authority}/${row.id}`,
       source: row.source,
@@ -314,6 +318,7 @@ export class SessionAwareness {
           Number(changed),
           Number(changed),
         );
+      if(privacy) this.db.prepare('UPDATE session_views SET given_title=NULL,titled_by=NULL,titled_at=NULL WHERE id=?').run(session);
       if(body.parentSession !== undefined || privacy) this.db.prepare('UPDATE session_views SET parent_session=? WHERE id=?').run(privacy||!body.parentSession?null:JSON.stringify({source:body.parentSession.source,externalId:body.parentSession.externalId}),session);
       if (privacy) {
         this.db
@@ -368,7 +373,7 @@ export class SessionAwareness {
     if (!r.private && !r.hidden)
       this.db.prepare("INSERT INTO session_search VALUES(?,?,?,?,?,?)").run(
         session,
-        r.title,
+        r.given_title ? r.given_title + "\n" + r.title : r.title,
         r.location,
         r.detail,
         r.summary,
@@ -401,7 +406,7 @@ export class SessionAwareness {
           .all(body.source)) {
           this.db
             .prepare(
-              "UPDATE session_views SET private=1,title='Private session',location='',detail='',summary='',revision=revision+1 WHERE id=?",
+              "UPDATE session_views SET private=1,title='Private session',location='',detail='',summary='',given_title=NULL,titled_by=NULL,titled_at=NULL,revision=revision+1 WHERE id=?",
             )
             .run(row.id);
           this.db
@@ -426,17 +431,35 @@ export class SessionAwareness {
   heartbeat(actor) {
     return this.store.mutate(() => {
       const now = this.store.now();
+      // A heartbeat after a stale silence is a resumed session, alive but not yet working.
       this.db
-        .prepare("UPDATE session_views SET heartbeat_at=? WHERE id=?")
-        .run(now, actor.id);
+        .prepare("UPDATE session_views SET state=CASE WHEN state='exited' AND heartbeat_at<:stale THEN 'idle' ELSE state END,revision=revision+(state='exited' AND heartbeat_at<:stale),heartbeat_at=:now WHERE id=:id")
+        .run({ stale: now - staleSessionMs, now, id: actor.id });
       this.db
         .prepare("UPDATE participants SET updated_at=? WHERE actor=?")
         .run(now, actor.id);
       return { heartbeatAt: now };
     });
   }
-  list({ query = "", limit = 50 } = {}) {
+  expireStale() {
+    return this.store.mutate(() => {
+      // A remote session's heartbeats reach its home host, which judges its silence.
+      const stale = this.db.prepare(`SELECT id FROM session_views v WHERE hidden=0 AND heartbeat_at<? AND state NOT IN (${[...terminal].map(() => "?").join(",")})
+          AND NOT EXISTS (SELECT 1 FROM remote_routes r WHERE r.actor=v.id)`)
+          .all(this.store.now() - staleSessionMs, ...terminal),
+        exit = this.db.prepare("UPDATE session_views SET state='exited',revision=revision+1 WHERE id=?");
+      for (const { id } of stale) {
+        exit.run(id);
+        this.store.emit("session.stale", { session: id });
+      }
+      return { expired: stale.length };
+    });
+  }
+  // `source` narrows to one adapter's sessions, live ones first, so an adapter can read back
+  // all it reported: the default list is the most recent progress, and a name is not progress.
+  list({ query = "", limit = 50, source } = {}) {
     integer(limit, "limit", 1, 200);
+    if (source !== undefined) text(source, "source", 64);
     requireThat(
       typeof query === "string" && query.length <= 200,
       "INVALID_INPUT",
@@ -447,9 +470,15 @@ export class SessionAwareness {
     const rows = words.length
       ? this.db
           .prepare(
-            `SELECT v.* FROM session_search f JOIN session_views v ON v.id=f.session_id WHERE v.hidden=0 AND session_search MATCH ? ORDER BY rank LIMIT ?`,
+            `SELECT v.* FROM session_search f JOIN session_views v ON v.id=f.session_id WHERE v.hidden=0 AND (:source IS NULL OR v.source=:source) AND session_search MATCH :match ORDER BY rank LIMIT :limit`,
           )
-          .all(words.map((w) => '"' + w + '"').join(" AND "), limit)
+          .all({ source: source ?? null, match: words.map((w) => '"' + w + '"').join(" AND "), limit })
+      : source !== undefined
+      ? this.db
+          .prepare(
+            "SELECT * FROM session_views WHERE hidden=0 AND source=? ORDER BY state='exited',progress_at DESC LIMIT ?",
+          )
+          .all(source, limit)
       : this.db
           .prepare(
             "SELECT * FROM session_views WHERE hidden=0 ORDER BY progress_at DESC LIMIT ?",
@@ -457,8 +486,9 @@ export class SessionAwareness {
           .all(limit);
     return { sessions: rows.map((r) => this.public(r)) };
   }
-  read(session, { after = 0, limit = 60 } = {}) {
+  read(session, { after = 0, before, limit = 60 } = {}) {
     integer(after, "after", 0, Number.MAX_SAFE_INTEGER);
+    if(before!==undefined)integer(before,"before",1,Number.MAX_SAFE_INTEGER);
     integer(limit, "limit", 1, 200);
     const row = this.row(session);
     requireThat(!row.hidden,'NOT_FOUND','Session is internal to its harness',404);
@@ -468,7 +498,9 @@ export class SessionAwareness {
       "Session content is private",
       403,
     );
-    const events = after
+    const events = before!==undefined
+      ? this.db.prepare('SELECT seq,at,kind,body FROM session_activity WHERE session_id=? AND seq<? ORDER BY seq DESC LIMIT ?').all(session,before,limit).reverse()
+      : after
       ? this.db
           .prepare(
             "SELECT seq,at,kind,body FROM session_activity WHERE session_id=? AND seq>? ORDER BY seq LIMIT ?",
@@ -484,6 +516,7 @@ export class SessionAwareness {
       session: this.public(row),
       events,
       cursor: events.at(-1)?.seq ?? after,
+      ...(events.length&&this.db.prepare('SELECT 1 FROM session_activity WHERE session_id=? AND seq<? LIMIT 1').get(session,events[0].seq)?{previous:events[0].seq}:{}),
     };
   }
   summarize(session, revision, summary, details = {}) {
@@ -502,6 +535,28 @@ export class SessionAwareness {
         .run(redact(summary), revision, JSON.stringify(extra), session);
       this.index(session);
       return { accepted: true };
+    });
+  }
+  // A display name for the operator and other agents. It is attributed, it is not progress,
+  // and it grants nothing: the owner's title, state and mailbox are untouched.
+  title(actor, body) {
+    const byId = body.id !== undefined;
+    requireThat(byId !== (body.source !== undefined || body.externalId !== undefined), "INVALID_INPUT",
+      "Name a session by id, or by source and externalId", 400);
+    requireThat(typeof body.title === "string" && body.title.length <= 120, "INVALID_INPUT",
+      "title must be a string of at most 120 characters; empty removes the name", 400);
+    const row = byId ? this.row(text(body.id, "id", 200))
+      : this.db.prepare("SELECT * FROM session_views WHERE source=? AND external_id=?")
+          .get(text(body.source, "source", 64), text(body.externalId, "externalId", 200));
+    requireThat(row && !row.hidden, "NOT_FOUND", "Unknown observed session", 404);
+    requireThat(!row.private, "PRIVATE_SESSION", "Session content is private", 403);
+    const given = redact(body.title).replace(/\s+/g, " ").trim() || null;
+    return this.store.command(actor, body, "session.title", () => {
+      this.db.prepare("UPDATE session_views SET given_title=?,titled_by=?,titled_at=? WHERE id=?")
+        .run(given, given && actor.id, given && this.store.now(), row.id);
+      this.index(row.id);
+      this.store.emit("session.titled", { session: row.id, by: actor.id, named: given !== null });
+      return this.public(this.row(row.id));
     });
   }
   snooze(actor, body) {

@@ -204,9 +204,14 @@ export class Overseer {
     ))
       for (const row of this.db
         .prepare(
-          "SELECT v.* FROM session_views v WHERE v.hidden=0 AND NOT EXISTS (SELECT 1 FROM remote_routes r WHERE r.actor=v.id)",
+          `SELECT v.* FROM session_views v JOIN (
+            SELECT id FROM session_views WHERE hidden=0 AND state='working'
+            UNION SELECT subject FROM overseer_samples WHERE rule_id=?
+            UNION SELECT session_id FROM overseer_incidents WHERE rule_id=? AND state!='resolved'
+          ) relevant ON relevant.id=v.id
+          WHERE v.hidden=0 AND NOT EXISTS (SELECT 1 FROM remote_routes r WHERE r.actor=v.id)`,
         )
-        .all()) {
+        .all(rule.id,rule.id)) {
         const quiet = now - row.progress_at,
           eligible =
             !row.private &&

@@ -3,6 +3,7 @@
 // Descriptions and provenance are served; bodies stay on their host and are
 // fetched only by an explicit read. Native stores are never written.
 import { existsSync, lstatSync, openSync, readdirSync, readSync, realpathSync, closeSync, statSync } from 'node:fs';
+import { Worker } from 'node:worker_threads';
 import { homedir } from 'node:os';
 import { dirname, extname, isAbsolute, join, relative, resolve } from 'node:path';
 import { hash, integer, requireThat, text } from './common.mjs';
@@ -162,24 +163,51 @@ export class MemoryPanorama {
     this.timer.unref?.();
     void this.scan().catch(() => {});
   }
-  close() { if (this.timer) clearInterval(this.timer); this.timer = null; }
+  close() { this.closed=true;clearTimeout(this.workerIdle);if(this.timer)clearInterval(this.timer);this.timer=null;const worker=this.worker;this.worker=null;void worker?.terminate(); }
+  scanSource(source){
+    clearTimeout(this.workerIdle);
+    if(!this.worker){
+      const worker=this.worker=new Worker(new URL('./memory-worker.mjs',import.meta.url));
+      // An idle worker can exit between polls. Clear it and keep error handling
+      // installed even when no scan is awaiting a reply.
+      const forget=()=>{if(this.worker===worker)this.worker=null;};
+      worker.on('error',forget);worker.on('exit',forget);
+    }
+    const worker=this.worker;
+    worker.ref();
+    return new Promise((resolve,reject)=>{
+      const cleanup=()=>{worker.off('message',done);worker.off('error',failed);worker.off('exit',exited);worker.unref();};
+      const failed=error=>{cleanup();if(this.worker===worker)this.worker=null;reject(error);};
+      const exited=()=>failed(Object.assign(Error('Memory scan interrupted'),{code:'SCAN_FAILED'}));
+      const done=message=>{
+        cleanup();
+        // Reuse a worker across normal polls, but do not retain an idle scanner
+        // indefinitely or make it keep an otherwise finished process alive.
+        if(!this.closed)this.workerIdle=setTimeout(()=>{if(this.worker===worker){this.worker=null;void worker.terminate();}},60000);this.workerIdle?.unref();
+        if(message.error)reject(Object.assign(Error('Memory scan failed'),message.error));else resolve(message.entries);
+      };
+      worker.once('message',done);worker.once('error',failed);worker.once('exit',exited);
+      try{worker.postMessage({source,root:this.config.roots[source]});}catch(error){failed(error);}
+    });
+  }
 
   sync(source, entries) {
     entries = entries.slice(0, ENTRY_CAP);
     this.store.mutate(() => {
       const known = new Map(this.store.db.prepare('SELECT id,hash FROM memory_entries WHERE source=?').all(source).map(r => [r.id, r.hash]));
+      const upsert=this.store.db.prepare(`INSERT INTO memory_entries(id,source,name,type,description,updated,hash,path,scope,stale)
+          VALUES(?,?,?,?,?,?,?,?,?,0) ON CONFLICT(id) DO UPDATE SET name=excluded.name,type=excluded.type,description=excluded.description,
+          updated=excluded.updated,hash=excluded.hash,path=excluded.path,scope=excluded.scope,stale=0`);
       for (const entry of entries) {
         if (known.get(entry.id) === entry.hash) continue;
-        this.store.db.prepare(`INSERT INTO memory_entries(id,source,name,type,description,updated,hash,path,scope,stale)
-          VALUES(?,?,?,?,?,?,?,?,?,0) ON CONFLICT(id) DO UPDATE SET name=excluded.name,type=excluded.type,description=excluded.description,
-          updated=excluded.updated,hash=excluded.hash,path=excluded.path,scope=excluded.scope,stale=0`).run(
+        upsert.run(
           entry.id, entry.source, entry.name, entry.type, entry.description, entry.updated, entry.hash, entry.path, entry.scope);
       }
       const keep = new Set(entries.map(e => e.id));
       for (const id of known.keys()) if (!keep.has(id))
         this.store.db.prepare('DELETE FROM memory_entries WHERE id=?').run(id);
       // A completed scan re-observed every surviving entry; stale uncertainty ends here.
-      this.store.db.prepare('UPDATE memory_entries SET stale=0 WHERE source=?').run(source);
+      this.store.db.prepare('UPDATE memory_entries SET stale=0 WHERE source=? AND stale!=0').run(source);
     });
     this.status.sources[source] = { ok: true, entries: entries.length, at: Date.now() };
   }
@@ -188,16 +216,18 @@ export class MemoryPanorama {
     this.status.sources[source] = { ok: false, error: error.code ?? 'SCAN_FAILED', at: Date.now() };
   }
   async scan() {
-    if (this.scanning || !this.config.enabled) return; this.scanning = true;
+    if (this.closed || this.scanning || !this.config.enabled) return; this.scanning = true;
     try {
       for (const source of this.config.sources) {
         const adapter = adapters[source];
         if (!adapter) { this.status.sources[source] = { ok: false, error: 'UNKNOWN_SOURCE', at: Date.now() }; continue; }
         const existing = this.store.db.prepare('SELECT count(*) n FROM memory_entries WHERE source=?').get(source).n;
         try {
-          const entries = adapter(this.config.roots[source]);
+          const entries = await this.scanSource(source);
+          if(this.closed)break;
           this.sync(source, entries);
         } catch (error) {
+          if(this.closed)break;
           if (error.code === 'ENOENT' && !existing) {
             // Absent store: the harness is simply not installed here.
             this.status.sources[source] = { ok: true, entries: 0, at: Date.now() };
@@ -217,12 +247,13 @@ export class MemoryPanorama {
       'INVALID_INPUT', 'query must be a string of at most 200 characters', 400);
     integer(args.limit ?? 10, 'limit', 1, 20);
     const query = String(args.query ?? '').toLowerCase().split(/\s+/).filter(Boolean);
-    const rows = this.store.db.prepare('SELECT * FROM memory_entries ORDER BY updated DESC, name').all().filter(row => this.config.sources.includes(row.source));
-    const entries = rows
-      .filter(row => query.every(term => `${row.name} ${row.description} ${row.type}`.toLowerCase().includes(term)))
-      .slice(0, args.limit ?? 10)
-      .map(row => ({ id: row.id, name: row.name, type: row.type, description: row.description, updated: row.updated,
-        source: { host: this.store.authority, harness: row.source, label: row.source }, scope: row.scope, stale: Boolean(row.stale) }));
+    const entries=[];
+    for(const row of this.store.db.prepare('SELECT * FROM memory_entries ORDER BY updated DESC, name').iterate()){
+      if(!this.config.sources.includes(row.source)||!query.every(term=>`${row.name} ${row.description} ${row.type}`.toLowerCase().includes(term)))continue;
+      entries.push({id:row.id,name:row.name,type:row.type,description:row.description,updated:row.updated,
+        source:{host:this.store.authority,harness:row.source,label:row.source},scope:row.scope,stale:Boolean(row.stale)});
+      if(entries.length===(args.limit??10))break;
+    }
     return { entries, sources: this.status.sources, lastScan: this.status.lastScan };
   }
 
