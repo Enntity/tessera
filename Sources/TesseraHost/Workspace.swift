@@ -72,6 +72,14 @@ public final class Workspace {
     /// Bring terminals back into their conversations when Tessera opens (else they wait, shut down).
     public var resumeOnLaunch = true
     public var defaultDirectory: String = NSHomeDirectory()
+    /// The folders tiles were started in lately, the latest first; the launcher offers them again.
+    public var recentDirectories: [String] { startedIn.filter(StartFolders.isFolder) }
+    private var startedIn = Preferences.store.stringArray(forKey: "tessera.recentDirectories") ?? []
+    /// The overseer's tile (see `overseer`), and the agent that runs in a new one.
+    public private(set) var overseerId: String?
+    public var overseerCommand = Preferences.store.string(forKey: "tessera.overseerCommand") ?? Overseer.defaultCommand {
+        didSet { Preferences.store.set(overseerCommand, forKey: "tessera.overseerCommand") }
+    }
     /// Another Tessera already runs this board (its pid, 0 if unknown): this copy must not start.
     public let boardHolder: pid_t?
     /// Kept current as tiles change (see `BoardState`).
@@ -191,6 +199,9 @@ public final class Workspace {
         } else {
             return nil
         }
+        // A name given through Accord shows unless the user named the tile themselves.
+        if let given = accord.tileRecords[id]?.givenTitle,
+           terminals[id]?.customTitle == nil, browsers[id]?.customTitle == nil, agentTitles[id] == nil { info.title = given }
         info.summary = accord.summaries[id] ?? steward.summaries[id]?.summary
         info.needs = steward.summaries[id]?.needs ?? steward.brief?.attention.first { $0.id == id }?.why
         let children = relatedSessions(id)
@@ -251,8 +262,59 @@ public final class Workspace {
         let session = TerminalSession(command: command, cwd: cwd ?? defaultDirectory, title: title)
         adopt(session)
         insert(session.id)
+        if let cwd { noteDirectory(cwd) }
         return session.id
     }
+
+    /// A tile was started in `dir`: the launcher offers it again. (The overseer's folder is its own.)
+    public func noteDirectory(_ dir: String) {
+        guard dir.standardizedPath != overseerDirectory.path.standardizedPath else { return }
+        startedIn = StartFolders.remembering(dir, in: startedIn)
+        Preferences.store.set(startedIn, forKey: "tessera.recentDirectories")
+    }
+
+    // MARK: The overseer
+
+    /// The overseer's folder: its role is there for whichever agent runs in it.
+    public var overseerDirectory: URL { directory.appendingPathComponent("overseer") }
+
+    /// The overseer's tile, there to be talked to, with `question` put to it when there is one. It
+    /// is started when there is none and brought back when it was shut down; one whose agent was
+    /// quit is only a shell now, and is replaced. Nil when its folder can't be made.
+    @discardableResult
+    public func overseer(asking question: String? = nil) -> String? {
+        if let id = overseerId, let terminal = terminals[id] {
+            if terminal.command != nil {
+                if !terminal.isRunning { resume(id) }
+                if let question { type(question, intoAgent: id) }
+                return id
+            }
+            close(id)
+        }
+        guard (try? Overseer.prepare(overseerDirectory)) != nil else { return nil }
+        let typed = overseerCommand.trimmingCharacters(in: .whitespacesAndNewlines)
+        let command = typed.isEmpty ? Overseer.defaultCommand : typed
+        // A new one is handed its first question as it starts: the agent takes it up once it is
+        // ready, after anything it asks first (whether to trust its folder). The tile's command
+        // stays the agent alone, so that resuming never asks it again.
+        let first = question.map { ShellWords.join(ShellWords.split(command) + [$0]) }
+        let id = launch(command: first ?? command, cwd: overseerDirectory.path, title: Overseer.title)
+        terminals[id]?.command = command
+        overseerId = id
+        save()
+        return id
+    }
+
+    /// Types what the user asked into an agent that is already there. One started moments ago
+    /// (resumed, or brought back as Tessera opened) is given time to come up first.
+    private func type(_ text: String, intoAgent id: String) {
+        guard let terminal = terminals[id] else { return }
+        let wait = max(0, Self.agentStartup - Date().timeIntervalSince(terminal.launchedAt))
+        DispatchQueue.main.asyncAfter(deadline: .now() + wait) { [weak self] in _ = self?.typeMessage(text, into: id) }
+    }
+
+    /// How long an agent CLI is given to start before it is typed into.
+    static let agentStartup: TimeInterval = 6
 
     @discardableResult
     public func openBrowser(_ raw: String) -> String? {
@@ -667,6 +729,7 @@ public final class Workspace {
             return
         }
         pendingAppConversation = (app, Date(), tabForNewTiles())
+        if let folder { noteDirectory(folder) }
         WindowPlacer.open(url, bundleID: app.bundleID, placeAt: placeNativeWindows ? rect : nil)
     }
 
@@ -961,7 +1024,7 @@ public final class Workspace {
                              groups: groups.list, resumeOnLaunch: resumeOnLaunch, order: savedOrder, hidden: hiddenAgents,
                              agentLookbackHours: agents.lookback / 3600, titles: agentTitles,
                              closed: recentlyClosed.tiles.map(Lossy.init), dock: dock.ids,
-                             dockWidth: dockWidth.map(Double.init)), to: saveURL)
+                             dockWidth: dockWidth.map(Double.init), overseer: overseerId), to: saveURL)
     }
 
     /// Notes every tile's place. App sessions not on the board now (closed, or not rescanned yet
@@ -1028,6 +1091,7 @@ public final class Workspace {
             order.append(tile.id)
         }
         selectedId = order.first
+        overseerId = saved.overseer
         // The dock as it was left (a docked app conversation is found again after launch); what is
         // in it is looked at from the start.
         dock = WatchDock((saved.dock ?? []).filter { order.contains($0) || $0.contains(":") })

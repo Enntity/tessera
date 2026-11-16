@@ -18,6 +18,14 @@ public final class AccordBridge {
     public var isConfigured: Bool { FileManager.default.fileExists(atPath: profile.path) }
     public private(set) var summaries: [String: String] = [:]
     public private(set) var tileSummaries: [String: Steward.TileSummary] = [:]
+    /// What Accord holds about a tile's own session: where to reach it, a name someone gave it
+    /// there, and when it last changed.
+    public struct TileRecord: Equatable, Sendable {
+        public var address: String
+        public var givenTitle: String?
+        public var changedAt: Date?
+    }
+    public internal(set) var tileRecords: [String: TileRecord] = [:]
     public private(set) var incidents: [[String: Any]] = []
     public private(set) var projectedSessions: [AgentAppSession] = []
     public var retainedSessionIDs: Set<String> = []
@@ -122,7 +130,7 @@ public final class AccordBridge {
                 wasPrivate = privacy
                 seen.removeAll()
             }
-            if privacy { summaries.removeAll(); tileSummaries.removeAll(); incidents.removeAll(); projectedSessions = []; sessions?([]); connected = true; return }
+            if privacy { summaries.removeAll(); tileSummaries.removeAll(); tileRecords.removeAll(); incidents.removeAll(); projectedSessions = []; sessions?([]); connected = true; return }
             let values = digests?() ?? []
             for digest in values.filter({ seen[$0.id] != fingerprint($0) }).sorted(by: { (published[$0.id] ?? .distantPast) < (published[$1.id] ?? .distantPast) }).prefix(16) {
                 let state = digest.state == "needsInput" ? "waiting" : digest.state
@@ -152,6 +160,11 @@ public final class AccordBridge {
                 let details = value["summaryDetails"] as? [String:Any] ?? [:]
                 return (tile, Steward.TileSummary(summary:summary, blocked:details["blocked"] as? Bool ?? false, needs:details["needs"] as? String))
             }, uniquingKeysWith: { _, latest in latest })
+            // The board is Accord's most recent sessions; a tile idle for days is not among them, so
+            // read back all of Tessera's own. An Accord that predates `source` answers with the same recent list.
+            let own = (try? await operation(c, "sessions", ["source": "tessera", "limit": 200]))?["sessions"] as? [[String: Any]] ?? []
+            let held = Self.tileRecords((board["sessions"] as? [[String: Any]] ?? []) + own, authority: c.2)
+            if held != tileRecords { tileRecords = held }
             acceptSnapshot(board, nativeIDs: current.union(nativeAliases?() ?? []))
             incidents = board["incidents"] as? [[String: Any]] ?? []
             questions?(board["questions"] as? [[String: Any]] ?? [])
@@ -251,6 +264,18 @@ public final class AccordBridge {
         // A transport failure is not a session exit. Preserve the last good board.
         connected = false
     }
+    /// Accord's record of each tile Tessera reported to it, by tile id. Only this host's sessions
+    /// count: a linked host's Tessera reports tiles of its own under the same source.
+    static func tileRecords(_ sessions: [[String: Any]], authority: String) -> [String: TileRecord] {
+        Dictionary(sessions.compactMap { value -> (String, TileRecord)? in
+            guard value["source"] as? String == "tessera", let tile = value["externalId"] as? String,
+                  let address = value["address"] as? String, address.hasPrefix(authority + "/") else { return nil }
+            let given = (value["givenTitle"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+            let changed = (value["progressAt"] as? NSNumber).map { Date(timeIntervalSince1970: $0.doubleValue / 1000) }
+            return (tile, TileRecord(address: address, givenTitle: given, changedAt: changed))
+        }, uniquingKeysWith: { _, latest in latest })
+    }
+
     func acceptSnapshot(_ board: [String:Any], nativeIDs: Set<String>, now: Date = Date()) {
         let missing = Set((board["hosts"] as? [[String:Any]] ?? []).filter { $0["status"] as? String == "unknown" }.compactMap { $0["authority"] as? String })
         let retained = projectedSessions.filter { value in

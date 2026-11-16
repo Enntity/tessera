@@ -199,18 +199,8 @@ struct HUDBar: View {
             FilterField()
             HStack(spacing: Style.Space.l) {
                 MachineStrip()
-                Button {
-                    model.paletteMode = .all
-                    model.showPalette = true
-                } label: {
-                    HStack(alignment: .firstTextBaseline, spacing: Style.Space.s) {
-                        Image(systemName: "plus")
-                        Text("New")
-                        Text("⌘K").font(Style.caption).foregroundStyle(Style.muted)
-                    }
-                }
-                .buttonStyle(.capsule)
-                .fixedSize()
+                OverseerButton()
+                NewButton()
                 HStack(spacing: 0) {
                     toggle("sidebar.left", on: model.showLane, help: "Needs-you lane (⌥⌘\\)") { model.toggleLane() }
                     toggle(model.privacyMode ? "eye.slash.fill" : "eye", on: model.privacyMode,
@@ -235,6 +225,93 @@ struct HUDBar: View {
         }
         .buttonStyle(.plain)
         .help(help)
+    }
+}
+
+/// Ask: the overseer's chat, one click away. Its mark takes the overseer's state's color while it
+/// is at work, or has said something not yet read.
+struct OverseerButton: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        let tile = model.workspace.overseerId.flatMap(model.workspace.info)
+        Button { model.openOverseer() } label: {
+            HStack(alignment: .firstTextBaseline, spacing: Style.Space.s) {
+                Image(systemName: "sparkles")
+                    .foregroundStyle(tile.flatMap { $0.activity == .working || $0.needsUser ? Style.state($0.activity) : nil } ?? Style.accent(.agentDesk))
+                Text("Ask")
+                Text("⌘O").font(Style.caption).foregroundStyle(Style.muted)
+            }
+        }
+        .buttonStyle(.capsule)
+        .fixedSize()
+        .help("Ask Tessera's overseer what is going on, or have it direct the agents (⌘O)")
+    }
+}
+
+/// +: a shell at once, in the folder new tiles start in; beside it, everything else that can be
+/// started, a click away, and the folders to start it in.
+struct NewButton: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        let workspace = model.workspace
+        let folder = model.contextDirectory
+        HStack(spacing: 0) {
+            Button { model.create { $0.launch(command: nil, cwd: folder) } } label: {
+                HStack(alignment: .firstTextBaseline, spacing: Style.Space.s) {
+                    Image(systemName: "plus")
+                    Text("New")
+                }
+                .padding(.leading, Style.Space.l)
+                .padding(.trailing, Style.Space.m)
+                .frame(height: Style.Metrics.control)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help("New shell in \(folder.abbreviatingHome) (⌘T)")
+            Hairline(.vertical).frame(height: Style.Space.xl)
+            Menu {
+                Section("New in \(folder.abbreviatingHome)") {
+                    ForEach(workspace.presets) { preset in
+                        Button { model.create { $0.launch(command: preset.command, cwd: folder) } } label: {
+                            Label(preset.name, systemImage: preset.flavor.symbol)
+                        }
+                    }
+                    ForEach(workspace.installedApps, id: \.self) { app in
+                        Button { app.canCreateConversation ? model.newAppConversation(app) : workspace.openApplication(app) } label: {
+                            Label(app.newLabel, systemImage: app.flavor.symbol)
+                        }
+                    }
+                    Button { model.paletteMode = .url; model.showPalette = true } label: { Label("Web Tile…", systemImage: "globe") }
+                }
+                Section("Start in") {
+                    ForEach(workspace.recentDirectories.filter { $0 != folder }, id: \.self) { dir in
+                        Button { model.openLauncher(in: dir) } label: { Label(dir.abbreviatingHome, systemImage: "folder") }
+                    }
+                    Button("Choose Folder…") {
+                        if let dir = model.chooseFolder(from: folder) { model.openLauncher(in: dir) }
+                    }
+                }
+                Divider()
+                Button("Anything Else…") { model.openLauncher() }
+            } label: {
+                Image(systemName: "chevron.down")
+                    .font(Style.ui(.caption, .semibold))
+                    .frame(width: Style.Metrics.control, height: Style.Metrics.control)
+                    .contentShape(Rectangle())
+            }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .tint(Style.dim)
+            .fixedSize()
+            .help("Start anything, anywhere (⌘N)")
+        }
+        .font(Style.label)
+        .foregroundStyle(Style.ink)
+        .background(Style.glass, in: Capsule())
+        .overlay(Capsule().strokeBorder(Style.Neutral.border).allowsHitTesting(false))
+        .fixedSize()
     }
 }
 

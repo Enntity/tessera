@@ -73,6 +73,19 @@ struct AgentsSettings: View {
                 }
                 Text("Any OpenAI-compatible endpoint; a LLooM gateway with a `tessera` alias on a local model keeps everything on your machines. What tiles show is sent with credentials removed, and nothing is sent in privacy mode. The steward only suggests: nothing closes or changes unless you click.").note()
             }
+            Section("Overseer") {
+                TextField("Agent", text: Bindable(model.workspace).overseerCommand, prompt: Text(Overseer.defaultCommand))
+                HStack {
+                    Text("⌘O opens a chat with Tessera's overseer: an agent in a tile of its own that sees the board and reaches every agent through Accord. Any agent command connected to Accord will do; a change takes effect when its tile is next started.").note()
+                    Spacer()
+                    Button("Show Its Role…") {
+                        let folder = model.workspace.overseerDirectory
+                        try? Overseer.prepare(folder)
+                        NSWorkspace.shared.activateFileViewerSelecting([Overseer.roleFile(in: folder)])
+                    }
+                    .help("What the overseer is told it is for (AGENTS.md); yours to rewrite")
+                }
+            }
             Section("Agent API") {
                 Toggle("Let agents on this Mac use Tessera", isOn: Bindable(server).enabled)
                 Text(server.isRunning ? "\(server.status) · \(server.calls) calls" : server.status).note()

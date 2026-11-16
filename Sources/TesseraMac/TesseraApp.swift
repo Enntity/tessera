@@ -62,8 +62,13 @@ final class AppModel {
     @ObservationIgnored lazy var server = HostServer(workspace: workspace, open: { [weak self] in self?.open($0) },
                                                      close: { [weak self] in self?.close($0) })
     var showPalette = false {
-        didSet { if showPalette { showTriage = false } }
+        didSet {
+            if showPalette { showTriage = false } else { launchDirectory = nil }
+        }
     }
+    /// The folder picked in the launcher for what it starts next (see `contextDirectory`); it goes
+    /// when the launcher does.
+    var launchDirectory: String?
     /// ⇧⌘J: the Needs-you queue one item at a time, from the keyboard; `triageId` is the item shown.
     var showTriage = false
     var triageId: String?
@@ -112,7 +117,8 @@ final class AppModel {
     @ObservationIgnored private var started = false
     @ObservationIgnored private var notifier: AttentionNotifier?
 
-    enum PaletteMode { case all, url }
+    /// ⌘K finds and does anything; ⌘L only opens an address; ⌘N only starts things.
+    enum PaletteMode { case all, url, new }
 
     func start() {
         guard !started else { return }
@@ -545,10 +551,43 @@ final class AppModel {
                                      placeAt: openedRect(from: nil).flatMap(screenRect(fromWindow:)))
     }
 
-    /// New tiles start where the selected terminal is working.
+    /// New tiles start in the folder picked in the launcher, else where the selected tile is
+    /// working (a terminal, or a conversation in a folder on this Mac), else in the default folder.
+    /// The overseer's folder is its own.
     var contextDirectory: String {
-        if let sel = workspace.selectedId, let t = workspace.terminals[sel] { return t.cwd }
+        if let launchDirectory { return launchDirectory }
+        if let sel = workspace.selectedId, sel != workspace.overseerId {
+            if let t = workspace.terminals[sel] { return t.cwd }
+            if let cwd = workspace.agents.session(sel)?.cwd, cwd.hasPrefix("/"), StartFolders.isFolder(cwd) { return cwd }
+        }
         return workspace.defaultDirectory
+    }
+
+    // MARK: The launcher and the overseer
+
+    /// ⌘N, and the + menu's folders: the palette with only what can be started, in `folder` when
+    /// one was picked there.
+    func openLauncher(in folder: String? = nil) {
+        paletteMode = .new
+        showPalette = true
+        launchDirectory = folder
+    }
+
+    /// A folder picked from disk, starting the panel at `directory`.
+    func chooseFolder(from directory: String) -> String? {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.directoryURL = URL(fileURLWithPath: directory)
+        return panel.runModal() == .OK ? panel.url?.path : nil
+    }
+
+    /// ⌘O, the top bar's Ask, the palette's "Ask Tessera": the overseer's chat, opened like any tile
+    /// (⌘O again puts it away), with `question` put to it when there is one.
+    func openOverseer(asking question: String? = nil) {
+        guard let id = workspace.overseer(asking: question) else { return }
+        if question == nil, workspace.expandedId == id { return collapse() }
+        open(id)
     }
 }
 

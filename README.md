@@ -80,6 +80,12 @@ explicitly development candidates. The source includes the complete macOS featur
   top-bar counters, ⌘K, the iPhone's queue): open questions first, then failures, then results you
   haven't seen, the oldest first.
 
+- **Overseer (⌘O).** An agent of your own choosing (Claude Code unless Settings → Agents names another) in a
+  tile called Tessera, in a folder of its own whose `AGENTS.md` says what it is for: answering for the whole
+  board and directing the agents on it. It sees the board with Tessera's tools and reaches agents with
+  Accord messages, as any connected agent can; nothing is added to what agents may do. Messages it sends to
+  terminal agents are typed in only as *Agents may type messages…* allows. Claude Code asks once whether to
+  trust the folder, which pre-approves the Accord and Tessera tools for it. The role file is yours to rewrite.
 - **Steward (Settings → Agents).** Point it at any OpenAI-compatible endpoint, such as a LLooM
   gateway with a local model, and it keeps a one-line summary of each tile on the card's footer.
   At the head of the Needs-you lane it writes a headline on what the tiles don't show — how running
@@ -250,6 +256,9 @@ Every gesture means the same thing on every kind of tile.
 | Type on the board · ⌘F | Filter the board in place, as you type. ⏎ opens the first tile found, ←↑→↓ move among those found, Esc shows everything again |
 | ⌘K | Find or do anything. Typing finds tiles first — by title, folder, question or error, tab or state (`failed`, `asking`), hidden conversations included — and ⏎ goes to the top one. Below them: Open a URL, New …, the board commands, Reopen … (closed tiles), Run …, Ask Claude / Codex app …, web search. With nothing typed: what can be started, what needs you, and the commands that have something to do |
 | ⌘T / ⇧⌘T / ⌥⌘T | New shell / Claude Code / Codex (in the selected tile's folder) |
+| + New (top bar) | A shell at once; the arrow beside it lists everything else that can be started, and the folders to start it in |
+| ⌘N | The launcher: ⌘K with only what can be started, so a few letters and ⏎ start it. Type a path (`~/…`, `/…`) or a recent folder's name and ⏎ to choose where; the folder at the field's right is where it will start, and a click there picks another or makes it the default |
+| ⌘O · Ask (top bar) | The overseer's chat, opened like any tile; ⌘O again puts it away. A question typed into ⌘K ("How is the port going?") can be put to it from there |
 | ⌘L | New web tile; with a web tile open, its address field |
 | ⇧⌘J | Triage the queue one item at a time: answer, mark seen, restart, open, or skip |
 | ⌘J | The next thing that needs you: questions, then failures, then unseen results, oldest first. Pressed again it moves on from the tile you're on once you have seen it, also when that one opened in its app |

@@ -206,6 +206,7 @@ struct GeneralSettings: View {
                     Text(workspace.defaultDirectory.abbreviatingHome).foregroundStyle(Style.dim)
                     Button("Choose…") { chooseFolder() }
                 }
+                Text("Where a new tile starts when the selected tile isn't working in a folder of its own. The launcher (⌘N) starts the next one anywhere: pick a folder there, or type its path.").note()
             }
             Section("Claude & Codex apps") {
                 Toggle("Move and resize app windows to match the opened tile", isOn: $workspace.placeNativeWindows)
@@ -234,14 +235,9 @@ struct GeneralSettings: View {
     }
 
     private func chooseFolder() {
-        let panel = NSOpenPanel()
-        panel.canChooseDirectories = true
-        panel.canChooseFiles = false
-        panel.directoryURL = URL(fileURLWithPath: model.workspace.defaultDirectory)
-        if panel.runModal() == .OK, let url = panel.url {
-            model.workspace.defaultDirectory = url.path
-            model.workspace.save()
-        }
+        guard let folder = model.chooseFolder(from: model.workspace.defaultDirectory) else { return }
+        model.workspace.defaultDirectory = folder
+        model.workspace.save()
     }
 }
 
