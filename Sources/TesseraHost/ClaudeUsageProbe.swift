@@ -25,6 +25,17 @@ final class ClaudeUsageProbe {
     private var windows: [ClaudeUsageScreen.Window] = []
     private var windowsChangedAt = Date.distantPast
     private var done: ((Result) -> Void)?
+    private let executable: String
+    private let args: [String]
+    private let quitGrace: TimeInterval
+
+    /// Tests stand a script in for Claude Code and shorten the wait for it to quit.
+    init(executable: String = LoginShell.scriptShell(for: LoginShell.path), args: [String] = ["-l", "-i", "-c", "exec claude"],
+         quitGrace: TimeInterval = 2) {
+        self.executable = executable
+        self.args = args
+        self.quitGrace = quitGrace
+    }
 
     func run(_ done: @escaping (Result) -> Void) {
         self.done = done
@@ -35,7 +46,7 @@ final class ClaudeUsageProbe {
         self.process = process
         var environment = ProcessInfo.processInfo.environment
         environment["TERM"] = "xterm-256color"
-        process.startProcess(executable: LoginShell.scriptShell(for: LoginShell.path), args: ["-l", "-i", "-c", "exec claude"],
+        process.startProcess(executable: executable, args: args,
                              environment: environment.map { "\($0.key)=\($0.value)" }, execName: nil,
                              currentDirectory: NSHomeDirectory())
         guard process.shellPid > 0 else { return finish(.failed("Couldn't start Claude Code")) }
@@ -81,8 +92,18 @@ final class ClaudeUsageProbe {
         send("\u{1b}")
         send("\u{3}")
         send("\u{3}")
-        let process = self.process
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { process?.terminate() }
+        if let process, process.shellPid > 0 {
+            let pid = process.shellPid
+            DispatchQueue.main.asyncAfter(deadline: .now() + quitGrace) {
+                var status: Int32 = 0
+                // Gone and collected (by SwiftTerm, or just now): the pid is no longer ours to signal.
+                guard waitpid(pid, &status, WNOHANG) == 0 else { return }
+                // Ending it stops SwiftTerm watching for its exit, so collect it here.
+                process.terminate()
+                ChildReaper.reap(pid)
+            }
+        }
+        process = nil
         let done = self.done
         self.done = nil
         done?(result)

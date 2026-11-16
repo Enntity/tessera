@@ -257,17 +257,7 @@ public final class TerminalSession: NSObject {
         self.process = nil
         generation += 1
         isRunning = false
-        guard pid > 0 else { return }
-        DispatchQueue.global(qos: .utility).async {
-            var status: Int32 = 0
-            for _ in 0..<30 {
-                if waitpid(pid, &status, WNOHANG) != 0 { return }
-                usleep(100_000)
-            }
-            kill(-pid, SIGKILL)
-            kill(pid, SIGKILL)
-            waitpid(pid, &status, 0)
-        }
+        ChildReaper.reap(pid)
     }
 
     /// Stop the process but keep the tile, its folder and its conversation id for Resume.
