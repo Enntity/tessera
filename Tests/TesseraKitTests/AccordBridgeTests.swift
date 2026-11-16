@@ -290,3 +290,68 @@ extension AccordBridgeTests {
         XCTAssertEqual(dated.notes.first?.timestamp,dated.changedAt)
     }
 }
+
+extension AccordBridgeTests {
+    private func digest(_ id: String, title: String, idleMinutes: Int = 0) -> Steward.Digest {
+        Steward.Digest(id: id, title: title, kind: "terminal", flavor: "shell", subtitle: "~/work", state: "working",
+                       waiting: false, unseen: false, idleMinutes: idleMinutes, detail: "Compiling", text: "Fixture observation")
+    }
+
+    /// An active tile reports no progress time: Accord's own now is right, and a coordinator a
+    /// fraction behind our clock rejects ours. Idle tiles still send their progress time.
+    func testReportArgsOnlySendsProgressForIdleTiles() {
+        let active = AccordBridge.reportArgs(digest("tile-a", title: "Working"), key: "k", nowMs: 1_000_000)
+        XCTAssertNil(active["sourceProgressAt"])
+        XCTAssertEqual(active["externalId"] as? String, "tile-a")
+        XCTAssertEqual(active["title"] as? String, "Working")
+        XCTAssertEqual(active["state"] as? String, "working")
+        XCTAssertEqual((active["events"] as? [[String: Any]])?.count, 1)
+        let idle = AccordBridge.reportArgs(digest("tile-b", title: "Idle", idleMinutes: 3), key: "k", nowMs: 1_000_000)
+        XCTAssertEqual(idle["sourceProgressAt"] as? Int, 1_000_000 - 3 * 60000)
+    }
+
+    /// One report Accord rejects (an empty title is a guaranteed 400) must not stall the pass:
+    /// the next digest is still published and the board read still happens.
+    func testARejectedReportDoesNotStallTheRefresh() async throws {
+        // Under /tmp like the packaged tests: the bundled Accord's local socket can't take a
+        // /var/folders data path.
+        let dir = URL(fileURLWithPath: "/tmp/accord-bridge-\(UUID().uuidString.prefix(8))")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: dir) }
+        let script = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("scripts/accord-fixture.mjs")
+        let profile = dir.appendingPathComponent("accord-connection.json")
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        process.arguments = ["node", script.path, dir.appendingPathComponent("accord-data").path, profile.path]
+        process.standardOutput = FileHandle.nullDevice
+        try process.run()
+        addTeardownBlock { if process.isRunning { process.terminate(); process.waitUntilExit() } }
+        for _ in 0..<200 where !FileManager.default.fileExists(atPath: profile.path) && process.isRunning {
+            try await Task.sleep(nanoseconds: 50_000_000)
+        }
+        let bridge = AccordBridge(profile: profile)
+        bridge.digests = { [self] in [digest("bad-tile", title: ""), digest("good-tile", title: "Good tile")] }
+        await bridge.refresh()
+        XCTAssertTrue(bridge.connected)
+        // The good tile was reported and read back even though the first digest was refused.
+        let record = try XCTUnwrap(bridge.tileRecords["good-tile"])
+        XCTAssertNil(record.givenTitle)
+        try await agentOperation(dir, "session-title", ["key": "title-1", "source": "tessera", "externalId": "good-tile", "title": "Fixture given name"])
+        await bridge.refresh()
+        XCTAssertTrue(bridge.connected)
+        XCTAssertEqual(bridge.tileRecords["good-tile"]?.givenTitle, "Fixture given name")
+    }
+
+    private func agentOperation(_ dir: URL, _ operation: String, _ args: [String: Any]) async throws -> [String: Any] {
+        let data = try Data(contentsOf: dir.appendingPathComponent("accord-connection.json.agent"))
+        let agent = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: String])
+        var request = URLRequest(url: URL(string: agent["url"]! + "/v1/collaboration")!)
+        request.httpMethod = "POST"
+        request.setValue("Bearer " + agent["credential"]!, forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONSerialization.data(withJSONObject: ["operation": operation, "args": args])
+        let (body, response) = try await URLSession.shared.data(for: request)
+        XCTAssertEqual((response as? HTTPURLResponse)?.statusCode, 200)
+        return try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
+    }
+}
