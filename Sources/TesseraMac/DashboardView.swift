@@ -61,6 +61,15 @@ struct DashboardView: View {
                     .transition(.opacity)
                     .zIndex(20)
             }
+            if model.showOverseer {
+                Style.scrim.opacity(0.5)
+                    .onTapGesture { model.closeOverseer() }
+                    .transition(.opacity)
+                    .zIndex(19)
+                OverseerPanel()
+                    .transition(.scale(scale: 0.92, anchor: .topLeading).combined(with: .opacity))
+                    .zIndex(20)
+            }
         }
         .environment(\.tesseraPrivacy, model.privacyMode)
         .tint(Style.control)
@@ -237,9 +246,11 @@ struct OverseerButton: View {
         let tile = model.workspace.overseerId.flatMap(model.workspace.info)
         Button { model.openOverseer() } label: {
             HStack(alignment: .firstTextBaseline, spacing: Style.Space.s) {
-                Image(systemName: "sparkles")
-                    .foregroundStyle(tile.flatMap { $0.activity == .working || $0.needsUser ? Style.state($0.activity) : nil } ?? Style.accent(.agentDesk))
-                Text("Ask")
+                OverseerOrb(size: 14, active: tile?.activity == .working)
+                Text("Ask Tessera")
+                if model.workspace.overseerChat.unread {
+                    Circle().fill(Style.Overseer.violet).frame(width: Style.Metrics.dot, height: Style.Metrics.dot)
+                }
                 Text("⌘O").font(Style.caption).foregroundStyle(Style.muted)
             }
         }
@@ -508,7 +519,7 @@ struct TabStrip: View {
     private func tabs(_ workspace: Workspace, _ state: BoardState) -> some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: Style.Space.xxs) {
-                TabChip(title: "All", count: workspace.taskIDs.count,
+                TabChip(title: "All", count: workspace.boardTiles.count,
                         selected: workspace.filter == .all, dropTile: { file($0, into: nil) }) { model.onBoard { $0.filter = .all } }
                 if !workspace.groups.list.isEmpty {
                     Hairline(.vertical).frame(height: Style.Space.xl).padding(.horizontal, Style.Space.xs)

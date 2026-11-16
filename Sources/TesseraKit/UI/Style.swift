@@ -162,6 +162,20 @@ public enum Style {
         public static let data = Animation.smooth(duration: 0.5)
     }
 
+    // MARK: The overseer's aurora
+
+    /// The overseer's own look: an aurora — the agents'-desk amber through violet and cyan and
+    /// back — that turns slowly while it is at work (see `OverseerOrb`, `.auroraBorder`).
+    public enum Overseer {
+        /// The aurora's middle: its violet, where a single overseer color is wanted.
+        public static let violet = Color(red: 0.74, green: 0.47, blue: 1.0)
+        /// The gradient, rotated by `rotation` while the overseer is at work.
+        public static func aurora(rotation: Angle = .zero) -> AngularGradient {
+            AngularGradient(colors: [Style.accent(.agentDesk), violet, Style.cyan, Style.accent(.agentDesk)],
+                            center: .center, angle: rotation)
+        }
+    }
+
     // MARK: Metrics
 
     public enum Metrics {

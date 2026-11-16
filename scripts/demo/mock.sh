@@ -8,11 +8,36 @@ case $tool in
   claude) [[ $1 == auth ]] && { echo '{"loggedIn":true,"authMethod":"claude.ai"}'; exit 0; } ;;
   ssh) host=$1; shift ;;
 esac
+
 scene=$1
 cols=$(stty size 2>/dev/null | cut -d' ' -f2); cols=${cols:-100}
 e=$'\e'
 off="$e[0m" dim="$e[2m" bold="$e[1m" green="$e[32m" red="$e[31m" yellow="$e[33m" blue="$e[34m"
 magenta="$e[35m" cyan="$e[36m" gray="$e[90m" orange="$e[38;5;209m" panel="$e[48;5;236m"
+
+# The overseer tile in the overseer demo: `claude --session-id|--resume <id>` — no scene name.
+# What it draws is chosen by OVERSEER_STATE_FILE (idle | working | asking) so the driver can
+# change it between runs; the session id it was given is recorded at OVERSEER_ID_FILE.
+if [[ $tool == claude && ( ${scene:-} == --session-id || ${scene:-} == --resume ) && -n ${OVERSEER_STATE_FILE:-} ]]; then
+  [[ -n ${OVERSEER_ID_FILE:-} ]] && printf '%s' "$2" > "$OVERSEER_ID_FILE"
+  state=$(cat "$OVERSEER_STATE_FILE" 2>/dev/null || echo idle)
+  case $state in
+    asking)
+      printf '%s? %sRun "touch /tmp/demo-file"?%s\n%s  ❯ Yes, allow%s\n' "$bold" "$off" "$dim" "$green" "$off"
+      printf '\a'
+      while :; do sleep 5; done ;;
+    working)
+      glyphs=(⠋ ⠙ ⠹ ⠸ ⠼ ⠴ ⠦ ⠧ ⠇ ⠏) i=0
+      while :; do
+        printf '\r\e[K%s%s%s %sReading the board%s (%dm %02ds • esc to interrupt)' \
+          "$cyan" "${glyphs[i % 10]}" "$off" "$bold" "$off" $((i / 120)) $((i % 60))
+        sleep 0.5; i=$((i + 1))
+      done ;;
+    *)
+      printf '\n%s❯%s ' "$cyan" "$off"
+      while :; do sleep 5; done ;;
+  esac
+fi
 
 title() { printf '\e]0;%s\a' "$1"; }
 wrap() { fold -s -w $((cols - 4)) | sed "1s/^/$1/; 2,\$s/^/  /"; }

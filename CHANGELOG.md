@@ -8,6 +8,12 @@
   Tessera's agent tools stay read-only.
 - ⌘O (and Ask in the top bar) opens a chat with the overseer: an agent in a tile of its own that answers
   for the whole board and directs agents through Accord. A question typed into ⌘K can be put to it.
+- The overseer talks from a Tessera card at the top of the Needs-you lane, which opens a pop-up chat
+  panel: its Claude transcript rendered as a conversation, tool runs collapsed to one line, and a
+  terminal view when it asks for permission. The card, panel and a spinning orb carry an aurora look,
+  the overseer tile stays off the grid and out of the board's counts, and replies arriving while the
+  panel is open are already read. Conversation panels also break assistant text into markdown blocks:
+  lists, headings and fenced code.
 - + starts a shell at once and lists everything else that can be started beside it. ⌘N is a launcher
   for only what starts something.
 - New tiles can start in any folder: type a path or a recent folder's name in the launcher, or pick

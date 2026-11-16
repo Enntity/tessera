@@ -100,6 +100,12 @@ public final class StewardService {
         timer = t
     }
 
+    /// Demo and tests only: a made-up brief, shown as if the model had written it.
+    public func debugBrief(_ headline: String) {
+        config.enabled = true
+        brief = Steward.Brief(headline: headline, changes: [], attention: [], closable: [], at: Date())
+    }
+
     /// Saves the settings; a non-empty `key` replaces the saved one. False for an unusable address.
     @discardableResult
     public func configure(_ next: Config, key: String?) -> Bool {

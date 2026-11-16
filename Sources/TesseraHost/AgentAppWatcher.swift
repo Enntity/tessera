@@ -147,18 +147,7 @@ final class TranscriptScanner: @unchecked Sendable {
         var rateLimits: CodexRateLimits?
     }
 
-    private enum Parser {
-        case claude(ClaudeTranscriptParser)
-        case codex(CodexTranscriptParser)
-    }
-
-    private final class Tail {
-        var parser: Parser
-        var offset: UInt64 = 0
-        var remainder = Data()
-        var modified: Date = .distantPast
-        init(parser: Parser) { self.parser = parser }
-    }
+    private typealias Tail = TranscriptTail
 
     private let fm = FileManager.default
     private let home = URL(fileURLWithPath: NSHomeDirectory())
@@ -176,7 +165,7 @@ final class TranscriptScanner: @unchecked Sendable {
     private let zcode = ZCodeSessionScanner()
 
     /// First read of a large transcript only looks at the end; the state we need is recent.
-    static let initialTailBytes: UInt64 = 1_000_000
+    static let initialTailBytes: UInt64 = TranscriptTail.initialTailBytes
 
     private var touched: Set<String> = []
 
@@ -430,44 +419,6 @@ final class TranscriptScanner: @unchecked Sendable {
 
     private func advance(_ tail: Tail, path: String) {
         touched.insert(path)
-        guard let stat = FileStat(path) else { return }
-        let size = stat.size, modified = stat.modified
-        if size < tail.offset {
-            // Truncated or replaced: start over.
-            tail.offset = 0
-            tail.remainder = Data()
-            switch tail.parser {
-            case .claude: tail.parser = .claude(ClaudeTranscriptParser())
-            case .codex: tail.parser = .codex(CodexTranscriptParser())
-            }
-        }
-        guard size > tail.offset, let handle = FileHandle(forReadingAtPath: path) else { return }
-        defer { try? handle.close() }
-        var skipPartial = false
-        if tail.offset == 0, size > Self.initialTailBytes {
-            tail.offset = size - Self.initialTailBytes
-            skipPartial = true
-        }
-        try? handle.seek(toOffset: tail.offset)
-        var data = handle.readDataToEndOfFile()
-        tail.offset += UInt64(data.count)
-        tail.modified = modified
-        if skipPartial, let nl = data.firstIndex(of: 0x0A) { data = data[(nl + 1)...] }
-        var chunk = tail.remainder
-        chunk.append(data)
-        guard let lastNewline = chunk.lastIndex(of: 0x0A) else {
-            tail.remainder = chunk
-            return
-        }
-        tail.remainder = Data(chunk[(lastNewline + 1)...])
-        let complete = String(decoding: chunk[..<lastNewline], as: UTF8.self)
-        switch tail.parser {
-        case .claude(var p):
-            p.ingest(text: complete)
-            tail.parser = .claude(p)
-        case .codex(var p):
-            p.ingest(text: complete)
-            tail.parser = .codex(p)
-        }
+        tail.advance(path: path)
     }
 }
