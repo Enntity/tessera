@@ -9,11 +9,13 @@ public enum ShellEvent: Equatable, Sendable {
     case prompt(status: Int32)
     case startedFresh
     case programMissing
+    case shellReady
 
     public static let oscCode = 6973
 
     /// Payloads: `cmd;<nonce>;<b64 typed>[;<b64 expanded>]`, `done;<nonce>;<status>`, `fresh;<nonce>`,
-    /// `missing;<nonce>`.
+    /// `missing;<nonce>`, `ready;<nonce>` (emitted as a launch script's first statement: init files
+    /// already ran, so it marks startup finished).
     /// Reports travel in the terminal's output, so anything printed there (a `cat`ed file, an ssh
     /// session) could imitate one; only reports carrying the tile's secret nonce are believed.
     public static func parse(_ payload: String, nonce: String) -> ShellEvent? {
@@ -30,6 +32,8 @@ public enum ShellEvent: Equatable, Sendable {
             return .startedFresh
         case "missing":
             return .programMissing
+        case "ready":
+            return .shellReady
         default:
             return nil
         }
@@ -78,14 +82,14 @@ public enum LaunchScript {
             let retry = fallback.map {
                 "elif [ $__s -ne 0 ] && [ $__s -lt 126 ] && [ $((SECONDS - __t)) -lt \(quickFailure) ]; then printf '\(note)'; \(report("fresh")); \($0); "
             } ?? ""
-            return "__t=$SECONDS; \(primary); __s=$?; "
+            return "\(report("ready")); __t=$SECONDS; \(primary); __s=$?; "
                 + "if [ $__s -eq 126 ] || [ $__s -eq 127 ]; then \(report("missing")); \(retry)fi; "
                 + followUp
         case .fish:
             let retry = fallback.map {
                 "else if test $__s -ne 0 -a $__s -lt 126 -a (math (date +%s) - $__t) -lt \(quickFailure); printf '\(note)'; \(report("fresh")); \($0); "
             } ?? ""
-            return "set -l __t (date +%s); \(primary); set -l __s $status; "
+            return "\(report("ready")); set -l __t (date +%s); \(primary); set -l __s $status; "
                 + "if test $__s -eq 126 -o $__s -eq 127; \(report("missing")); \(retry)end; "
                 + followUp
         }

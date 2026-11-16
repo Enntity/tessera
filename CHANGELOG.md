@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Fixed: tiles no longer hang silently in shell startup. A tile waits out a macOS folder-permission
+  dialog instead of spawning into a blocked open, flags a shell still in its startup files after
+  15 seconds, and no longer leaves earlier tiles' PTY masters open in every new shell.
 - Fixed: a machine that was answering no longer flashes offline over one missed poll (a Wi-Fi or
   tunnel hiccup). Its last reading holds for up to 10 seconds of misses before it shows offline.
 - **Names and addresses from Accord**: a name given to a tile's session in Accord (`accord_title`,

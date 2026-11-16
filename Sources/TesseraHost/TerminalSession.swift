@@ -217,6 +217,31 @@ public final class TerminalSession: NSObject {
         settledScanDone = false
         wake()
         generation += 1
+        let generation = generation
+        switch FolderAccess.probe(cwd, then: { [weak self] outcome in
+            guard let self, self.generation == generation, !self.isRunning, !self.isSuspended else { return }
+            switch outcome {
+            case .reachable: self.launch(plan: plan)
+            case .denied: self.folderDenied()
+            }
+        }) {
+        case .reachable: launch(plan: plan)
+        case .denied: folderDenied()
+        case nil:
+            tracker.noteStartupStalled("Waiting for macOS to let Tessera open \(cwd.abbreviatingHome) — answer the permission dialog (it can hide behind other windows).")
+            refreshInfo()
+        }
+    }
+
+    private func folderDenied() {
+        tracker.noteExit(code: nil, failure: "macOS won't let Tessera open \(cwd.abbreviatingHome). Allow Tessera in System Settings → Privacy & Security → Files & Folders, then Restart.")
+        refreshInfo()
+    }
+
+    /// The spawn half of `start`, run once the working folder is known reachable.
+    private func launch(plan: (primary: String, fallback: String?)?) {
+        // Any folder wait is over: the spawn itself is what could stall now.
+        tracker.noteShellReady()
         let relay = ProcessRelay(session: self, generation: generation)
         self.relay = relay
         let process = LocalProcess(delegate: relay, dispatchQueue: .main)
@@ -238,13 +263,45 @@ public final class TerminalSession: NSObject {
             tracker.noteExit(code: nil, failure: "Couldn't start \((executable as NSString).lastPathComponent): too many terminals open?")
             return refreshInfo()
         }
+        process.closeMasterOnExec()
         isRunning = true
+        armStartupCheck(plan: plan != nil)
         refreshInfo()
+    }
+
+    /// How long a reporting shell gets to finish its startup files before the tile asks for help.
+    static var startupPatience: TimeInterval = 15
+    /// Set until this generation's shell reports `ready` or its first prompt.
+    @ObservationIgnored private var startupPending = false
+
+    /// A startup check arms only when the shell can report: a plan's script emits `ready`, and an
+    /// integrated interactive shell reports its first prompt. Anything else stays unflagged.
+    private func armStartupCheck(plan hasPlan: Bool) {
+        startupPending = false
+        guard hasPlan || ShellIntegration.reportsPrompts(shell) else { return }
+        startupPending = true
+        let generation = generation
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.startupPatience) { [weak self] in
+            MainActor.assumeIsolated {
+                guard let self, self.startupPending, self.generation == generation, self.isRunning else { return }
+                self.startupPending = false
+                self.tracker.noteStartupStalled("Shell startup hasn't finished after \(Int(Self.startupPatience)) s — a startup file (~/.zprofile, ~/.zshrc) may be stuck, or macOS may be waiting on a permission dialog. Restart to try again.")
+                self.refreshInfo()
+            }
+        }
+    }
+
+    /// The shell got past its startup files: clear any stall the timer (or a folder wait) raised.
+    private func noteShellReady() {
+        startupPending = false
+        tracker.noteShellReady()
     }
 
     /// Hangs up the whole session like closing a terminal window: interactive shells ignore
     /// SIGTERM, and the foreground program (an agent) is in its own process group.
     public func terminate() {
+        // A pending folder probe must not spawn after this; even a not-running tile kills its wait.
+        generation += 1
         guard isRunning, let process else { return }
         let pid = process.shellPid
         let foreground = process.childfd >= 0 ? tcgetpgrp(process.childfd) : -1
@@ -438,7 +495,10 @@ public final class TerminalSession: NSObject {
             // conversation for Resume. Anything else just leaves the shell, as a typo would.
             guard command.flatMap(SessionResume.conversationTool(for:)) != nil else { return }
             shutDown(because: "Not found")
+        case .shellReady:
+            noteShellReady()
         case .prompt:
+            noteShellReady()
             typedHost = nil
             guard command != nil, !isSuspended else { return refreshInfo() }
             command = nil
@@ -640,5 +700,13 @@ extension TerminalSession: TerminalPasteContext, TerminalNativePaste {
     @discardableResult
     public func sendNativePaste() -> Bool {
         view.sendNativeControlV()
+    }
+}
+
+extension LocalProcess {
+    /// Without this every spawned shell inherits the master fd of every tile opened before it.
+    func closeMasterOnExec() {
+        guard childfd >= 0 else { return }
+        _ = fcntl(childfd, F_SETFD, FD_CLOEXEC)
     }
 }

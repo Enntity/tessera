@@ -244,6 +244,38 @@ final class TerminalActivityTrackerTests: XCTestCase {
         XCTAssertFalse(t.attention)
     }
 
+    /// A startup stall keeps asking for attention through quiet ticks and keystrokes; only a
+    /// ready shell, an exit or a restart clears it.
+    func testAStartupStallHoldsUntilTheShellIsReady() {
+        var t = TerminalActivityTracker()
+        t.noteStartupStalled("Shell startup hasn't finished")
+        XCTAssertEqual(t.activity, .needsInput)
+        XCTAssertTrue(t.attention)
+        XCTAssertEqual(t.detail, "Shell startup hasn't finished")
+        // Neither a quiet, prompt-free screen nor typing into it lets it drop.
+        t.tick(now: t0.addingTimeInterval(30), screenTail: ["$ "])
+        XCTAssertEqual(t.activity, .needsInput)
+        XCTAssertEqual(t.detail, "Shell startup hasn't finished")
+        t.noteInput(at: t0.addingTimeInterval(31))
+        XCTAssertEqual(t.activity, .needsInput)
+        XCTAssertEqual(t.detail, "Shell startup hasn't finished")
+        t.noteShellReady()
+        XCTAssertEqual(t.activity, .starting)
+        XCTAssertNil(t.detail)
+        XCTAssertFalse(t.attention)
+    }
+
+    func testAStartupStallClearsOnExit() {
+        var t = TerminalActivityTracker()
+        t.noteStartupStalled("Waiting for macOS")
+        t.noteExit(code: nil, failure: "Couldn't start zsh")
+        XCTAssertEqual(t.activity, .failed)
+        XCTAssertEqual(t.detail, "Couldn't start zsh")
+        t.restart()
+        t.tick(now: t0.addingTimeInterval(2), screenTail: ["$ "])
+        XCTAssertNotEqual(t.detail, "Waiting for macOS")
+    }
+
     func testADismissedQuestionStaysDismissedUntilANewOneIsAsked() {
         var t = TerminalActivityTracker()
         t.noteOutput(bytes: 100, at: t0)
@@ -1022,6 +1054,8 @@ final class SessionResumeTests: XCTestCase {
         XCTAssertEqual(ShellEvent.parse("cmd;\(n);\(cx);\(b64)", nonce: n), .command(typed: "cx", expanded: "codex-work --yolo"))
         XCTAssertEqual(ShellEvent.parse("done;\(n);130", nonce: n), .prompt(status: 130))
         XCTAssertEqual(ShellEvent.parse("fresh;\(n)", nonce: n), .startedFresh)
+        XCTAssertEqual(ShellEvent.parse("ready;\(n)", nonce: n), .shellReady)
+        XCTAssertNil(ShellEvent.parse("ready;forged", nonce: n))
         XCTAssertNil(ShellEvent.parse("cmd;\(n);not base64!", nonce: n))
         XCTAssertNil(ShellEvent.parse("hello", nonce: n))
     }
@@ -1056,7 +1090,7 @@ final class SessionResumeTests: XCTestCase {
 
     func testLaunchScriptFallsBackOnlyOnQuickFailure() {
         let posix = LaunchScript.build(primary: "claude --resume x", fallback: "claude", followUp: "exec zsh -l -i", dialect: .posix, nonce: "n")
-        XCTAssertTrue(posix.hasPrefix("__t=$SECONDS; claude --resume x; __s=$?;"))
+        XCTAssertTrue(posix.hasPrefix("printf '\\033]6973;ready;n\\007'; __t=$SECONDS; claude --resume x; __s=$?;"))
         // Not found (126/127) is reported; other quick failures, below the signal range, start fresh.
         XCTAssertTrue(posix.contains("if [ $__s -eq 126 ] || [ $__s -eq 127 ]; then printf '\\033]6973;missing;n\\007'; elif"))
         XCTAssertTrue(posix.contains("[ $__s -lt 126 ]") && posix.contains(";fresh;n") && posix.contains("; claude; fi;"))
@@ -1064,6 +1098,7 @@ final class SessionResumeTests: XCTestCase {
         let plain = LaunchScript.build(primary: "npm test", fallback: nil, followUp: "exec zsh -l -i", dialect: .posix, nonce: "n")
         XCTAssertTrue(plain.contains(";missing;n") && !plain.contains("fresh") && plain.hasSuffix("fi; exec zsh -l -i"))
         let fish = LaunchScript.build(primary: "codex resume x", fallback: "codex", followUp: "exec fish -l -i", dialect: .fish, nonce: "n")
+        XCTAssertTrue(fish.hasPrefix("printf '\\033]6973;ready;n\\007'; set -l __t (date +%s); codex resume x;"))
         XCTAssertTrue(fish.contains("set -l __s $status") && fish.contains(";missing;n") && fish.contains("else if test $__s -ne 0 -a $__s -lt 126"))
         XCTAssertTrue(fish.hasSuffix("end; exec fish -l -i"))
     }

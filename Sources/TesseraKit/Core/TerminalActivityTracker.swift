@@ -29,6 +29,9 @@ public struct TerminalActivityTracker: Sendable {
     private var visiblePrompt: String?
     /// When the line now showing as the prompt first appeared (drives `chooserGrace`).
     private var promptSince: Date?
+    /// A stalled start (folder access, shell init) holds needsInput until `noteShellReady` or exit;
+    /// ticks and keystrokes don't clear it.
+    private var startupStall: String?
 
     /// Output this long after a keystroke is treated as echo, not work.
     static let echoWindow: TimeInterval = 0.35
@@ -45,7 +48,8 @@ public struct TerminalActivityTracker: Sendable {
         restoring = false
         lastInputAt = now
         if let visiblePrompt { answeredPrompt = visiblePrompt }
-        if activity == .needsInput {
+        // Typing into a stuck startup doesn't unstick it.
+        if activity == .needsInput, startupStall == nil {
             activity = .idle
             detail = nil
             attention = false
@@ -82,6 +86,7 @@ public struct TerminalActivityTracker: Sendable {
     /// The program ended with `code`, or never started at all (`failure` says why).
     public mutating func noteExit(code: Int32?, failure: String? = nil) {
         exited = true
+        startupStall = nil
         activity = (code ?? 0) == 0 && failure == nil ? .exited : .failed
         detail = failure ?? code.flatMap { $0 == 0 ? nil : "exit \($0)" } ?? "Exited"
         if activity == .failed, !isBeingViewed { attention = true }
@@ -90,9 +95,27 @@ public struct TerminalActivityTracker: Sendable {
     /// Deliberately stopped: quiet, no attention, and a note on how it comes back.
     public mutating func noteSuspended(resumeHint: String) {
         exited = true
+        startupStall = nil
         activity = .exited
         attention = false
         detail = resumeHint
+    }
+
+    /// Startup never finished — the folder couldn't be opened or the shell's init files are stuck.
+    /// Holds needsInput (with attention, like a question) until `noteShellReady`, exit or restart.
+    public mutating func noteStartupStalled(_ detail: String) {
+        startupStall = detail
+        raise(needsInput: true, detail: detail)
+    }
+
+    /// The shell got past its init files (or the folder wait ended): clear any stall so the
+    /// ordinary timing logic takes over.
+    public mutating func noteShellReady() {
+        guard startupStall != nil else { return }
+        startupStall = nil
+        activity = .starting
+        detail = nil
+        attention = false
     }
 
     public mutating func restart(restoring: Bool = false) {
@@ -119,6 +142,8 @@ public struct TerminalActivityTracker: Sendable {
     @discardableResult
     public mutating func tick(now: Date, screenTail: [String]) -> Bool {
         guard !exited else { return false }
+        // A startup stall only clears on ready, exit or restart — not on a quiet or prompt-free screen.
+        guard startupStall == nil else { return false }
         if startedAt == nil { startedAt = now }
         let before = (activity, attention, detail)
 
