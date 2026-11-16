@@ -134,6 +134,18 @@ extension AccordBridgeTests {
         XCTAssertTrue(bridge.projectedSessions.isEmpty)
         XCTAssertEqual(AccordBridge.project(board,nativeIDs:[],includeNativeHistory:true).count,3)
     }
+    func testFinishedAndFailedSharedSessionsReachTheBoardButDeadOnesDoNot() {
+        let board: [String:Any] = ["authority":"local","sessions":[
+            ["address":"local/done","source":"agent","title":"Finished result","state":"done","progressAt":9990000.0],
+            ["address":"local/failed","source":"agent","title":"Failed run","state":"failed","progressAt":9990000.0],
+            ["address":"local/olddone","source":"agent","title":"Stale result","state":"done","progressAt":1000000.0],
+            ["address":"local/exited","source":"agent","title":"Ended","state":"exited","progressAt":9990000.0],
+            ["address":"local/cancelled","source":"agent","title":"Stopped","state":"cancelled","progressAt":9990000.0]]]
+        let sessions = AccordBridge.project(board,nativeIDs:[],lookback:3600,now:Date(timeIntervalSince1970:10000))
+        XCTAssertEqual(sessions.map(\.title),["Finished result","Failed run"])
+        XCTAssertEqual(sessions[0].snapshot.activity,.done)
+        XCTAssertEqual(sessions[1].snapshot.activity,.failed)
+    }
     func testBoundAgentDoesNotDuplicateNativeTile() {
         let row: [String:Any] = ["address":"local/agent","source":"agent","title":"Worker","state":"working","progressAt":9990000.0,"nativeSession":["source":"codex","externalId":"thread"]]
         XCTAssertTrue(AccordBridge.project(["authority":"local","sessions":[row]],nativeIDs:["codex:thread"],now:Date(timeIntervalSince1970:10000)).isEmpty)
