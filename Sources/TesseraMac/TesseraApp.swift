@@ -63,14 +63,23 @@ final class AppModel {
                                                      close: { [weak self] in self?.close($0) })
     var showPalette = false {
         didSet {
-            if showPalette { showTriage = false } else { launchDirectory = nil }
+            if showPalette { showTriage = false; showOverseer = false } else { launchDirectory = nil }
         }
     }
     /// The folder picked in the launcher for what it starts next (see `contextDirectory`); it goes
     /// when the launcher does.
     var launchDirectory: String?
     /// ⇧⌘J: the Needs-you queue one item at a time, from the keyboard; `triageId` is the item shown.
-    var showTriage = false
+    var showTriage = false {
+        didSet { if showTriage { showOverseer = false } }
+    }
+    /// ⌘O: the overseer's chat panel (see `openOverseer`); its transcript is read faster while it shows.
+    var showOverseer = false {
+        didSet {
+            if showOverseer { showPalette = false; showTriage = false }
+            workspace.overseerChat.watching = showOverseer
+        }
+    }
     var triageId: String?
     var showSidebar = true
     /// The Needs-you lane, as the user left it.
@@ -187,6 +196,8 @@ final class AppModel {
     /// app, landing where the opened tile would have. `inApp: false` shows such a conversation's
     /// transcript in Tessera instead. (Opening anything leaves triage.)
     func open(_ id: String, inApp: Bool = true) {
+        // The overseer's tile never expands: everywhere it can be opened from lands in its panel.
+        if id == workspace.overseerId { openOverseer(); return }
         showTriage = false
         act(Style.Motion.zoom) {
             workspace.open(id, inApp: inApp, nativeAt: appRect(for: id))
@@ -459,6 +470,8 @@ final class AppModel {
         if let key, key !== window { return key.performClose(nil) }
         if showTriage {
             closeTriage()
+        } else if showOverseer {
+            closeOverseer()
         } else if showPalette {
             showPalette = false
         } else if workspace.expandedId != nil {
@@ -582,12 +595,19 @@ final class AppModel {
         return panel.runModal() == .OK ? panel.url?.path : nil
     }
 
-    /// ⌘O, the top bar's Ask, the palette's "Ask Tessera": the overseer's chat, opened like any tile
+    /// ⌘O, the top bar's Ask, the lane's card, the palette's "Ask Tessera": the overseer's panel
     /// (⌘O again puts it away), with `question` put to it when there is one.
     func openOverseer(asking question: String? = nil) {
-        guard let id = workspace.overseer(asking: question) else { return }
-        if question == nil, workspace.expandedId == id { return collapse() }
-        open(id)
+        if question == nil, showOverseer { return closeOverseer() }
+        guard workspace.overseer(asking: question) != nil else { return }
+        workspace.overseerChat.markSeen()
+        withAnimation(Style.Motion.standard) { showOverseer = true }
+    }
+
+    /// The overseer's panel put away: polling slows again, and the keyboard goes back where it was.
+    func closeOverseer() {
+        withAnimation(Style.Motion.standard) { showOverseer = false }
+        restoreFocus()
     }
 }
 

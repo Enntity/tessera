@@ -33,6 +33,8 @@ public final class Workspace {
     public let desk: AgentDesk
     /// The model that summarizes tiles and briefs the board.
     public let steward: StewardService
+    /// The overseer's conversation, watched for its panel.
+    public let overseerChat = OverseerChat()
     /// Tessera's API for agents on this Mac (MCP over loopback; the `tessera` command).
     public let agentTools = AgentTools()
     public let agentServer: AgentServer
@@ -132,7 +134,12 @@ public final class Workspace {
         restore()
         observe({ [weak self] in
             let tiles = self?.taskTiles ?? []
-            return (BoardState(tiles), BoardQuery.holdings(of: tiles))
+            let board = self?.boardTiles ?? []
+            var state = BoardState(tiles)
+            // The overseer counts where it waits (asking, failed, done: the lane and ⌘J lead to
+            // it), but it isn't on the board — not as a working tile, and not in the chips.
+            state.working.formIntersection(board.map(\.id))
+            return (state, BoardQuery.holdings(of: board))
         }) { [weak self] state, holdings in
             guard let self, self.state != state || self.holdings != holdings else { return }
             if self.state != state { self.state = state }
@@ -162,6 +169,8 @@ public final class Workspace {
             _ = try await self.accord.request("summary-configure", args:args)
         }
         steward.start()
+        overseerChat.attach(self)
+        overseerChat.start()
         accord.digests = { [weak self] in self?.stewardDigests().filter { !$0.id.hasPrefix("accord:") && ![AgentFlavor.lloom.rawValue, AgentFlavor.agentDesk.rawValue, AgentFlavor.accord.rawValue].contains($0.flavor) } ?? [] }
         accord.nativeAliases = { [weak self] in self?.nativeSessionAliases ?? [] }
         accord.sessions = { [weak self] values in self?.agents.setExternal(values, source: "accord") }
@@ -224,6 +233,11 @@ public final class Workspace {
     public var taskIDs: [String] { order.filter { linkedConversation($0) == nil } }
     public var taskTiles: [TileInfo] { taskIDs.compactMap(info) }
 
+    /// The board's tiles for counting and display: every task but the overseer, which lives in
+    /// its own panel, not the grid. (`state`'s waiting sets still include it — the lane and ⌘J
+    /// lead to it — so those are built from `taskTiles`, not this.)
+    public var boardTiles: [TileInfo] { taskTiles.filter { $0.id != overseerId } }
+
     /// The tiles the board shows, in order: the tab's, narrowed by the filter. Reads membership and
     /// `holdings`, not every tile's data.
     public var visibleIds: [String] {
@@ -249,12 +263,15 @@ public final class Workspace {
     /// The tiles of the tab being viewed, before the filter narrows them.
     public var tabIds: [String] {
         let sorted = boardSort == .manual ? order : Self.taskOrder(order,recent:recentlyUsed,activity:arrivalActivity)
+        let ids: [String]
         switch filter {
-        case .all: return sorted
+        case .all: ids = sorted
         case .group(let g):
             let members = groups.members(of: g)
-            return sorted.filter { members.contains($0) || $0 == expandedId || linkedConversation($0).map(members.contains) == true }
+            ids = sorted.filter { members.contains($0) || $0 == expandedId || linkedConversation($0).map(members.contains) == true }
         }
+        // The overseer lives in its panel, never in a tab's tiles or counts.
+        return ids.filter { $0 != overseerId }
     }
 
     @discardableResult

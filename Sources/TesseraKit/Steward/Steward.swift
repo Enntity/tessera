@@ -91,6 +91,14 @@ public enum Steward {
         /// What could be closed or hidden, and why.
         public var closable: [Item]
         public var at: Date
+
+        public init(headline: String, changes: [String] = [], attention: [Item] = [], closable: [Item] = [], at: Date = Date()) {
+            self.headline = headline
+            self.changes = changes
+            self.attention = attention
+            self.closable = closable
+            self.at = at
+        }
     }
 
     // MARK: Since you looked

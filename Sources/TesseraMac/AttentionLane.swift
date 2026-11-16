@@ -39,15 +39,7 @@ struct AttentionLane: View {
 
             ScrollView {
                 VStack(alignment: .leading, spacing: Style.Space.m) {
-                    if steward.config.enabled, let brief = steward.brief, !brief.headline.isEmpty {
-                        HStack(alignment: .top, spacing: Style.Space.xs) {
-                            Image(systemName: "sparkles").font(Style.caption).foregroundStyle(Style.accent(.agentDesk))
-                            // Plain text: the model read untrusted screens, so nothing it writes becomes a link.
-                            Text(brief.headline.obscured(privacy))
-                                .font(Style.caption).foregroundStyle(Style.dim)
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
-                    }
+                    OverseerCard()
                     section("Asking", ids: asking) { id in AskRow(id: id, isNext: id == state.queue.first) }
                     section("Failed", ids: failed) { id in FailedRow(id: id, isNext: id == state.queue.first) }
                     section("To review", ids: review, trailing: {
@@ -377,5 +369,89 @@ struct ClosableSection: View {
     private func canClose(_ id: String) -> Bool {
         guard let tile = model.workspace.info(id) else { return false }
         return Steward.canSuggestClosing(tile)
+    }
+}
+
+/// Tessera's overseer, at the top of the lane: a card in its own aurora look, always there —
+/// its chip says what it is doing, its line its latest reply (or the steward's brief), and the
+/// pill at the bottom is where a question goes. A click anywhere opens its panel.
+struct OverseerCard: View {
+    @Environment(AppModel.self) private var model
+    @Environment(\.tesseraPrivacy) private var privacy
+    @State private var hovering = false
+
+    var body: some View {
+        let workspace = model.workspace
+        let chat = workspace.overseerChat
+        let tile = workspace.overseerId.flatMap(workspace.info)
+        let working = tile?.activity == .working
+        let asking = tile?.activity == .needsInput
+        Button { model.openOverseer() } label: {
+            VStack(alignment: .leading, spacing: Style.Space.m) {
+                HStack(spacing: Style.Space.s) {
+                    OverseerOrb(size: 22, active: working)
+                    Text("Tessera").font(Style.ui(.label, .semibold)).foregroundStyle(Style.ink)
+                    if working {
+                        Text("Thinking…").font(Style.caption).foregroundStyle(Style.dim)
+                    } else if asking {
+                        Text("Needs you").font(Style.caption).foregroundStyle(Style.state(.needsInput))
+                    }
+                    if chat.unread {
+                        Circle().fill(Style.Overseer.violet).frame(width: Style.Metrics.dot, height: Style.Metrics.dot)
+                            .help("The overseer has a reply you haven't seen")
+                    }
+                    Spacer()
+                    Text("⌘O").font(Style.caption).foregroundStyle(Style.muted)
+                }
+                line
+                    .font(Style.caption).foregroundStyle(Style.dim)
+                    .lineLimit(3)
+                    .fixedSize(horizontal: false, vertical: true)
+                // Not a field — the panel's composer is; a click lands there with the cursor ready.
+                HStack(spacing: Style.Space.s) {
+                    Text("Ask Tessera…").font(Style.caption).foregroundStyle(Style.muted)
+                    Spacer()
+                    Image(systemName: "return").font(Style.caption).foregroundStyle(Style.muted)
+                }
+                .padding(.horizontal, Style.Space.m)
+                .padding(.vertical, Style.Space.xs)
+                .overlay(Capsule().strokeBorder(Style.hairline))
+            }
+            .padding(Style.Space.l)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background {
+                Style.Overseer.aurora().opacity(hovering ? 0.13 : 0.08)
+                    .clipShape(RoundedRectangle(cornerRadius: Style.Radius.l, style: .continuous))
+            }
+            .auroraBorder(active: working, radius: Style.Radius.l)
+            .overlay {
+                if hovering {
+                    RoundedRectangle(cornerRadius: Style.Radius.l, style: .continuous)
+                        .strokeBorder(Style.Neutral.borderHover)
+                }
+            }
+            .contentShape(RoundedRectangle(cornerRadius: Style.Radius.l, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
+        .animation(Style.Motion.quick, value: hovering)
+    }
+
+    /// The card's line: an unseen reply wins, then the steward's brief, then what it is for.
+    /// Plain text for both — the model read untrusted screens, so nothing it writes becomes a link.
+    @ViewBuilder private var line: some View {
+        let workspace = model.workspace
+        let chat = workspace.overseerChat
+        if chat.unread, let reply = chat.latestReply {
+            if privacy {
+                Text(reply.text.preview(220).obscured(true))
+            } else {
+                Text(reply.text.markdownPreview(220))
+            }
+        } else if workspace.steward.config.enabled, let brief = workspace.steward.brief, !brief.headline.isEmpty {
+            Text(brief.headline.obscured(privacy))
+        } else {
+            Text("Ask what's going on across the board, or have Tessera get the agents moving.")
+        }
     }
 }
