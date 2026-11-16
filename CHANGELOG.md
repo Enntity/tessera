@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Hovering an account card now shows its full text, and clicking it opens the provider's account
+  page (or Copy Link from its menu).
 - Fixed: Accord display names and summaries stopped reaching the board whenever Accord rejected one
   tile's report (its clock can run a fraction of a second behind ours). One bad report no longer
   stalls the sync.

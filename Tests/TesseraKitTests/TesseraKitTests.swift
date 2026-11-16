@@ -642,6 +642,25 @@ final class UsageAPITests: XCTestCase {
         XCTAssertEqual(r.headline, "¥110.00 left")
     }
 
+    /// The card's tooltip is the whole card: name, status line, details and note, never elided.
+    func testAReadingReadsAloudInFull() {
+        let ok = UsageReading(id: "or", name: "OpenRouter", symbol: "s", headline: "$74.50 left",
+                              lines: ["$25.50 spent", "resets monthly"], status: .ok, message: "As of now")
+        XCTAssertEqual(ok.fullText, "OpenRouter\n$74.50 left\n$25.50 spent\nresets monthly\nAs of now")
+        XCTAssertEqual(UsageReading(id: "k", name: "DeepSeek", symbol: "s", status: .needsKey).fullText,
+                       "DeepSeek\nAdd a key in Settings")
+        XCTAssertEqual(UsageReading(id: "e", name: "xAI", symbol: "s", status: .error, message: "key rejected").fullText,
+                       "xAI\nUnavailable\nkey rejected")
+    }
+
+    /// Every built-in provider except Custom links somewhere to manage its account.
+    func testEveryProviderKindHasAnAccountPage() throws {
+        for kind in UsageProviderKind.allCases where kind != .custom {
+            let url = try XCTUnwrap(kind.spec.topUpURL.flatMap(URL.init), "\(kind)")
+            XCTAssertEqual(url.scheme, "https")
+        }
+    }
+
     func testOpenAISpendWithBudget() throws {
         let config = UsageProviderConfig(id: "oa", kind: .openai, monthlyBudget: 100)
         let body = #"{"data":[{"results":[{"amount":{"value":12.5,"currency":"usd"}}]},{"results":[{"amount":{"value":7.5}}]}]}"#

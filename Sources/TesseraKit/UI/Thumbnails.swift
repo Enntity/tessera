@@ -156,12 +156,15 @@ public struct UsageRing: View {
 /// details.
 public struct UsageRow: View {
     let reading: UsageReading
+    /// Appended to the card's full-text tooltip ("Drag to reorder" where dragging works).
+    var hint: String?
     var onTopUp: ((URL) -> Void)?
     /// Runs the reading's fix; without it the card only says what is wrong.
     var onFix: ((UsageReading.Fix) -> Void)?
 
-    public init(reading: UsageReading, onTopUp: ((URL) -> Void)? = nil, onFix: ((UsageReading.Fix) -> Void)? = nil) {
+    public init(reading: UsageReading, hint: String? = nil, onTopUp: ((URL) -> Void)? = nil, onFix: ((UsageReading.Fix) -> Void)? = nil) {
         self.reading = reading
+        self.hint = hint
         self.onTopUp = onTopUp
         self.onFix = onFix
     }
@@ -210,7 +213,11 @@ public struct UsageRow: View {
         }
         .padding(Style.Space.gutter)
         .cardSurface()
+        .help(hint.map { reading.fullText + "\n" + $0 } ?? reading.fullText)
         .contentShape(Rectangle())
-        .onTapGesture { if let fix = reading.fix { onFix?(fix) } }
+        .onTapGesture {
+            if let fix = reading.fix { onFix?(fix) }
+            else if let s = reading.topUpURL, let url = URL(string: s) { onTopUp?(url) }
+        }
     }
 }

@@ -43,6 +43,21 @@ public struct UsageReading: Codable, Identifiable, Hashable, Sendable {
         self.topUpURL = topUpURL
         self.updatedAt = updatedAt
     }
+
+    /// Everything the card shows, untruncated: the name, the status line exactly as shown, then the
+    /// detail lines and the note.
+    public var fullText: String {
+        var parts = [name]
+        switch status {
+        case .loading: parts.append("Checking…")
+        case .needsKey: parts.append("Add a key in Settings")
+        case .error: parts.append(headline.isEmpty ? "Unavailable" : headline)
+        case .ok: parts.append(headline)
+        }
+        parts += lines
+        if let message { parts.append(message) }
+        return parts.filter { !$0.isEmpty }.joined(separator: "\n")
+    }
 }
 
 public enum UsageProviderKind: String, Codable, Sendable, CaseIterable {
@@ -106,7 +121,7 @@ public extension UsageProviderKind {
             .init(name: "OpenAI API", symbol: "circle.hexagonpath", topUpURL: "https://platform.openai.com/settings/organization/billing/overview",
                   keyHint: "Admin key sk-admin-…", help: "Organization admin key. Shows spend this month; set a budget for a gauge.")
         case .anthropic:
-            .init(name: "Anthropic API", symbol: "a.circle", topUpURL: "https://console.anthropic.com/settings/billing",
+            .init(name: "Anthropic API", symbol: "a.circle", topUpURL: "https://platform.claude.com/settings/billing",
                   keyHint: "Admin key sk-ant-admin…", help: "Organization admin key. Shows spend this month; set a budget for a gauge.")
         case .xai:
             .init(name: "xAI", symbol: "xmark.circle", topUpURL: "https://console.x.ai",
