@@ -33,7 +33,7 @@ struct AccountsSidebar: View {
             ScrollView {
                 VStack(spacing: Style.Space.m) {
                     ForEach(usage.orderedReadings) { reading in
-                        UsageRow(reading: reading, onTopUp: { NSWorkspace.shared.open($0) }) { fix in
+                        UsageRow(reading: reading, hint: "Drag to reorder", onTopUp: { NSWorkspace.shared.open($0) }) { fix in
                             if let command = fix.command {
                                 model.create { $0.launch(command: command) }
                                 usage.fixStarted(reading.id)
@@ -41,13 +41,21 @@ struct AccountsSidebar: View {
                                 startClaudeChecks()
                             }
                         }
-                            .help("Drag to reorder")
                             .onDrag {
                                 dragging = (reading.id, Date())
                                 return NSItemProvider(object: ("account:" + reading.id) as NSString)
                             }
                             .onDrop(of: [.text], delegate: AccountDropDelegate(target: reading.id, usage: usage, dragging: $dragging))
                             .contextMenu {
+                                if let s = reading.topUpURL, let url = URL(string: s) {
+                                    Button("Open \(url.host().map { $0.hasPrefix("www.") ? String($0.dropFirst(4)) : $0 } ?? s)") {
+                                        NSWorkspace.shared.open(url)
+                                    }
+                                    Button("Copy Link") {
+                                        NSPasteboard.general.clearContents()
+                                        NSPasteboard.general.setString(s, forType: .string)
+                                    }
+                                }
                                 Button("Refresh") {
                                     if let c = usage.configs.first(where: { $0.id == reading.id }) { usage.refresh(c) }
                                 }
