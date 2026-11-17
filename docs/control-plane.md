@@ -59,13 +59,17 @@ session before acting on a consequential claim. Cleanup requires a local user ac
 
 ## Native inspection tools
 
-These optional Tessera tools only inspect the native workspace:
+These optional Tessera tools mostly inspect the native workspace; `send_to_tile` types and
+`close_tile` closes as the developer would — a busy close always asks first, and the overseer's
+own tile is never closed:
 
 | CLI | MCP tool | Result |
 | --- | --- | --- |
 | `tessera board [--waiting]` | `board` | Visible tiles and native board brief |
 | `tessera whoami` | `whoami` | Caller tile, when identifiable |
 | `tessera read <tile> [--lines N]` | `read_tile` | Redacted native screen or transcript |
+| `tessera send <tile> <text…>` | `send_to_tile` | A message typed at a terminal agent's idle prompt (asks first as policy allows) |
+| `tessera close <tile> [--force]` | `close_tile` | Close an idle tile as the developer would (toast + Undo); `--force` asks first when busy |
 
 `tessera install` configures Accord and the optional native tools. `tessera mcp` serves native
 inspection over stdio. Removed Tessera messaging, questions and resource commands are not

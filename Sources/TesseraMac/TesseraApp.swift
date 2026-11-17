@@ -134,6 +134,7 @@ final class AppModel {
         started = true
         if handOffToRunningCopy() { return }
         workspace.onLink = { [weak self] url in self?.create { $0.openBrowser(url.absoluteString) } }
+        workspace.onAgentClose = { [weak self] id, by in self?.close([id], by: by) }
         // In privacy mode the steward reads nothing and agents can't read tiles.
         workspace.steward.paused = { [weak self] in self?.privacyMode ?? true }
         workspace.agentTools.privacy = { [weak self] in self?.privacyMode ?? true }
@@ -222,14 +223,16 @@ final class AppModel {
     }
 
     /// Closes tiles (an app conversation: hides it), and offers the way back: a toast, and Undo on
-    /// the Edit menu (⌘Z). Every close comes through here.
-    func close(_ ids: [String]) {
+    /// the Edit menu (⌘Z). Every close comes through here. `by` names who asked — the toast says
+    /// so when it wasn't the developer.
+    func close(_ ids: [String], by: String = "the developer") {
         act(Style.Motion.standard) {
-            let closed = ids.compactMap(workspace.close)
+            let closed = ids.compactMap { workspace.close($0, by: by) }
             guard let first = closed.first else { return }
             let many = first.kind == .agentSession ? "conversations" : "tiles"
+            let forWhom = by == "the developer" ? "" : " for \(by.preview(40))"
             closedToast = ClosedToast(ids: closed.map(\.id), text: first.kind.closedLabel + " "
-                                      + (closed.count == 1 ? first.title.preview(40) : "\(closed.count) \(many)"))
+                                      + (closed.count == 1 ? first.title.preview(40) : "\(closed.count) \(many)") + forWhom)
             guard let undo = window?.undoManager else { return }
             let mark = UndoMark(ids: closed.map(\.id), name: first.kind == .agentSession ? "Hide Conversation" : "Close Tile")
             undoMarks.append(mark)
@@ -245,7 +248,7 @@ final class AppModel {
         }
     }
 
-    func close(_ id: String) { close([id]) }
+    func close(_ id: String, by: String = "the developer") { close([id], by: by) }
 
     /// Brings closed tiles and hidden conversations back to their places (Undo, the toast, ⌘K's
     /// "Reopen …", which also opens the tile).

@@ -96,6 +96,9 @@ public final class Workspace {
     /// A link clicked in a terminal (e.g. the URL a dev server or `dsh web` prints): the app opens
     /// it as a web tile.
     @ObservationIgnored public var onLink: ((URL) -> Void)?
+    /// Routes a close asked for by an agent through the app's UI path (toast, Undo); tests leave
+    /// it nil and the workspace closes directly.
+    @ObservationIgnored public var onAgentClose: ((String, String) -> Void)?
 
     /// Observed: acknowledging an agent session changes how its tile looks.
     private var agentAcknowledged: [String: Date] = [:]
@@ -128,6 +131,8 @@ public final class Workspace {
         desk = AgentDesk(directory: directory)
         steward = StewardService(directory: directory)
         agentServer = AgentServer(directory: directory, tools: agentTools)
+        desk.closeApproved = { [weak self] request in self?.answerClose(request, approved: true) }
+        desk.closeDeclined = { [weak self] request in self?.answerClose(request, approved: false) }
     }
 
     public func start() {
@@ -209,7 +214,11 @@ public final class Workspace {
             DispatchQueue.main.async { MainActor.assumeIsolated { self.presets = found } }
         }
         let binder = Timer(timeInterval: 5, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated { self?.bindAgentSessions() }
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                for t in self.terminals.values { t.noteForegroundAgent() }
+                self.bindAgentSessions()
+            }
         }
         binder.tolerance = 1
         RunLoop.main.add(binder, forMode: .common)
@@ -231,11 +240,11 @@ public final class Workspace {
         info.summary = accord.summaries[id] ?? steward.summaries[id]?.summary
         info.needs = steward.summaries[id]?.needs ?? steward.brief?.attention.first { $0.id == id }?.why
         let children = relatedSessions(id)
-        if let waiting = children.first(where: { $0.snapshot.activity == .needsInput }) {
+        if let waiting = children.first(where: { agentInfo($0).activity == .needsInput }) {
             info.activity = .needsInput
             info.needs = waiting.snapshot.detail ?? waiting.title
             info.attention = true
-        } else if children.contains(where: { $0.snapshot.activity == .working }), ![TileActivity.needsInput,.failed].contains(info.activity) {
+        } else if children.contains(where: { agentInfo($0).activity == .working }), ![TileActivity.needsInput,.failed].contains(info.activity) {
             info.activity = .working
         }
         if info.needs?.isEmpty == true { info.needs = nil }
@@ -412,9 +421,10 @@ public final class Workspace {
 
     /// Closes a terminal or page, keeping what brings it back (see `reopen`): an agent in it is
     /// stopped the way Shut Down stops it, its conversation kept. An app conversation is only hidden
-    /// until it is active again. Returns what was closed.
+    /// until it is active again. `by` names who asked — the developer, or an agent — for the log.
+    /// Returns what was closed.
     @discardableResult
-    public func close(_ id: String) -> ClosedTile? {
+    public func close(_ id: String, by: String = "the developer") -> ClosedTile? {
         guard exists(id), let info = info(id) else { return nil }
         if expandedId == id { collapse() }
         dock.remove(id)
@@ -431,6 +441,7 @@ public final class Workspace {
         order.removeAll { $0 == id }
         if selectedId == id { selectedId = Self.neighbor(of: id, in: visible) }
         recentlyClosed.push(closed)
+        CloseLog.append(in: directory, tile: id, title: info.title, kind: info.kind.rawValue, by: by, outcome: "closed")
         save()
         return closed
     }
@@ -699,13 +710,21 @@ public final class Workspace {
         desk.seen(id)
     }
 
+    /// Whether the terminal itself sits at a question — what typing an answer would hit. A tile
+    /// asking only through a linked child (a desk card, an app conversation) doesn't count.
+    public func terminalAsking(_ id: String) -> Bool { terminals[id]?.info.activity == .needsInput }
+
     /// Takes a tile out of what needs the user without answering it (Mark as Seen, Dismiss): its
-    /// result counts as seen, its question as set aside until the next one.
+    /// result counts as seen, its question as set aside until the next one. A question one of
+    /// its linked sessions asks is set aside with it.
     public func dismiss(_ id: String) {
         acknowledge(id)
         desk.setAside(id)
         terminals[id]?.dismissQuestion()
         if agents.sessions[id] != nil { agentDismissed[id] = Date() }
+        for child in relatedSessions(id) where agentInfo(child).activity == .needsInput {
+            dismiss(child.id)
+        }
     }
 
     private func setViewed(_ id: String, _ viewed: Bool) {
@@ -860,7 +879,7 @@ public final class Workspace {
         agents.setExternal(fleet.items(lookback: agents.lookback).filter { fleet.showJobs || $0.wantsUser }.map(FleetService.session), source: "fleet")
     }
 
-    private func deskChanged() {
+    func deskChanged() {
         agents.setExternal(desk.sessions, source: "desk")
         pumpWakes()
     }
@@ -984,6 +1003,89 @@ public final class Workspace {
         }
     }
 
+    // MARK: Closing tiles
+
+    /// Whether an agent may close a tile outright, only with the developer's OK, or never.
+    enum CloseCheck: Equatable {
+        case ok, busy(String), never(String)
+    }
+
+    /// The close rules, shared by the tool and the CLI: the overseer's own tile is never
+    /// closed; a desk card dismisses; an idle shell or agent closes; a tile that is working,
+    /// asking, starting, being typed into, or holding a non-agent program in its foreground
+    /// asks first.
+    nonisolated static func closeCheck(isOverseer: Bool, isDeskCard: Bool, isTerminal: Bool, activity: TileActivity,
+                           running: Bool, suspended: Bool, isAgent: Bool, foregroundProgram: Bool,
+                           lastUserInputAt: Date?, now: Date = Date()) -> CloseCheck {
+        if isOverseer { return .never("the overseer's own tile") }
+        if isDeskCard { return .ok }
+        if isTerminal && (!running || suspended) { return .ok }
+        switch activity {
+        case .working: return .busy("working")
+        case .needsInput: return .busy("asking")
+        case .starting: return .busy("starting")
+        default: break
+        }
+        if isTerminal {
+            if let lastUserInputAt, now.timeIntervalSince(lastUserInputAt) < 20 { return .busy("being typed into") }
+            if !isAgent && foregroundProgram { return .busy("running a program other than its shell") }
+        }
+        return .ok
+    }
+
+    /// `close_tile` and `tessera close`: closes like the developer's own Close (toast, Undo) or
+    /// dismisses a desk card. A busy tile is refused unless `force`, which asks the developer on
+    /// a desk card first. Every outcome is logged with who asked.
+    @discardableResult
+    func closeTile(_ id: String, force: Bool, from senderTile: String?, label: String) throws -> String {
+        // A desk card isn't a tile: closing it dismisses the question or request it carries.
+        if id.hasPrefix(AgentDesk.idPrefix) {
+            guard let card = desk.sessions.first(where: { $0.id == id }) else { throw AgentTools.Refusal("No such tile.") }
+            desk.setAside(id)
+            CloseLog.append(in: directory, tile: id, title: card.title, kind: "desk",
+                            by: senderTile.map { "\(label) (tile \($0))" } ?? label, outcome: "closed", force: force)
+            return "Dismissed \(card.title)."
+        }
+        guard let info = info(id) else { throw AgentTools.Refusal("No such tile.") }
+        let t = terminals[id]
+        let check = Self.closeCheck(isOverseer: id == overseerId, isDeskCard: id.hasPrefix(AgentDesk.idPrefix),
+                                  isTerminal: t != nil, activity: info.activity, running: t?.isRunning ?? false,
+                                  suspended: t?.isSuspended ?? false, isAgent: t != nil && isWakeableTerminal(id),
+                                  foregroundProgram: t?.runsForegroundProgram ?? false, lastUserInputAt: t?.lastUserInputAt)
+        let by = senderTile.map { "\(label) (tile \($0))" } ?? label
+        func log(_ outcome: String, reason: String? = nil) {
+            CloseLog.append(in: directory, tile: id, title: info.title, kind: info.kind.rawValue,
+                            by: by, outcome: outcome, reason: reason, force: force)
+        }
+        switch check {
+        case .never:
+            log("refused", reason: "the overseer's own tile")
+            throw AgentTools.Refusal("Tessera never closes the overseer's own tile.")
+        case .busy(let reason) where !force:
+            log("refused", reason: reason)
+            throw AgentTools.Refusal("\(info.title) is \(reason), so it wasn't closed. Pass force to ask the developer.")
+        case .busy(let reason):
+            desk.requestClose(from: by, fromTile: senderTile, tile: id, title: info.title, reason: reason)
+            log("asked", reason: reason)
+            return "Waiting for the developer's OK to close \(info.title) (it's \(reason))."
+        case .ok:
+            if let onAgentClose { onAgentClose(id, by) } else { close(id, by: by) }
+            guard !exists(id) else { throw AgentTools.Refusal("Couldn't close \(info.title).") }
+            return "\(info.kind.closedLabel) \(info.title)."
+        }
+    }
+
+    /// The developer's answer to a close request: approve closes the tile through the same path,
+    /// keeping the card's asker as the one who asked.
+    private func answerClose(_ request: AgentDesk.CloseRequest, approved: Bool) {
+        CloseLog.append(in: directory, tile: request.tile, title: request.title,
+                        kind: info(request.tile)?.kind.rawValue ?? "gone",
+                        by: request.from, outcome: approved ? "approved" : "declined", reason: request.reason, force: true)
+        guard approved, exists(request.tile) else { return }
+        let by = "\(request.from) (approved by the developer)"
+        if let onAgentClose { onAgentClose(request.tile, by) } else { close(request.tile, by: by) }
+    }
+
     /// Canonical native identities, including Claude desktop's distinct CLI session ID.
     public var nativeSessionAliases: Set<String> {
         var ids=Set(order.filter { !$0.hasPrefix("accord:") })
@@ -1044,7 +1146,9 @@ public final class Workspace {
     /// The tile of the conversation a LLooM job or lease names (`claude:<id>`, `codex:<id>`): by its
     /// tile id, else by the session id a terminal or a Claude app conversation carries.
     public func linkedConversation(_ id: String) -> String? {
-        guard let link = agents.session(id)?.link else { return nil }
+        // A desk card is about a tile, not its child: it stands in the lane as its own row
+        // (with its own choices), and the tile it names doesn't borrow the card's asking state.
+        guard let session = agents.session(id), session.flavor != .agentDesk, let link = session.link else { return nil }
         if link != id, exists(link), agents.session(link)?.flavor != .lloom, agents.session(link)?.link == nil { return link }
         guard let colon = link.firstIndex(of: ":") else { return nil }
         let sessionId = String(link[link.index(after: colon)...])
@@ -1084,7 +1188,7 @@ public final class Workspace {
         reconcileSelection()
     }
 
-    private func agentsChanged() {
+    func agentsChanged() {
         syncAgents()
         if usage.codexRateLimits != agents.codexRateLimits { usage.codexRateLimits = agents.codexRateLimits }
     }

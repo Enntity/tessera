@@ -81,6 +81,9 @@ public final class AgentTools {
         switch name {
         case "board":
             return board(workspace, waitingOnly: args["waiting_only"] as? Bool ?? false, me: me.tile)
+        case "close_tile":
+            let tile = try workspace.resolveTile(args["tile"] as? String ?? "")
+            return try workspace.closeTile(tile, force: args["force"] as? Bool ?? false, from: me.tile, label: me.label)
         case "read_tile":
             guard !privacy() else { throw Refusal("The developer has privacy mode on; tiles can't be read right now.") }
             let id = try workspace.resolveTile(args["tile"] as? String ?? "")
@@ -164,6 +167,8 @@ extension Workspace {
         let ref = ref.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !ref.isEmpty else { throw AgentTools.Refusal("Which tile? Give an id or title from board.") }
         if exists(ref) { return ref }
+        // A desk card is addressable by its ask: id (close_tile dismisses it), on the board or not.
+        if ref.hasPrefix(AgentDesk.idPrefix), desk.sessions.contains(where: { $0.id == ref }) { return ref }
         let titled = allTiles.filter { $0.title.caseInsensitiveCompare(ref) == .orderedSame }
         if titled.count == 1 { return titled[0].id }
         if titled.count > 1 { throw AgentTools.Refusal("\(titled.count) tiles are called \"\(ref)\": \(titled.map(\.id).joined(separator: ", ")). Use an id.") }

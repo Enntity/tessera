@@ -218,6 +218,7 @@ func shownLaneLine(_ info: TileInfo, _ workspace: Workspace) -> String {
 /// A tile asking: its question in its own words, bordered amber as blocking, with the answers right
 /// there — the phone's one-tap keys for a terminal, the agent's own options for a desk question.
 struct AskRow: View {
+    @Environment(AppModel.self) private var model
     let id: String
     let isNext: Bool
 
@@ -225,7 +226,7 @@ struct AskRow: View {
         LaneCard(id: id, isNext: isNext, border: Style.amber.opacity(Style.Tint.stroke)) { info, _, hidden in
             laneText(info, color: Style.ink, limit: 6, hidden: hidden)
         } footer: { info in
-            if info.kind == .terminal { QuickAnswers(id: id).padding(.top, Style.Space.xs) }
+            if model.workspace.terminalAsking(id) { QuickAnswers(id: id).padding(.top, Style.Space.xs) }
             // An agent's question or message waits here for its answer, pointer or not.
             if info.flavor == .agentDesk { DeskAnswers(id: id).padding(.top, Style.Space.xs) }
         }

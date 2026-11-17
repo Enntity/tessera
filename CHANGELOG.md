@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Agents can tidy the board: `close_tile` (`tessera close <tile> [--force]`) closes an idle tile
+  or agent exactly as your own Close does — same toast and Undo — and dismisses a desk card.
+  A working, asking or busy tile refuses unless `--force` puts a Close/Don't card on your desk,
+  and the overseer's own tile is never closed. Shells running an agent CLI that shell
+  integration missed now pick the agent up, so they resume as it.
+- Fixed: a wake-approval card no longer makes its target tile look like it is asking (and no
+  longer offers the terminal answer keys that would type into it). The card is its own lane row
+  with its own choices, and dismissing a tile still clears a real linked session's question.
+
 - Agents can wake an idle agent tile with a prompt: an Accord `native-prompt` delivery (or the new
   `send_to_tile` tool / `tessera send`) is typed at its prompt once it sits idle — never into a
   shell, a busy or asking tile, or one you've just typed into. Settings chooses who may skip the

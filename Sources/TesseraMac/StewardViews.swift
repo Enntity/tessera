@@ -26,7 +26,7 @@ struct DeskAnswers: View {
                         }
                     }
                 }
-                if options != ["Deliver", "Don't"] {
+                if desk.takesReply(id) {
                     TextField("Reply…", text: $reply)
                         .textFieldStyle(.roundedBorder)
                         .font(Style.caption)
