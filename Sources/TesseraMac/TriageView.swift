@@ -146,7 +146,7 @@ struct TriageView: View {
     @ViewBuilder private func actions(_ info: TileInfo) -> some View {
         let desk = model.workspace.desk
         HStack(spacing: Style.Space.s) {
-            if info.activity == .needsInput, info.kind == .terminal {
+            if model.workspace.terminalAsking(info.id) {
                 QuickAnswers(id: info.id)
             } else if info.activity == .needsInput, info.flavor == .agentDesk, let options = desk.choices(for: info.id) {
                 ForEach(Array(options.enumerated()), id: \.offset) { i, option in
@@ -154,7 +154,7 @@ struct TriageView: View {
                         desk.respond(info.id, with: option)
                     }
                 }
-                if options != ["Deliver", "Don't"] {
+                if desk.takesReply(info.id) {
                     TextField("Reply…", text: $reply)
                         .textFieldStyle(.roundedBorder)
                         .font(Style.caption)
@@ -203,11 +203,11 @@ struct TriageView: View {
     /// The keys valid for this item, for the strip along the card's bottom.
     private func hints(for info: TileInfo) -> [KeyHint] {
         var first: [KeyHint] = []
-        if info.activity == .needsInput, info.kind == .terminal {
+        if model.workspace.terminalAsking(info.id) {
             first = [KeyHint("1–3 y n ⏎", "answer"), KeyHint("E", "set aside")]
         } else if info.activity == .needsInput, let options = model.workspace.desk.choices(for: info.id) {
             first = [KeyHint("1–\(options.count)", "answer")]
-            if options != ["Deliver", "Don't"] { first.append(KeyHint("⇥", "reply")) }
+            if model.workspace.desk.takesReply(info.id) { first.append(KeyHint("⇥", "reply")) }
             first.append(KeyHint("E", "set aside"))
         } else {
             if info.activity == .failed, let action = model.actions(for: info).first {
@@ -250,12 +250,12 @@ struct TriageView: View {
         case .rightArrow: move(1); return .handled
         case .return:
             guard let info = current(in: model.workspace.state.queue) else { model.closeTriage(); return .handled }
-            if info.activity == .needsInput, info.kind == .terminal { model.answer(info.id, with: .enter) } else { model.open(info.id) }
+            if model.workspace.terminalAsking(info.id) { model.answer(info.id, with: .enter) } else { model.open(info.id) }
             return .handled
         case .tab:
             // The desk question's reply field takes the keyboard.
             guard let info = current(in: model.workspace.state.queue), info.flavor == .agentDesk,
-                  let options = model.workspace.desk.choices(for: info.id), options != ["Deliver", "Don't"] else { return .ignored }
+                  model.workspace.desk.takesReply(info.id) else { return .ignored }
             replyFocused = true
             return .handled
         default: break
@@ -271,7 +271,7 @@ struct TriageView: View {
         case "o": model.open(info.id); return .handled
         case "j": move(1); return .handled
         case "k": move(-1); return .handled
-        case let keys where info.activity == .needsInput && info.kind == .terminal:
+        case let keys where model.workspace.terminalAsking(info.id):
             guard let answer = QuickAnswer(rawValue: keys) else { return .ignored }
             model.answer(info.id, with: answer)
             return .handled

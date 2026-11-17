@@ -52,6 +52,17 @@ public final class AgentDesk {
         public var at: Date
     }
 
+    /// An agent's request to close a busy tile, waiting on the developer's card.
+    public struct CloseRequest: Codable, Equatable, Sendable {
+        public var id: String        // "close:" + UUID
+        public var from: String
+        public var fromTile: String?
+        public var tile: String
+        public var title: String
+        public var reason: String
+        public var at: Date
+    }
+
     private struct Saved: Codable {
         var questions: [Question]
         var messages: [Message]
@@ -59,17 +70,23 @@ public final class AgentDesk {
         var accordDeliveries: [String]?
         var noteReads: [String]?
         var noWake: [String]?
+        var closeRequests: [CloseRequest]?
     }
 
     public private(set) var questions: [Question] = []
     public private(set) var messages: [Message] = []
     public private(set) var notes: [Note] = []
+    /// Close requests still waiting for the developer; answered ones leave the list.
+    public private(set) var closeRequests: [CloseRequest] = []
     /// Called when what the board shows from the desk may have changed.
     @ObservationIgnored public var onChange: (() -> Void)?
     /// Types a message into a terminal tile; false when it can't (not a running terminal).
     @ObservationIgnored public var typeInto: ((String, String) -> Bool)?
     /// Opens an app conversation with the message's text already on the pasteboard; false when it can't.
     @ObservationIgnored public var openWithText: ((String, String) -> Bool)?
+    /// The developer answered a close request; Workspace does the actual close (or logs the decline).
+    @ObservationIgnored public var closeApproved: ((CloseRequest) -> Void)?
+    @ObservationIgnored public var closeDeclined: ((CloseRequest) -> Void)?
     /// Who may have a message typed without the user approving each one (Settings → Agents).
     public var wakePolicy = WakePolicy.stored {
         didSet { wakePolicy.save() }
@@ -93,6 +110,7 @@ public final class AgentDesk {
             deliveries = Set(saved.accordDeliveries ?? [])
             noteReads = Set(saved.noteReads ?? [])
             noWake = Set(saved.noWake ?? [])
+            closeRequests = saved.closeRequests ?? []
         }
     }
 
@@ -278,6 +296,9 @@ public final class AgentDesk {
         if id.hasPrefix("accord:"), notes.contains(where: { $0.id == id }) { noteReads.insert(String(id.dropFirst(7))) }
         notes.removeAll { $0.id == id }
         if let i = messages.firstIndex(where:{ $0.id == id && ["attempting","failed"].contains($0.delivery ?? "") }) { messages[i].delivery = "reviewed" }
+        if let i = closeRequests.firstIndex(where: { $0.id == id }) {
+            closeDeclined?(closeRequests.remove(at: i))
+        }
         changed()
     }
 
@@ -313,6 +334,12 @@ public final class AgentDesk {
                             detail: "Open \(m.toTitle) with this on the pasteboard? \(m.text)", at: m.sentAt,
                             items: [ConversationItem(id: m.id, role: .assistant, text: m.text, timestamp: m.sentAt)], link: m.to))
         }
+        for r in closeRequests {
+            let detail = "Close \(r.title)? It's \(r.reason)."
+            out.append(tile(id: r.id, title: "\(r.from) asks to close \(r.title)", activity: .needsInput,
+                            detail: detail, at: r.at,
+                            items: [ConversationItem(id: r.id, role: .assistant, text: detail, timestamp: r.at)], link: r.tile))
+        }
         for n in notes {
             out.append(tile(id: n.id, title: "From \(n.from)", activity: .done, detail: n.text, at: n.at,
                             items: [ConversationItem(id: n.id, role: .assistant, text: n.text, timestamp: n.at)], link: nil))
@@ -326,7 +353,15 @@ public final class AgentDesk {
         if let q = questions.first(where: { $0.id == id && $0.answer == nil }) { return q.options }
         if messages.contains(where: { $0.id == id && $0.delivery == "waiting" }) { return ["Deliver", "Don't"] }
         if messages.contains(where: { $0.id == id && $0.delivery == "open" }) { return ["Open and Copy", "Dismiss"] }
+        if closeRequests.contains(where: { $0.id == id }) { return ["Close", "Don't"] }
         return nil
+    }
+
+    /// Whether the desk tile takes a free-text reply: only a pending question does — choice
+    /// cards (Deliver, Open and Copy, Close) are answered by their buttons.
+    public func takesReply(_ tileId: String) -> Bool {
+        let id = String(tileId.dropFirst(Self.idPrefix.count))
+        return questions.contains { $0.id == id && $0.answer == nil && !$0.dismissed }
     }
 
     /// An answer given from the lane: a question's answer, or a delivery decision.
@@ -334,9 +369,26 @@ public final class AgentDesk {
         let id = String(tileId.dropFirst(Self.idPrefix.count))
         if messages.contains(where: { $0.id == id && ["waiting", "open"].contains($0.delivery ?? "") }) {
             approveDelivery(id, answer == "Deliver" || answer == "Open and Copy")
+        } else if let i = closeRequests.firstIndex(where: { $0.id == id }) {
+            let request = closeRequests.remove(at: i)
+            changed()
+            if answer == "Close" { closeApproved?(request) } else { closeDeclined?(request) }
         } else {
             self.answer(id, with: answer)
         }
+    }
+
+    /// A close request for a busy tile: one card per tile — a second request for the same
+    /// tile returns the pending one.
+    @discardableResult
+    public func requestClose(from: String, fromTile: String?, tile: String, title: String, reason: String,
+                             at: Date = Date()) -> CloseRequest {
+        if let existing = closeRequests.first(where: { $0.tile == tile }) { return existing }
+        let request = CloseRequest(id: "close:" + UUID().uuidString, from: from, fromTile: fromTile,
+                                   tile: tile, title: title, reason: reason, at: at)
+        closeRequests.append(request)
+        changed()
+        return request
     }
 
     private func tile(id: String, title: String, activity: TileActivity, detail: String, at: Date,
@@ -351,8 +403,10 @@ public final class AgentDesk {
         questions.removeAll { $0.id.hasPrefix("accord:") && ($0.answeredAt ?? ($0.dismissed ? $0.askedAt : .distantFuture)) < cutoff }
         // Done-with messages of any origin age out; anything still undelivered keeps its place.
         messages.removeAll { $0.sentAt < cutoff && ["typed", "opened", "declined", "reviewed"].contains($0.delivery ?? "") }
+        // A close OK this stale must not linger.
+        closeRequests.removeAll { $0.at < cutoff }
         StateFile.save(Saved(questions: questions, messages: messages, notes: notes, accordDeliveries: Array(deliveries),
-                             noteReads: Array(noteReads), noWake: Array(noWake)), to: store)
+                             noteReads: Array(noteReads), noWake: Array(noWake), closeRequests: closeRequests), to: store)
         onChange?()
     }
 

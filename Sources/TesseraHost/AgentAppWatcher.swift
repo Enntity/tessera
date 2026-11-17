@@ -45,7 +45,7 @@ public final class AgentAppWatcher {
     /// The lookbacks Settings offers, in hours.
     public static let lookbackHours: ClosedRange<Double> = 1...240
     /// The first scan has come back (until then, `sessions` being empty means nothing).
-    @ObservationIgnored public private(set) var hasScanned = false
+    @ObservationIgnored public internal(set) var hasScanned = false
     /// Called after a scan that changed anything.
     @ObservationIgnored public var onChange: (() -> Void)?
 

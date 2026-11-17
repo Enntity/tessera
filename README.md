@@ -85,7 +85,9 @@ explicitly development candidates. The source includes the complete macOS featur
   tile called Tessera, in a folder of its own whose `AGENTS.md` says what it is for: answering for the whole
   board and directing the agents on it. It sees the board with Tessera's tools and reaches agents with
   Accord messages, as any connected agent can; nothing is added to what agents may do. Messages it sends to
-  terminal agents are typed in once the tile is idle, as *Who may wake idle agents…* allows. Claude Code asks once whether to
+  terminal agents are typed in once the tile is idle, as *Who may wake idle agents…* allows. It can also tidy the
+  board: `close_tile` (`tessera close`) closes an idle tile as you would — same toast and Undo — dismisses
+  desk cards, and asks you first when the tile is busy; its own tile is never touched. Claude Code asks once whether to
   trust the folder, which pre-approves the Accord and Tessera tools for it. The role file is yours to rewrite.
 - **Steward (Settings → Agents).** Point it at any OpenAI-compatible endpoint, such as a LLooM
   gateway with a local model, and it keeps a one-line summary of each tile on the card's footer.

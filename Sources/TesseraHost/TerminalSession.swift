@@ -37,6 +37,9 @@ public final class TerminalSession: NSObject {
     @ObservationIgnored private var hasStarted = false
     /// The machine an `ssh` typed at this tile's prompt is on, until the prompt is back.
     @ObservationIgnored private var typedHost: String?
+    /// The recorded command came from watching the foreground process, not a shell report —
+    /// cleared when the shell has the terminal back, and by a real `.command`/`.prompt`.
+    @ObservationIgnored private var commandFromForeground = false
     public private(set) var flavor: AgentFlavor
     public private(set) var title: String
     public var customTitle: String?
@@ -360,6 +363,13 @@ public final class TerminalSession: NSObject {
         return pgid > 0 ? pgid : nil
     }
 
+    /// A program holds the terminal's foreground other than its shell — what the user is
+    /// interacting with, and what a close would interrupt.
+    public var runsForegroundProgram: Bool {
+        guard let pgid = foregroundProcessGroup, let pid = process?.shellPid else { return false }
+        return pgid != pid
+    }
+
     /// The shell's working directory right now (follows `cd`), read from the kernel.
     public func liveDirectory() -> String? {
         guard let pid = process?.shellPid, pid > 0 else { return nil }
@@ -471,23 +481,14 @@ public final class TerminalSession: NSObject {
     private func handle(_ event: ShellEvent) {
         switch event {
         case .command(let typed, let expanded):
+            commandFromForeground = false
             typedHost = [typed, expanded].compactMap { $0 }.compactMap(MachineConfig.sshHost).first
             // Only agent CLIs are worth bringing back; `ls` or `make` are not. Prefer the line as
             // typed; an alias is recognised through its expansion.
             guard let line = [typed, expanded].compactMap({ $0 }).first(where: { SessionResume.conversationTool(for: $0) != nil }) else {
                 return refreshInfo()
             }
-            command = line
-            sessionId = SessionResume.sessionId(in: line)
-            // A typed agent without a known id resumes only once its conversation is found;
-            // "continue the latest" could land in someone else's.
-            mayContinueLatest = false
-            hasStarted = true
-            launchedAt = Date()
-            flavor = AgentFlavor.infer(fromCommand: line)
-            if let dir = liveDirectory() { cwd = dir }
-            refreshInfo()
-            onResumableChange?()
+            adoptCommand(line, launchedAt: Date())
         case .startedFresh:
             // The resume failed and the fallback started a new conversation: find that one instead.
             sessionId = nil
@@ -503,14 +504,67 @@ public final class TerminalSession: NSObject {
             noteShellReady()
         case .prompt:
             noteShellReady()
+            commandFromForeground = false
             typedHost = nil
             guard command != nil, !isSuspended else { return refreshInfo() }
-            command = nil
-            sessionId = nil
-            flavor = .shell
-            refreshInfo()
-            onResumableChange?()
+            clearCommand()
         }
+    }
+
+    /// The command a tile brings back, learned the same way whether the shell reported it or the
+    /// foreground process was found to be an agent.
+    private func adoptCommand(_ line: String, launchedAt: Date) {
+        command = line
+        sessionId = SessionResume.sessionId(in: line)
+        // A typed agent without a known id resumes only once its conversation is found;
+        // "continue the latest" could land in someone else's.
+        mayContinueLatest = false
+        hasStarted = true
+        self.launchedAt = launchedAt
+        flavor = AgentFlavor.infer(fromCommand: line)
+        if let dir = liveDirectory() { cwd = dir }
+        refreshInfo()
+        onResumableChange?()
+    }
+
+    /// Back at a bare prompt: the tile brings nothing back.
+    private func clearCommand() {
+        command = nil
+        sessionId = nil
+        flavor = .shell
+        refreshInfo()
+        onResumableChange?()
+    }
+
+    /// A shell whose integration never loaded (interrupted startup) reports no `.command`, so an
+    /// agent typed into it would otherwise come back as a bare shell. Look at what runs in its
+    /// foreground instead: an agent argv is adopted exactly like a typed command, with its process
+    /// start as the launch time so its session file still binds; when the shell has the terminal
+    /// back the adoption clears, the way `.prompt` clears a reported one.
+    @discardableResult
+    public func noteForegroundAgent() -> Bool {
+        guard isRunning, !isSuspended, let pgid = foregroundProcessGroup, let shellPid = process?.shellPid else { return false }
+        if pgid == shellPid {
+            guard commandFromForeground, command != nil else { return false }
+            commandFromForeground = false
+            clearCommand()
+            return true
+        }
+        guard command == nil, let argv = ProcessArgs.argv(of: pgid), let line = Self.agentCommand(argv: argv) else { return false }
+        commandFromForeground = true
+        adoptCommand(line, launchedAt: ProcessArgs.startTime(of: pgid) ?? Date())
+        return true
+    }
+
+    /// The agent command an argv runs, joined for display and resume: a direct path yields its
+    /// tool's name (`/opt/bin/omp` → `omp`), arguments are kept. Interpreters (node, bun, python)
+    /// could be anything, so they yield nil rather than a guess.
+    nonisolated public static func agentCommand(argv: [String]) -> String? {
+        guard let exe = argv.first else { return nil }
+        var words = argv
+        if exe.contains("/") { words[0] = (exe as NSString).lastPathComponent }
+        let line = ShellWords.join(words)
+        return SessionResume.conversationTool(for: line) != nil ? line : nil
     }
 
     static func environment(tileId: String, shell: String, nonce: String, overrides: [String: String] = [:]) -> [String] {
