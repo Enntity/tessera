@@ -135,6 +135,8 @@ public final class OverseerChat {
         if watching, let id = latestReply?.id, id != seenId {
             seenId = id
             Preferences.store.set(id, forKey: "tessera.overseerSeenReply")
+            // A reply looked at while it lands is seen, so the tile is too.
+            if let tile = workspace?.overseerId { workspace?.acknowledge(tile) }
         }
         let now = latestReply?.id != nil && latestReply?.id != seenId
         if unread != now { unread = now }

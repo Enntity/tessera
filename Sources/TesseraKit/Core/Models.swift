@@ -271,6 +271,13 @@ public struct BoardState: Equatable, Sendable {
         }
     }
 
+    /// A tile that is never a result to review (the overseer has its own card at the top of the
+    /// lane) leaves `done` and the queue; asking or failed it still counts and is visited.
+    public mutating func withoutReview(of id: String?) {
+        guard let id, done.remove(id) != nil else { return }
+        queue.removeAll { $0 == id }
+    }
+
     /// Everything waiting on the user (`TileInfo.needsUser`).
     public var needsUser: Set<String> { Set(queue) }
 

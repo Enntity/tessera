@@ -179,4 +179,34 @@ extension OverseerChatTests {
         XCTAssertFalse(workspace.boardTiles.contains { $0.id == id })
         // And the queue-side counts keep it once it asks (see the asking test above).
     }
+
+    /// A finished overseer turn is the card's business, not a second row under To review: its tile
+    /// leaves `done` and the queue. The steward doesn't brief on it, though Accord still hears of it.
+    func testAFinishedOverseerTurnIsNoResultToReview() throws {
+        // Only a debug build takes its folder from the environment.
+        #if !DEBUG
+        throw XCTSkip("needs a debug build")
+        #endif
+        let dir = try tempDir()
+        setenv("TESSERA_DATA_DIR", dir.path, 1)
+        defer { unsetenv("TESSERA_DATA_DIR") }
+        let workspace = Workspace()
+        addTeardownBlock { @MainActor in workspace.prepareForQuit() }
+        // A turn that's over while the agent still sits there: a burst then quiet, which is what
+        // made an unseen finish a review row.
+        workspace.overseerCommand = "sh -c 'i=0; while [ $i -lt 25 ]; do echo line$i; i=$((i+1)); sleep 0.1; done; exec sleep 300'"
+        workspace.start()
+        let id = try XCTUnwrap(workspace.overseer())
+        let deadline = Date().addingTimeInterval(15)
+        while Date() < deadline, workspace.info(id)?.activity != .done {
+            RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        }
+        XCTAssertEqual(workspace.info(id)?.activity, .done)
+        RunLoop.main.run(until: Date().addingTimeInterval(0.2))
+        XCTAssertFalse(workspace.state.done.contains(id))
+        XCTAssertFalse(workspace.state.queue.contains(id))
+        // Out of the steward's reading; still reported to Accord.
+        XCTAssertFalse(workspace.steward.digests?().contains { $0.id == id } ?? true)
+        XCTAssertTrue(workspace.accord.digests?().contains { $0.id == id } ?? false)
+    }
 }

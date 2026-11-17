@@ -5,9 +5,11 @@
 - Agents can wake an idle agent tile with a prompt: an Accord `native-prompt` delivery (or the new
   `send_to_tile` tool / `tessera send`) is typed at its prompt once it sits idle — never into a
   shell, a busy or asking tile, or one you've just typed into. Settings chooses who may skip the
-  approval card (the overseer by default), a tile's menu can keep it out entirely, and messages
+  approval card (the overseer by default), a tile's menu can make every wake for it ask first, and messages
   for desktop-app conversations offer Open and Copy instead. The tile card shows the message and
   where it got to.
+- Fixed: a finished overseer turn no longer lists its tile a second time under To review or
+  Can be put away — its own card stands for it — and reading its reply marks the tile seen.
 - Hovering an account card now shows its full text, and clicking it opens the provider's account
   page (or Copy Link from its menu).
 - Fixed: Accord display names and summaries stopped reaching the board whenever Accord rejected one
