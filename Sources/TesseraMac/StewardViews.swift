@@ -89,8 +89,12 @@ struct AgentsSettings: View {
             Section("Agent API") {
                 Toggle("Let agents on this Mac use Tessera", isOn: Bindable(server).enabled)
                 Text(server.isRunning ? "\(server.status) · \(server.calls) calls" : server.status).note()
-                Toggle("Agents may type messages into terminal agents without asking", isOn: $desk.typingAllowed)
-                Text("Accord connects agents, messages, questions and shared resources. Tessera adds native board and screen inspection. Off: each request to type into a terminal waits for your OK in the lane.").note()
+                Picker("Who may wake idle agents without asking", selection: $desk.wakePolicy) {
+                    Text("Only the overseer").tag(WakePolicy.overseer)
+                    Text("The overseer and agents on this board").tag(WakePolicy.overseerAndPeers)
+                    Text("No one; ask me each time").tag(WakePolicy.askAlways)
+                }
+                Text("Accord connects agents, messages, questions and shared resources. Tessera adds native board and screen inspection. A message for a terminal agent is typed once the tile sits idle at its prompt; asking first shows it as a card in the lane. A tile's own menu can keep it out of this entirely.").note()
                 HStack {
                     Spacer()
                     Button(installing ? "Installing…" : "Connect Agents through Accord…") {

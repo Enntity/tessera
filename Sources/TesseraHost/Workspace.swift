@@ -147,6 +147,8 @@ public final class Workspace {
             // A board its chips narrow shows only what still belongs: a tile that leaves (one that
             // stops waiting, under Needs you) takes the selection off with it.
             reconcileSelection()
+            // A tile that just went idle can take the next queued wake message.
+            pumpWakes()
         }
         agents.onChange = { [weak self] in self?.agentsChanged() }
         agents.start()
@@ -178,7 +180,18 @@ public final class Workspace {
         accord.paused = { [weak self] in self?.agentTools.privacy() ?? true }
         accord.deliver = { [weak self] delivery, tile, sender, text, wantsTyping in
             guard let self, let info = self.info(tile) else { return false }
-            return self.desk.importAccordMessage(id: delivery, text: text, from: sender, to: tile, title: info.title, wantsTyping: wantsTyping && self.terminals[tile] != nil)
+            let senderTile = self.tileForSender(sender)
+            let kind = self.wakeKind(forTile: senderTile)
+            let label = senderTile.flatMap { self.info($0)?.title } ?? sender
+            return self.desk.importMessage(id: "accord:" + delivery, text: text, from: label, address: sender, tile: senderTile,
+                                           to: tile, title: info.title, route: self.wakeRoute(for: tile, kind: kind, wantsTyping: wantsTyping))
+        }
+        desk.openWithText = { [weak self] tile, text in
+            guard let self else { return false }
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(text, forType: .string)
+            self.openNative(tile, at: nil)
+            return true
         }
         accord.questions = { [weak self] questions in self?.desk.importAccordQuestions(questions) }
         accord.notes = { [weak self] in self?.desk.importAccordNotes($0) }
@@ -223,6 +236,7 @@ public final class Workspace {
             info.activity = .working
         }
         if info.needs?.isEmpty == true { info.needs = nil }
+        info.wake = desk.wakeMark(for: id)
         return info
     }
 
@@ -845,6 +859,126 @@ public final class Workspace {
 
     private func deskChanged() {
         agents.setExternal(desk.sessions, source: "desk")
+        pumpWakes()
+    }
+
+    // MARK: Waking idle agents
+
+    @ObservationIgnored private var wakeTimer: Timer?
+    @ObservationIgnored private var pumpingWakes = false
+    @ObservationIgnored private var wakeAgain = false
+    /// When each tile last had a queued message typed into it — typing is asynchronous (the
+    /// Return lands a beat after the paste), so a fresh wake holds the next message back
+    /// until the tile has had time to take it.
+    @ObservationIgnored private var wokeAt: [String: Date] = [:]
+
+    /// A tile can take a queued message when it runs an agent (never a bare shell), is running and
+    /// not suspended, sits at an idle or finished prompt — not working, asking, starting or ended —
+    /// hasn't had a queued message typed into it in the last 10 seconds, and the user hasn't
+    /// typed into it in the last 20 seconds.
+    static func canWake(activity: TileActivity, isAgent: Bool, running: Bool, suspended: Bool,
+                      lastUserInputAt: Date?, lastWokeAt: Date? = nil, now: Date = Date()) -> Bool {
+        guard isAgent, running, !suspended, [.idle, .done].contains(activity) else { return false }
+        if let lastWokeAt, now.timeIntervalSince(lastWokeAt) < 10 { return false }
+        return lastUserInputAt.map { now.timeIntervalSince($0) >= 20 } ?? true
+    }
+
+    #if DEBUG
+    /// Test seam: overrides `isWakeableTerminal`.
+    @ObservationIgnored var isWakeableTerminalOverride: ((String) -> Bool)?
+    #endif
+
+    /// The tile is a terminal running an agent conversation — the only thing a message may be
+    /// typed into.
+    public func isWakeableTerminal(_ id: String) -> Bool {
+        #if DEBUG
+        if let isWakeableTerminalOverride { return isWakeableTerminalOverride(id) }
+        #endif
+        return terminals[id]?.command.flatMap(SessionResume.conversationTool(for:)) != nil
+    }
+
+    /// Types queued wake messages into tiles that are ready for them: first in, first out per
+    /// tile, one each pass — after typing, the tile goes to work and its next waits for idle.
+    /// A tile that's gone fails its queue, so the user is told to check. Re-entrant calls
+    /// (the desk's own changed() fires mid-delivery) mark the pass to run once more instead.
+    func pumpWakes() {
+        if pumpingWakes { wakeAgain = true; return }
+        pumpingWakes = true
+        defer { pumpingWakes = false }
+        desk.expireQueued()
+        repeat {
+            wakeAgain = false
+            for tile in desk.queuedTiles {
+                guard let t = terminals[tile] else { desk.failQueued(tile); continue }
+                guard Self.canWake(activity: t.info.activity, isAgent: isWakeableTerminal(tile), running: t.isRunning,
+                                   suspended: t.isSuspended, lastUserInputAt: t.lastUserInputAt,
+                                   lastWokeAt: wokeAt[tile]) else { continue }
+                if desk.deliverQueued(tile) { wokeAt[tile] = Date() }
+            }
+        } while wakeAgain
+        // While anything is queued a slow pump catches a tile going idle between observations.
+        if desk.queuedTiles.isEmpty {
+            wakeTimer?.invalidate()
+            wakeTimer = nil
+        } else if wakeTimer == nil {
+            let timer = Timer(timeInterval: 2, repeats: true) { [weak self] _ in
+                MainActor.assumeIsolated { self?.pumpWakes() }
+            }
+            wakeTimer = timer
+            RunLoop.main.add(timer, forMode: .common)
+        }
+    }
+
+    /// The tile an Accord address speaks from on this board, if any: a tile's own session, or the
+    /// terminal or app conversation its `nativeSession` binding names (the overseer's reports
+    /// claude/<its session id>). Falls back to the tile whose session that address reports.
+    func tileForSender(_ address: String) -> String? {
+        guard let ref = accord.senderTiles[address]
+                ?? accord.tileRecords.first(where: { $0.value.address == address })?.key else { return nil }
+        if exists(ref) { return ref }
+        guard let colon = ref.firstIndex(of: ":") else { return nil }
+        let external = String(ref[ref.index(after: colon)...])
+        if let tile = terminals.first(where: { $0.value.sessionId == external })?.key { return tile }
+        return agents.sessions[ref] != nil ? ref : nil
+    }
+
+    /// Who a message's sender is on this board: the overseer tile, another tile, or unplaced.
+    func wakeKind(forTile tile: String?) -> WakePolicy.SenderKind {
+        tile == nil ? .other : tile == overseerId ? .overseer : .peer
+    }
+
+    /// What becomes of a message asking for a tile's prompt: an app conversation is offered to
+    /// open with the text copied, a terminal agent is queued for typing or asks first, anything
+    /// else keeps the message in Accord only.
+    private func wakeRoute(for tile: String, kind: WakePolicy.SenderKind, wantsTyping: Bool) -> AgentDesk.Route {
+        guard wantsTyping else { return .inbox }
+        if opensInApp(tile) { return .open }
+        guard isWakeableTerminal(tile) else { return .inbox }
+        return desk.wakePolicy.allows(kind, tileOptedOut: desk.noWake.contains(tile)) ? .queued : .ask
+    }
+
+    /// A message from one tile to another (`send_to_tile`): the same routes an Accord delivery
+    /// takes. Says what became of it in one line.
+    @discardableResult
+    func sendToTile(_ tile: String, text: String, from senderTile: String?, label: String) throws -> String {
+        guard senderTile != tile else { throw AgentTools.Refusal("A tile can't send a message to itself.") }
+        let text = String(text.trimmingCharacters(in: .whitespacesAndNewlines).prefix(4000))
+        guard !text.isEmpty else { throw AgentTools.Refusal("Nothing to send: the message is empty.") }
+        guard let info = info(tile) else { throw AgentTools.Refusal("No such tile.") }
+        let kind = wakeKind(forTile: senderTile)
+        let id = "local:" + UUID().uuidString
+        let route = wakeRoute(for: tile, kind: kind, wantsTyping: true)
+        guard route != .inbox else {
+            throw AgentTools.Refusal("\(info.title) isn't an agent in a terminal or an app conversation; it can't be woken with a prompt.")
+        }
+        guard desk.importMessage(id: id, text: text, from: label, address: nil, tile: senderTile, to: tile, title: info.title, route: route) else {
+            throw AgentTools.Refusal("Couldn't record the delivery.")
+        }
+        switch route {
+        case .open: return "Shown to the developer to open \(info.title) with it on the pasteboard."
+        case .ask: return "Waiting for the developer's OK to type it into \(info.title)."
+        default: return "Will be typed when \(info.title) is idle at its prompt."
+        }
     }
 
     /// Canonical native identities, including Claude desktop's distinct CLI session ID.
@@ -894,9 +1028,10 @@ public final class Workspace {
     }
 
     /// Types an agent's message into a terminal tile as a paste, then presses Return, the way the
-    /// user would. False when the tile isn't a running terminal.
+    /// user would. False when the tile isn't a running terminal — and a bare shell is never
+    /// typed into, whoever asked.
     func typeMessage(_ text: String, into id: String) -> Bool {
-        guard let t = terminals[id], t.isRunning else { return false }
+        guard let t = terminals[id], t.isRunning, isWakeableTerminal(id) else { return false }
         let bracketed = t.terminal.bracketedPasteMode
         t.send(Array(((bracketed ? "\u{1b}[200~" : "") + text + (bracketed ? "\u{1b}[201~" : "")).utf8))
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { t.send([13]) }

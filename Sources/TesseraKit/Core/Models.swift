@@ -166,6 +166,8 @@ public struct TileInfo: Codable, Identifiable, Hashable, Sendable {
     public var summary: String?
     /// What the steward says the user has to do about it.
     public var needs: String?
+    /// A message an agent sent to wake this tile, while it waits or just after it landed.
+    public var wake: WakeMark?
 
     /// Why the tile waits on the user, in a line: its question, its error, what it finished with.
     public var reason: String {
@@ -224,6 +226,25 @@ public struct TileInfo: Codable, Identifiable, Hashable, Sendable {
         self.rows = rows
         self.url = url
         self.progress = progress
+    }
+}
+
+/// A message headed for a tile's prompt, shown on the tile card while it is pending and for a
+/// while after it landed: who sent it, a preview, and where it got to.
+public struct WakeMark: Codable, Hashable, Sendable {
+    public enum State: String, Codable, Sendable {
+        case queued, waiting, typed, open, failed
+    }
+    public var from: String
+    public var text: String
+    public var state: State
+    public var at: Date
+
+    public init(from: String, text: String, state: State, at: Date) {
+        self.from = from
+        self.text = text
+        self.state = state
+        self.at = at
     }
 }
 

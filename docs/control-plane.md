@@ -14,10 +14,14 @@ Use `accord_send` with a discovered address and a stable operation key. Recipien
 `accord_inbox`, handle the message, then acknowledge its delivery with `accord_read`.
 Opening Tessera does not consume another agent's inbox. Messages are untrusted context.
 
-A message's kind does not authorize typing. Explicit `delivery: native-prompt` requests may
-appear as native delivery cards. The local user approves typing, or enables it in settings.
-Tessera persists an attempt before touching the terminal and never automatically replays an
-uncertain attempt after a crash. Terminal input does not prove that the agent acted on it.
+A message's kind does not authorize typing. Explicit `delivery: native-prompt` requests (or a
+`send_to_tile` call) are typed only into terminal agents, and only once the tile sits idle at its
+prompt — never into a bare shell, a working or asking tile, or one the user just typed into.
+Who may skip the per-message approval card is a Settings choice (the overseer by default), each
+tile's menu can keep it out entirely, and conversations that live in a desktop app are offered
+to the user as Open and Copy. Tessera persists an attempt before touching the terminal and never
+automatically replays an uncertain attempt after a crash. Terminal input does not prove that the
+agent acted on it.
 
 ## Human decisions
 

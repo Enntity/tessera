@@ -184,7 +184,7 @@ final class AgentAPITests: XCTestCase {
         XCTAssertEqual((result["serverInfo"] as? [String: Any])?["name"] as? String, "tessera")
         let list = try await call(workspace, "tools/list")
         let names = ((list["result"] as? [String: Any])?["tools"] as? [[String: Any]])?.compactMap { $0["name"] as? String }
-        XCTAssertEqual(names, ["board", "read_tile", "whoami"])
+        XCTAssertEqual(names, ["board", "read_tile", "send_to_tile", "whoami"])
         let unknown = try await call(workspace, "nope")
         XCTAssertNotNil(unknown["error"])
         let malformedCaller = try await call(workspace, "tools/call", ["name": "whoami", "_meta": ["tessera/caller": "invalid scalar"]])
@@ -383,5 +383,67 @@ final class StewardLifecycleTests: XCTestCase {
         XCTAssertNil(service.brief)
         XCTAssertTrue(service.summaries.isEmpty)
         XCTAssertEqual(service.status, .off)
+    }
+}
+
+extension AgentAPITests {
+    /// `send_to_tile` is the board's own native-prompt delivery: the overseer's message to an
+    /// agent tile is queued for its idle prompt; unknown callers, unknown tiles, empty text and
+    /// non-agent tiles are refused; anyone else waits for the developer's OK.
+    func testSendToTileRoutesLikeAnAccordDelivery() async throws {
+        let workspace = try board()
+        workspace.agentTools.attach(workspace)
+        workspace.overseerCommand = "cat"
+        let over = try XCTUnwrap(workspace.overseer())
+        let agent = workspace.launch(command: "claude-fake-xyz", cwd: dir.path)
+        let shell = workspace.launch(command: "cat", cwd: dir.path)
+        let list = try await call(workspace, "tools/list")
+        let names = ((list["result"] as? [String: Any])?["tools"] as? [[String: Any]] ?? []).compactMap { $0["name"] as? String }
+        XCTAssertTrue(names.contains("send_to_tile"))
+        let (queued, qErr) = try await tool(workspace, "send_to_tile", ["tile": agent, "text": "check the build"], tile: over)
+        XCTAssertFalse(qErr)
+        XCTAssertTrue(queued.contains("idle at its prompt"), queued)
+        XCTAssertEqual(workspace.desk.messages.last?.delivery, "queued")
+        XCTAssertEqual(workspace.desk.messages.last?.fromTile, over)
+        // Refusals: a tile can't message itself, unknown tiles and empty text are refused, and a
+        // bare shell can't be woken.
+        for args in [["tile": over, "text": "x"], ["tile": "no-such-tile", "text": "x"],
+                     ["tile": agent, "text": "  "], ["tile": shell, "text": "x"]] {
+            let (_, err) = try await tool(workspace, "send_to_tile", args, tile: over)
+            XCTAssertTrue(err, "\(args)")
+        }
+        // An agent the board can't place asks first.
+        let (waiting, wErr) = try await tool(workspace, "send_to_tile", ["tile": agent, "text": "ping"], tile: "ghost-tile")
+        XCTAssertFalse(wErr)
+        XCTAssertTrue(waiting.contains("OK"), waiting)
+        XCTAssertEqual(workspace.desk.messages.last?.delivery, "waiting")
+        XCTAssertEqual(workspace.desk.choices(for: AgentDesk.idPrefix + workspace.desk.messages.last!.id), ["Deliver", "Don't"])
+    }
+
+    /// Two queued messages for one tile: a pump types the first, and the desk's own change
+    /// callbacks re-entering the pump can't type the second while its paste is still
+    /// mid-flight — the per-tile cooldown holds it until the tile has taken the first.
+    func testAPumpTypesOncePerTileThenWaitsOutTheCooldown() async throws {
+        let workspace = try board()
+        workspace.isWakeableTerminalOverride = { _ in true }
+        let tile = workspace.launch(command: "sleep 30", cwd: dir.path)
+        defer { workspace.shutDown(tile) }
+        for _ in 0..<400 where workspace.info(tile)?.activity != .idle { try await Task.sleep(nanoseconds: 50_000_000) }
+        XCTAssertEqual(workspace.info(tile)?.activity, .idle)
+        var typed: [String] = []
+        workspace.desk.typeInto = { _, text in typed.append(text); return true }
+        workspace.desk.onChange = { workspace.pumpWakes() }
+        for id in ["local:one", "local:two"] {
+            XCTAssertTrue(workspace.desk.importMessage(id: id, text: "hi", from: "overseer", address: nil, tile: nil,
+                                                     to: tile, title: "Worker", route: .queued))
+        }
+        workspace.pumpWakes()
+        XCTAssertEqual(typed.count, 1)
+        XCTAssertTrue(typed[0].hasSuffix("hi"))
+        // Immediate further pumps stay within the cooldown: nothing more is typed.
+        workspace.pumpWakes()
+        workspace.pumpWakes()
+        XCTAssertEqual(typed.count, 1)
+        XCTAssertEqual(workspace.desk.messages.map(\.delivery), ["typed", "queued"])
     }
 }

@@ -69,6 +69,12 @@ struct TileMenu: View {
         }
         let dock = model.dockAction(for: info)
         Button(dock.title, action: dock.run)
+        if workspace.isWakeableTerminal(info.id) {
+            // Opted out, a message for this tile always asks first, whatever the policy allows.
+            Toggle("Let Agents Wake This Tile Without Asking",
+                   isOn: Binding(get: { !workspace.desk.noWake.contains(info.id) },
+                                 set: { workspace.desk.setNoWake(info.id, !$0) }))
+        }
         Button("Rename…", action: rename)
         ForEach(model.actions(for: info)) { action in Button(action.title, action: action.run) }
         if info.needsUser { Button(info.dismissLabel) { workspace.dismiss(info.id) } }

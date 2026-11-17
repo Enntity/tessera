@@ -13,16 +13,19 @@ final class AccordBridgeTests: XCTestCase {
     }
     func testDeliverySurvivesRestartAndDoesNotRetype() throws {
         let dir = try directory(), desk = AgentDesk(directory: dir)
-        let previous = desk.typingAllowed
-        defer { desk.typingAllowed = previous }
-        desk.typingAllowed = true
         var typed = 0
         desk.typeInto = { _, _ in typed += 1; return true }
-        XCTAssertTrue(desk.importAccordMessage(id: "one", text: "Check progress", from: "overseer", to: "tile", title: "Worker", wantsTyping: true))
+        XCTAssertTrue(desk.importMessage(id: "accord:one", text: "Check progress", from: "overseer", address: nil, tile: nil,
+                                       to: "tile", title: "Worker", route: .queued))
+        // Queued is not typed on the spot: the pump types it once the tile sits idle.
+        XCTAssertEqual(desk.messages.first?.delivery, "queued")
+        XCTAssertEqual(typed, 0)
+        XCTAssertTrue(desk.deliverQueued("tile"))
         XCTAssertEqual(typed, 1)
         let restarted = AgentDesk(directory: dir)
         restarted.typeInto = { _, _ in typed += 1; return true }
-        XCTAssertTrue(restarted.importAccordMessage(id: "one", text: "Check progress", from: "overseer", to: "tile", title: "Worker", wantsTyping: true))
+        XCTAssertTrue(restarted.importMessage(id: "accord:one", text: "Check progress", from: "overseer", address: nil, tile: nil,
+                                            to: "tile", title: "Worker", route: .queued))
         XCTAssertEqual(typed, 1)
         XCTAssertEqual(restarted.messages.count, 1)
     }
@@ -32,7 +35,8 @@ final class AccordBridgeTests: XCTestCase {
         let desk = AgentDesk(directory: file)
         var typed = false
         desk.typeInto = { _, _ in typed = true; return true }
-        XCTAssertFalse(desk.importAccordMessage(id: "one", text: "Check", from: "overseer", to: "tile", title: "Worker", wantsTyping: true))
+        XCTAssertFalse(desk.importMessage(id: "accord:one", text: "Check", from: "overseer", address: nil, tile: nil,
+                                        to: "tile", title: "Worker", route: .queued))
         XCTAssertFalse(typed)
         XCTAssertTrue(desk.messages.isEmpty)
     }
@@ -79,20 +83,18 @@ extension AccordBridgeTests {
     }
     func testPromptAttemptIsPersistedBeforeNativeInput() throws {
         let dir = try directory(), desk = AgentDesk(directory:dir)
-        let previous = desk.typingAllowed
-        defer { desk.typingAllowed = previous }
-        desk.typingAllowed = false
-        XCTAssertTrue(desk.importAccordMessage(id:"effect",text:"Check",from:"agent",to:"tile",title:"Tile",wantsTyping:true))
+        XCTAssertTrue(desk.importMessage(id:"accord:effect",text:"Check",from:"agent",address:nil,tile:nil,to:"tile",title:"Tile",route:.queued))
         desk.typeInto = { _,_ in
             let restarted = AgentDesk(directory:dir)
             XCTAssertEqual(restarted.messages.first?.delivery,"attempting")
             var replayed = false
             restarted.typeInto = { _,_ in replayed = true; return true }
-            restarted.approveDelivery("accord:effect",true)
+            // An uncertain attempt is never replayed, even as the queue moves on.
+            restarted.deliverQueued("tile")
             XCTAssertFalse(replayed)
             return true
         }
-        desk.approveDelivery("accord:effect",true)
+        desk.deliverQueued("tile")
         XCTAssertEqual(desk.messages.first?.delivery,"typed")
     }
 }
@@ -353,5 +355,171 @@ extension AccordBridgeTests {
         let (body, response) = try await URLSession.shared.data(for: request)
         XCTAssertEqual((response as? HTTPURLResponse)?.statusCode, 200)
         return try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
+    }
+}
+
+extension AccordBridgeTests {
+    /// A queued delivery is typed in order, one per pass: the tile goes to work after the first,
+    /// so the next waits for it to sit idle again.
+    func testQueuedDeliveriesTypeInOrderOnePerPass() throws {
+        let dir = try directory(), desk = AgentDesk(directory: dir)
+        var typed: [String] = []
+        desk.typeInto = { _, text in typed.append(text); return true }
+        XCTAssertTrue(desk.importMessage(id: "accord:one", text: "First", from: "Tessera", address: "mac/obs-1", tile: "over",
+                                       to: "tile", title: "Worker", route: .queued))
+        XCTAssertTrue(desk.importMessage(id: "accord:two", text: "Second", from: "Tessera", address: "mac/obs-1", tile: "over",
+                                       to: "tile", title: "Worker", route: .queued))
+        XCTAssertEqual(desk.queuedTiles, ["tile"])
+        desk.deliverQueued("tile")
+        XCTAssertEqual(typed.count, 1)
+        XCTAssertEqual(desk.messages.map(\.delivery), ["typed", "queued"])
+        desk.deliverQueued("tile")
+        XCTAssertEqual(typed.count, 2)
+        // The first typed carries who sent it, where to answer, and how to acknowledge.
+        XCTAssertEqual(typed.first, "[Message from Tessera via Accord; reply with accord_send to mac/obs-1; accord_read one once handled] First")
+    }
+
+    /// A local send types the same message without Accord's reply/read instructions.
+    func testALocalSendIsTypedWithoutAccordMachinery() throws {
+        let dir = try directory(), desk = AgentDesk(directory: dir)
+        var typed: [String] = []
+        desk.typeInto = { _, text in typed.append(text); return true }
+        XCTAssertTrue(desk.importMessage(id: "local:abc", text: "Look at tests", from: "Builder", address: nil, tile: "from-tile",
+                                       to: "tile", title: "Worker", route: .queued))
+        desk.deliverQueued("tile")
+        XCTAssertEqual(typed, ["[Message from Builder via Tessera] Look at tests"])
+    }
+
+    /// "Deliver" on a waiting card queues it for idle; it is never typed on the spot.
+    func testDeliverOnAWaitingCardQueuesNotTypes() throws {
+        let dir = try directory(), desk = AgentDesk(directory: dir)
+        var typed = 0
+        desk.typeInto = { _, _ in typed += 1; return true }
+        XCTAssertTrue(desk.importMessage(id: "accord:one", text: "Check", from: "agent", address: "mac/a", tile: nil,
+                                       to: "tile", title: "Tile", route: .ask))
+        XCTAssertEqual(desk.choices(for: "ask:accord:one"), ["Deliver", "Don't"])
+        desk.respond("ask:accord:one", with: "Deliver")
+        XCTAssertEqual(desk.messages.first?.delivery, "queued")
+        XCTAssertEqual(typed, 0)
+        desk.deliverQueued("tile")
+        XCTAssertEqual(typed, 1)
+    }
+
+    /// A queued delivery survives a restart as queued — it still types when the tile is ready.
+    func testARestartKeepsWhatIsQueued() throws {
+        let dir = try directory()
+        let desk = AgentDesk(directory: dir)
+        XCTAssertTrue(desk.importMessage(id: "accord:one", text: "Check", from: "agent", address: nil, tile: nil,
+                                       to: "tile", title: "Tile", route: .queued))
+        let restarted = AgentDesk(directory: dir)
+        XCTAssertEqual(restarted.messages.first?.delivery, "queued")
+        XCTAssertEqual(restarted.queuedTiles, ["tile"])
+        var typed = false
+        restarted.typeInto = { _, _ in typed = true; return true }
+        restarted.deliverQueued("tile")
+        XCTAssertTrue(typed)
+    }
+
+    /// A tile that is gone fails its queue, so the "Check delivery" card tells the user.
+    func testAGoneTileFailsItsQueue() throws {
+        let dir = try directory(), desk = AgentDesk(directory: dir)
+        XCTAssertTrue(desk.importMessage(id: "accord:one", text: "Check", from: "agent", address: nil, tile: nil,
+                                       to: "gone", title: "Gone", route: .queued))
+        desk.failQueued("gone")
+        XCTAssertEqual(desk.messages.first?.delivery, "failed")
+        XCTAssertTrue(desk.sessions.contains { $0.snapshot.activity == .needsInput && $0.title.contains("Check delivery") })
+    }
+
+    /// A queued message that outlives the desk's keep window fails rather than typing a day late.
+    func testAQueuedMessageLeftForADayFailsInsteadOfTypingLate() throws {
+        let dir = try directory(), desk = AgentDesk(directory: dir)
+        var typed = 0
+        desk.typeInto = { _, _ in typed += 1; return true }
+        XCTAssertTrue(desk.importMessage(id: "local:old", text: "Check", from: "agent", address: nil, tile: nil,
+                                       to: "tile", title: "Worker", route: .queued, at: Date().addingTimeInterval(-90000)))
+        desk.expireQueued()
+        XCTAssertEqual(desk.messages.first?.delivery, "failed")
+        XCTAssertFalse(desk.deliverQueued("tile"))
+        XCTAssertEqual(typed, 0)
+    }
+
+    /// Done-with messages of any origin age out; a card still waiting for the user, or a message
+    /// still queued or failed, keeps its place no matter how old.
+    func testFinishedMessagesAgeOutWhateverTheirOrigin() throws {
+        let dir = try directory(), desk = AgentDesk(directory: dir)
+        desk.typeInto = { _, _ in true }
+        let old = Date().addingTimeInterval(-90000)
+        XCTAssertTrue(desk.importMessage(id: "local:done", text: "x", from: "o", address: nil, tile: nil,
+                                       to: "tile", title: "W", route: .queued, at: old))
+        desk.deliverQueued("tile")
+        XCTAssertTrue(desk.messages.isEmpty)
+        XCTAssertTrue(desk.importMessage(id: "accord:wait", text: "x", from: "o", address: nil, tile: nil,
+                                       to: "tile", title: "W", route: .ask, at: old))
+        XCTAssertTrue(desk.importMessage(id: "local:held", text: "x", from: "o", address: nil, tile: nil,
+                                       to: "tile", title: "W", route: .queued, at: old))
+        desk.expireQueued()
+        XCTAssertEqual(desk.messages.map(\.delivery), ["waiting", "failed"])
+    }
+
+    /// A message for a conversation in a desktop app is offered to open with the text copied —
+    /// never typed anywhere.
+    func testAnAppConversationIsOpenedWithTheTextCopied() throws {
+        let dir = try directory(), desk = AgentDesk(directory: dir)
+        var typed = 0, opened: (tile: String, text: String)?
+        desk.typeInto = { _, _ in typed += 1; return true }
+        desk.openWithText = { tile, text in opened = (tile, text); return true }
+        XCTAssertTrue(desk.importMessage(id: "accord:one", text: "Summarize the board", from: "Tessera", address: "mac/obs", tile: nil,
+                                       to: "app-tile", title: "Claude", route: .open))
+        XCTAssertEqual(desk.choices(for: "ask:accord:one"), ["Open and Copy", "Dismiss"])
+        desk.respond("ask:accord:one", with: "Open and Copy")
+        XCTAssertEqual(opened?.tile, "app-tile")
+        XCTAssertEqual(opened?.text, "[Message from Tessera via Accord; reply with accord_send to mac/obs; accord_read one once handled] Summarize the board")
+        XCTAssertEqual(desk.messages.first?.delivery, "opened")
+        XCTAssertEqual(typed, 0)
+    }
+
+    /// The tile-card mark: pending states while they last, delivered ones for an hour.
+    func testTheWakeMarkTracksTheLatestMessage() throws {
+        let dir = try directory(), desk = AgentDesk(directory: dir)
+        XCTAssertNil(desk.wakeMark(for: "tile"))
+        XCTAssertTrue(desk.importMessage(id: "accord:one", text: "Check", from: "Tessera", address: nil, tile: nil,
+                                       to: "tile", title: "Tile", route: .queued))
+        XCTAssertEqual(desk.wakeMark(for: "tile")?.state, .queued)
+        desk.typeInto = { _, _ in true }
+        desk.deliverQueued("tile")
+        let mark = try XCTUnwrap(desk.wakeMark(for: "tile"))
+        XCTAssertEqual(mark.state, .typed)
+        XCTAssertEqual(mark.from, "Tessera")
+        XCTAssertNil(desk.wakeMark(for: "tile", now: Date().addingTimeInterval(3700)))
+    }
+
+    /// A tile kept out of waking stays out until let back in, and survives a restart.
+    func testThePerTileOptOutPersists() throws {
+        let dir = try directory()
+        let desk = AgentDesk(directory: dir)
+        desk.setNoWake("tile", true)
+        XCTAssertTrue(AgentDesk(directory: dir).noWake.contains("tile"))
+        desk.setNoWake("tile", false)
+        XCTAssertFalse(AgentDesk(directory: dir).noWake.contains("tile"))
+    }
+}
+
+extension AccordBridgeTests {
+    /// Where a sender lives on this board: a tessera session's own tile, or the native
+    /// conversation its binding names (the overseer's is claude/<its session id>). Sessions
+    /// from other authorities never map.
+    func testSenderTilesResolveLocalNativeBindings() {
+        let sessions: [[String: Any]] = [
+            ["address": "mac/tile-session", "source": "tessera", "externalId": "tile-1", "title": "t"],
+            ["address": "mac/overseer", "source": "claude", "title": "over",
+             "nativeSession": ["source": "claude", "externalId": "session-9"]],
+            ["address": "mac/direct", "source": "agent", "title": "d",
+             "nativeSession": ["source": "tessera", "externalId": "tile-2"]],
+            ["address": "remote/other", "source": "agent", "title": "r",
+             "nativeSession": ["source": "claude", "externalId": "far"]],
+            ["address": "mac/plain", "source": "agent", "title": "p"]
+        ]
+        XCTAssertEqual(AccordBridge.senderTiles(sessions, authority: "mac"),
+                       ["mac/tile-session": "tile-1", "mac/overseer": "claude:session-9", "mac/direct": "tile-2"])
     }
 }

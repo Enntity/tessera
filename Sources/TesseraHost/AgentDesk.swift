@@ -22,15 +22,27 @@ public final class AgentDesk {
 
     public struct Message: Codable, Equatable, Sendable {
         public var id: String
+        /// The sender shown to the user (a tile's title, or the Accord address when unknown).
         public var from: String
+        /// The sender's Accord address, when it has one (nil for a local send on this board).
+        public var fromAddress: String?
         public var fromTile: String?
         public var to: String
         public var toTitle: String
         public var text: String
         public var sentAt: Date
         public var read: Bool = false
-        /// waiting (for the user to approve typing it in), typed, declined, or nil (inbox only).
+        /// waiting or open (cards for the user), queued (types when the tile is idle), attempting,
+        /// typed, opened, failed, declined, reviewed, or nil (inbox only).
         public var delivery: String?
+    }
+
+    /// What becomes of a message meant for a tile's prompt, decided by the caller: it stays in
+    /// Accord (`.inbox`), is typed once the tile sits idle at its prompt (`.queued`), waits for
+    /// the user's OK first (`.ask`), or is offered to open in a desktop app with the text on the
+    /// pasteboard (`.open`).
+    public enum Route: Equatable {
+        case inbox, queued, ask, open
     }
 
     public struct Note: Codable, Equatable, Sendable {
@@ -46,6 +58,7 @@ public final class AgentDesk {
         var notes: [Note]
         var accordDeliveries: [String]?
         var noteReads: [String]?
+        var noWake: [String]?
     }
 
     public private(set) var questions: [Question] = []
@@ -55,27 +68,38 @@ public final class AgentDesk {
     @ObservationIgnored public var onChange: (() -> Void)?
     /// Types a message into a terminal tile; false when it can't (not a running terminal).
     @ObservationIgnored public var typeInto: ((String, String) -> Bool)?
-    /// Agents may type messages straight into terminal agents; otherwise the user approves each one.
-    public var typingAllowed = Preferences.store.bool(forKey: "tessera.agentsMayType") {
-        didSet { Preferences.store.set(typingAllowed, forKey: "tessera.agentsMayType") }
+    /// Opens an app conversation with the message's text already on the pasteboard; false when it can't.
+    @ObservationIgnored public var openWithText: ((String, String) -> Bool)?
+    /// Who may have a message typed without the user approving each one (Settings → Agents).
+    public var wakePolicy = WakePolicy.stored {
+        didSet { wakePolicy.save() }
     }
+    /// Tiles the user has kept from being woken without asking, however the policy reads.
+    public private(set) var noWake: Set<String> = []
 
     public static let idPrefix = "ask:"
     static let keep: TimeInterval = 24 * 3600
 
     @ObservationIgnored private let store: URL
 
-    private var accordDeliveries: Set<String> = []
+    /// Delivery ids already taken, Accord's and local ones alike.
+    private var deliveries: Set<String> = []
     private var noteReads: Set<String> = []
 
     public init(directory: URL) {
         store = directory.appendingPathComponent("accord-desk.json")
         if let saved = StateFile.load(Saved.self, from: store) {
             (questions, messages, notes) = (saved.questions, saved.messages, saved.notes)
-            accordDeliveries = Set(saved.accordDeliveries ?? [])
+            deliveries = Set(saved.accordDeliveries ?? [])
             noteReads = Set(saved.noteReads ?? [])
-
+            noWake = Set(saved.noWake ?? [])
         }
+    }
+
+    /// Tiles the user has kept from being woken without asking, however the policy reads.
+    public func setNoWake(_ id: String, _ off: Bool) {
+        if off { noWake.insert(id) } else { noWake.remove(id) }
+        changed()
     }
 
     // MARK: Questions
@@ -89,22 +113,29 @@ public final class AgentDesk {
         changed()
     }
 
-    /// Accord delivery IDs are durable deduplication keys, including across app restart.
-    public func importAccordMessage(id: String, text: String, from: String, to: String, title: String, wantsTyping: Bool) -> Bool {
-        let key = "accord:" + id
-        if accordDeliveries.contains(key) { return true }
-        guard wantsTyping else { return true } // Ordinary inbox content stays exclusively in Accord.
-        accordDeliveries.insert(key)
-        var message = Message(id: key, from: from, fromTile: nil, to: to, toTitle: title, text: Redactor.redact(text).preview(4000), sentAt: Date())
-        // Persist the delivery before optional native interaction. A crash cannot cause retyping.
-        if wantsTyping { message.delivery = "waiting" }
+    /// One message headed for a tile — an Accord delivery (`id` "accord:…") or a local send
+    /// ("local:…"). Delivery IDs are durable deduplication keys, including across app restart.
+    /// Persisted before any native interaction so a crash cannot cause retyping.
+    public func importMessage(id: String, text: String, from label: String, address: String?, tile fromTile: String?,
+                              to: String, title: String, route: Route, at: Date = Date()) -> Bool {
+        if deliveries.contains(id) { return true }
+        // Ordinary inbox content stays exclusively in Accord.
+        guard route != .inbox else { return true }
+        deliveries.insert(id)
+        var message = Message(id: id, from: label, fromAddress: address, fromTile: fromTile, to: to, toTitle: title,
+                              text: Redactor.redact(text).preview(4000), sentAt: at)
+        switch route {
+        case .queued: message.delivery = "queued"
+        case .ask: message.delivery = "waiting"
+        case .open: message.delivery = "open"
+        case .inbox: break
+        }
         messages.append(message); changed()
-        guard let saved = StateFile.load(Saved.self, from: store), saved.accordDeliveries?.contains(key) == true else {
-            accordDeliveries.remove(key)
-            messages.removeAll { $0.id == key }
+        guard let saved = StateFile.load(Saved.self, from: store), saved.accordDeliveries?.contains(id) == true else {
+            deliveries.remove(id)
+            messages.removeAll { $0.id == id }
             return false
         }
-        if wantsTyping && typingAllowed { approveDelivery(key, true) }
         return true
     }
     public func importAccordQuestions(_ values: [[String: Any]]) {
@@ -147,21 +178,92 @@ public final class AgentDesk {
 
     // MARK: Messages
 
+    /// The user's answer to a waiting card: "Deliver" queues it for when the tile sits idle at its
+    /// prompt; "Open and Copy" puts the text on the pasteboard and opens the conversation in its app.
     public func approveDelivery(_ id: String, _ approve: Bool) {
-        guard id.hasPrefix("accord:"), let i = messages.firstIndex(where: { $0.id == id }), messages[i].delivery == "waiting" else { return }
-        if !approve { messages[i].delivery = "declined"; changed(); return }
-        // Record intent before the irreversible terminal effect. After a crash this remains
-        // unknown and is never automatically replayed; displaying a message is not execution.
-        messages[i].delivery = "attempting"
-        changed()
-        guard let saved = StateFile.load(Saved.self, from: store),
-              saved.messages.first(where: { $0.id == id })?.delivery == "attempting" else { return }
-        messages[i].delivery = typeInto?(messages[i].to, Self.typed(messages[i])) == true ? "typed" : "failed"
+        guard let i = messages.firstIndex(where: { $0.id == id }) else { return }
+        switch messages[i].delivery {
+        case "waiting":
+            messages[i].delivery = approve ? "queued" : "declined"
+        case "open":
+            messages[i].delivery = approve && openWithText?(messages[i].to, Self.typed(messages[i])) == true ? "opened" : (approve ? "failed" : "declined")
+        default:
+            return
+        }
         changed()
     }
 
+    /// The tiles with messages queued for typing, in the order their first one arrived.
+    public var queuedTiles: [String] {
+        var seen: Set<String> = []
+        return messages.filter { $0.delivery == "queued" }.compactMap { seen.insert($0.to).inserted ? $0.to : nil }
+    }
+
+    /// The next queued message for a tile that can take it now: persisted as "attempting" before
+    /// the terminal is touched — after a crash it stays unknown and is never replayed — then typed
+    /// through `typeInto`. False when nothing is queued, or when the attempt never reached the
+    /// terminal (a failed persist leaves the message at "attempting" and never retried).
+    @discardableResult
+    public func deliverQueued(_ tile: String) -> Bool {
+        guard let first = messages.first(where: { $0.delivery == "queued" && $0.to == tile }) else { return false }
+        let id = first.id
+        guard let i = messages.firstIndex(where: { $0.id == id }) else { return false }
+        messages[i].delivery = "attempting"
+        changed()
+        guard let saved = StateFile.load(Saved.self, from: store),
+              saved.messages.first(where: { $0.id == id })?.delivery == "attempting",
+              let j = messages.firstIndex(where: { $0.id == id }) else { return false }
+        messages[j].delivery = typeInto?(tile, Self.typed(messages[j])) == true ? "typed" : "failed"
+        changed()
+        return true
+    }
+
+    /// A queued message that has waited past `keep` fails rather than type a day late.
+    public func expireQueued(now: Date = Date()) {
+        var touched = false
+        for i in messages.indices where messages[i].delivery == "queued" && now.timeIntervalSince(messages[i].sentAt) > Self.keep {
+            messages[i].delivery = "failed"
+            touched = true
+        }
+        if touched { changed() }
+    }
+
+    /// A queued message whose tile is gone for good fails, so the user is told to check it.
+    public func failQueued(_ tile: String) {
+        var touched = false
+        for i in messages.indices where messages[i].delivery == "queued" && messages[i].to == tile {
+            messages[i].delivery = "failed"
+            touched = true
+        }
+        if touched { changed() }
+    }
+
+    /// What the tile's card shows of the latest message headed for it: pending ones while they
+    /// last; a delivered, opened or failed one for an hour after.
+    public func wakeMark(for tile: String, now: Date = Date()) -> WakeMark? {
+        guard let m = messages.filter({ $0.to == tile }).max(by: { $0.sentAt < $1.sentAt }) else { return nil }
+        let state: WakeMark.State
+        switch m.delivery {
+        case "queued", "attempting": state = .queued
+        case "waiting": state = .waiting
+        case "open": state = .waiting
+        case "typed": state = .typed
+        case "opened": state = .open
+        case "failed": state = .failed
+        default: return nil
+        }
+        if [.typed, .open, .failed].contains(state), now.timeIntervalSince(m.sentAt) > 3600 { return nil }
+        return WakeMark(from: m.from, text: m.text, state: state, at: m.sentAt)
+    }
+
+    /// What is typed into the tile: who sent it, how to answer, and — for an Accord delivery —
+    /// how to acknowledge it once handled.
     static func typed(_ message: Message) -> String {
-        "[Message from \(message.from) via Accord] \(message.text)"
+        guard message.id.hasPrefix("accord:") else {
+            return "[Message from \(message.from) via Tessera] \(message.text)"
+        }
+        let reply = message.fromAddress.map { "; reply with accord_send to \($0)" } ?? ""
+        return "[Message from \(message.from) via Accord\(reply); accord_read \(message.id.dropFirst(7)) once handled] \(message.text)"
     }
 
     // MARK: The board
@@ -172,7 +274,7 @@ public final class AgentDesk {
         guard tileId.hasPrefix(Self.idPrefix) else { return }
         let id = String(tileId.dropFirst(Self.idPrefix.count))
         if let i = questions.firstIndex(where: { $0.id == id && $0.answer == nil }) { questions[i].dismissed = true }
-        if messages.contains(where: { $0.id == id && $0.delivery == "waiting" }) { approveDelivery(id, false) }
+        if messages.contains(where: { $0.id == id && ["waiting", "open"].contains($0.delivery ?? "") }) { approveDelivery(id, false) }
         if id.hasPrefix("accord:"), notes.contains(where: { $0.id == id }) { noteReads.insert(String(id.dropFirst(7))) }
         notes.removeAll { $0.id == id }
         if let i = messages.firstIndex(where:{ $0.id == id && ["attempting","failed"].contains($0.delivery ?? "") }) { messages[i].delivery = "reviewed" }
@@ -206,6 +308,11 @@ public final class AgentDesk {
                             detail: "Type this into \(m.toTitle)? \(m.text)", at: m.sentAt,
                             items: [ConversationItem(id: m.id, role: .assistant, text: m.text, timestamp: m.sentAt)], link: m.to))
         }
+        for m in messages where m.delivery == "open" {
+            out.append(tile(id: m.id, title: "\(m.from) → \(m.toTitle)", activity: .needsInput,
+                            detail: "Open \(m.toTitle) with this on the pasteboard? \(m.text)", at: m.sentAt,
+                            items: [ConversationItem(id: m.id, role: .assistant, text: m.text, timestamp: m.sentAt)], link: m.to))
+        }
         for n in notes {
             out.append(tile(id: n.id, title: "From \(n.from)", activity: .done, detail: n.text, at: n.at,
                             items: [ConversationItem(id: n.id, role: .assistant, text: n.text, timestamp: n.at)], link: nil))
@@ -217,15 +324,16 @@ public final class AgentDesk {
     public func choices(for tileId: String) -> [String]? {
         let id = String(tileId.dropFirst(Self.idPrefix.count))
         if let q = questions.first(where: { $0.id == id && $0.answer == nil }) { return q.options }
-        if id.hasPrefix("accord:"), messages.contains(where: { $0.id == id && $0.delivery == "waiting" }) { return ["Deliver", "Don't"] }
+        if messages.contains(where: { $0.id == id && $0.delivery == "waiting" }) { return ["Deliver", "Don't"] }
+        if messages.contains(where: { $0.id == id && $0.delivery == "open" }) { return ["Open and Copy", "Dismiss"] }
         return nil
     }
 
     /// An answer given from the lane: a question's answer, or a delivery decision.
     public func respond(_ tileId: String, with answer: String) {
         let id = String(tileId.dropFirst(Self.idPrefix.count))
-        if messages.contains(where: { $0.id == id && $0.delivery == "waiting" }) {
-            approveDelivery(id, answer == "Deliver")
+        if messages.contains(where: { $0.id == id && ["waiting", "open"].contains($0.delivery ?? "") }) {
+            approveDelivery(id, answer == "Deliver" || answer == "Open and Copy")
         } else {
             self.answer(id, with: answer)
         }
@@ -241,8 +349,10 @@ public final class AgentDesk {
     private func changed() {
         let cutoff = Date().addingTimeInterval(-Self.keep)
         questions.removeAll { $0.id.hasPrefix("accord:") && ($0.answeredAt ?? ($0.dismissed ? $0.askedAt : .distantFuture)) < cutoff }
-        messages.removeAll { $0.id.hasPrefix("accord:") && $0.sentAt < cutoff && $0.read && $0.delivery != "waiting" }
-        StateFile.save(Saved(questions: questions, messages: messages, notes: notes, accordDeliveries: Array(accordDeliveries), noteReads: Array(noteReads)), to: store)
+        // Done-with messages of any origin age out; anything still undelivered keeps its place.
+        messages.removeAll { $0.sentAt < cutoff && ["typed", "opened", "declined", "reviewed"].contains($0.delivery ?? "") }
+        StateFile.save(Saved(questions: questions, messages: messages, notes: notes, accordDeliveries: Array(deliveries),
+                             noteReads: Array(noteReads), noWake: Array(noWake)), to: store)
         onChange?()
     }
 

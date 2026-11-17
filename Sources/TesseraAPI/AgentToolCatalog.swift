@@ -13,7 +13,9 @@ public enum AgentToolCatalog {
     public static let instructions = """
         Tessera provides optional native UI inspection on this Mac. Use Accord for session discovery, \
         messages, questions, summaries, search and resource reservations. No Tessera skill or separate \
-        enrollment is needed. These tools inspect Tessera's visible board and native terminal screens.
+        enrollment is needed. These tools inspect Tessera's visible board and native terminal screens. \
+        send_to_tile delivers a message into a tile's prompt once it sits idle — accord_send with \
+        delivery "native-prompt" to the tile's Accord address does the same.
         """
 
     public static let tools: [Tool] = [
@@ -25,6 +27,11 @@ public enum AgentToolCatalog {
              properties: ["tile": ["type": "string", "description": "Tile id or exact title (from board)."],
                           "lines": ["type": "integer", "description": "How many lines or messages, default 60."]],
              required: ["tile"]),
+        Tool(name: "send_to_tile",
+             description: "Send a message to a tile, typed at its prompt once the agent is idle (a native-prompt delivery). accord_send with delivery \"native-prompt\" to the tile's Accord address does the same.",
+             properties: ["tile": ["type": "string", "description": "Tile id or exact title (from board)."],
+                          "text": ["type": "string", "description": "The message, at most 4000 characters."]],
+             required: ["tile", "text"]),
         Tool(name: "whoami",
              description: "Which tile you are, as far as Tessera can tell (from TESSERA_TILE_ID or your working folder).",
              properties: [:], required: [])
