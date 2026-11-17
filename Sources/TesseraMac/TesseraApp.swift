@@ -601,6 +601,7 @@ final class AppModel {
         if question == nil, showOverseer { return closeOverseer() }
         guard workspace.overseer(asking: question) != nil else { return }
         workspace.overseerChat.markSeen()
+        if let id = workspace.overseerId { workspace.acknowledge(id) }
         withAnimation(Style.Motion.standard) { showOverseer = true }
     }
 

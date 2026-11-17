@@ -12,21 +12,24 @@ struct AttentionLane: View {
     var body: some View {
         let state = model.workspace.state
         let steward = model.workspace.steward
-        // The queue keeps its ⌘J order inside each section, most pressing first.
-        let asking = state.queue.filter { state.needsInput.contains($0) }
-        let failed = state.queue.filter { state.failed.contains($0) }
-        let review = state.queue.filter { state.done.contains($0) }
+        // The queue keeps its ⌘J order inside each section, most pressing first. The overseer has
+        // its own card for all of this, so it takes no row.
+        let overseer = model.workspace.overseerId
+        let asking = state.queue.filter { state.needsInput.contains($0) && $0 != overseer }
+        let failed = state.queue.filter { state.failed.contains($0) && $0 != overseer }
+        let review = state.queue.filter { state.done.contains($0) && $0 != overseer }
+        let anythingWaiting = !asking.isEmpty || !failed.isEmpty || !review.isEmpty
         VStack(spacing: 0) {
             // As tall as the tab strip beside it, so the first row lines up with the first row of tiles.
             HStack(alignment: .firstTextBaseline, spacing: Style.Space.s) {
                 Text(TileActivity.needsYouLabel).micro()
-                let calling = state.needsInput.count + state.failed.count
+                let calling = asking.count + failed.count
                 if calling > 0 {
                     Text("\(calling)").font(Style.caption).foregroundStyle(Style.muted).contentTransition(.numericText())
-                        .help("\(calling) asking or failed · \(state.done.count) to review")
+                        .help("\(calling) asking or failed · \(review.count) to review")
                 }
                 Spacer()
-                if !state.queue.isEmpty {
+                if anythingWaiting {
                     Button { model.openTriage() } label: { Image(systemName: "rectangle.stack") }
                         .buttonStyle(.plain).foregroundStyle(Style.muted).help("Triage one at a time (⇧⌘J)")
                 }
@@ -50,7 +53,7 @@ struct AttentionLane: View {
                         ReviewRow(id: id, isNext: id == state.queue.first)
                     }
                     ClosableSection()
-                    if state.queue.isEmpty {
+                    if !anythingWaiting {
                         HStack {
                             Spacer()
                             VStack(spacing: Style.Space.m) {
@@ -314,7 +317,7 @@ struct ClosableSection: View {
         let steward = model.workspace.steward
         if steward.config.enabled, let brief = steward.brief {
             let closable = brief.closable.filter { item in
-                !privacy && !steward.dismissed.contains(item.id) && canClose(item.id)
+                !privacy && !steward.dismissed.contains(item.id) && item.id != model.workspace.overseerId && canClose(item.id)
             }
             if !closable.isEmpty {
                 VStack(alignment: .leading, spacing: Style.Space.xs) {
@@ -393,6 +396,8 @@ struct OverseerCard: View {
                     Text("Tessera").font(Style.ui(.label, .semibold)).foregroundStyle(Style.ink)
                     if working {
                         Text("Thinking…").font(Style.caption).foregroundStyle(Style.dim)
+                    } else if tile?.activity == .failed {
+                        Text("Stopped").font(Style.caption).foregroundStyle(Style.state(.failed))
                     } else if asking {
                         Text("Needs you").font(Style.caption).foregroundStyle(Style.state(.needsInput))
                     }

@@ -136,8 +136,10 @@ public final class Workspace {
             let tiles = self?.taskTiles ?? []
             let board = self?.boardTiles ?? []
             var state = BoardState(tiles)
-            // The overseer counts where it waits (asking, failed, done: the lane and ⌘J lead to
-            // it), but it isn't on the board — not as a working tile, and not in the chips.
+            // The overseer counts where it waits (asking, failed: the lane and ⌘J lead to it) —
+            // never as a result to review — but it isn't on the board: not as a working tile, and
+            // not in the chips.
+            state.withoutReview(of: self?.overseerId)
             state.working.formIntersection(board.map(\.id))
             return (state, BoardQuery.holdings(of: board))
         }) { [weak self] state, holdings in
@@ -159,7 +161,8 @@ public final class Workspace {
         desk.onChange = { [weak self] in self?.deskChanged() }
         desk.typeInto = { [weak self] id, text in self?.typeMessage(text, into: id) ?? false }
         deskChanged()
-        steward.digests = { [weak self] in self?.stewardDigests() ?? [] }
+        // The overseer is not stewarded (its card stands for it), but it stays reported to Accord.
+        steward.digests = { [weak self] in self?.stewardDigests().filter { $0.id != self?.overseerId } ?? [] }
         steward.changes = { [weak self] in self.map { Steward.changes($0.allTiles, since: $0.awaySince) } ?? [] }
         steward.sharedSummaries = { [weak self] in self?.accord.tileSummaries ?? [:] }
         steward.configureShared = { [weak self] config, key, migration in
