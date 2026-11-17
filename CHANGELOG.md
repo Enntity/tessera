@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Fixed: a finished overseer turn no longer lists its tile a second time under To review or
+  Can be put away — its own card stands for it — and reading its reply marks the tile seen.
 - Hovering an account card now shows its full text, and clicking it opens the provider's account
   page (or Copy Link from its menu).
 - Fixed: Accord display names and summaries stopped reaching the board whenever Accord rejected one

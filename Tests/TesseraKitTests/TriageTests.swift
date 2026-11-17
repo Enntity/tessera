@@ -108,6 +108,33 @@ final class AttentionQueueTests: XCTestCase {
         XCTAssertEqual(state.waiting(in: ["d", "q"]), .needsInput)
         XCTAssertNil(state.waiting(in: ["w", "i", "f-seen"]))
     }
+
+    /// A tile that is never a result to review — the overseer, whose card stands for it — leaves
+    /// `done` and the queue; the other tiles are untouched.
+    func testWithoutReviewTakesOnlyADoneTileOutOfTheQueue() {
+        var state = BoardState([tile("over", .done, attention: true), tile("d", .done, attention: true),
+                                tile("q", .needsInput, attention: true), tile("w", .working, attention: true)])
+        state.withoutReview(of: "over")
+        XCTAssertEqual(state.done, ["d"])
+        XCTAssertEqual(state.needsInput, ["q"])
+        XCTAssertEqual(state.queue, ["q", "d"])
+        XCTAssertEqual(state.needsUser, ["q", "d"])
+        // Asking or failed, it still counts and is visited (⌘J and triage lead to it).
+        var asking = BoardState([tile("over", .needsInput, attention: true)])
+        asking.withoutReview(of: "over")
+        XCTAssertEqual(asking.needsInput, ["over"])
+        XCTAssertEqual(asking.queue, ["over"])
+        var failed = BoardState([tile("over", .failed, attention: true)])
+        failed.withoutReview(of: "over")
+        XCTAssertEqual(failed.failed, ["over"])
+        XCTAssertEqual(failed.queue, ["over"])
+        // No id, or one not waiting as done, is a no-op.
+        var idle = BoardState([tile("over")])
+        idle.withoutReview(of: "over")
+        idle.withoutReview(of: nil)
+        idle.withoutReview(of: "absent")
+        XCTAssertTrue(idle.queue.isEmpty)
+    }
 }
 
 /// ⌘K finds tiles by title, folder, tab and state; the best match leads, so ⏎ jumps to it.
