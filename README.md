@@ -58,7 +58,8 @@ explicitly development candidates. The source includes the complete macOS featur
   standalone Accord service and its runtime for a fresh install, and reuses an existing host.
   - Questions have the same answer whether handled in Tessera or Accord's web interface.
   - Messages remain unread until their recipient reads them. Opening Tessera does not consume
-    another agent's inbox. Native typing is an explicit request subject to local approval.
+    another agent's inbox. Native typing is an explicit request, queued until the agent sits
+    idle at its prompt, and approved or allowed by policy.
   - Tessera's optional MCP tools inspect the native board, terminal screens and caller tile.
     Coordination calls exist only in Accord; no Tessera skill is published.
   - The installer preserves old skill customizations outside agent discovery and retains
@@ -84,7 +85,7 @@ explicitly development candidates. The source includes the complete macOS featur
   tile called Tessera, in a folder of its own whose `AGENTS.md` says what it is for: answering for the whole
   board and directing the agents on it. It sees the board with Tessera's tools and reaches agents with
   Accord messages, as any connected agent can; nothing is added to what agents may do. Messages it sends to
-  terminal agents are typed in only as *Agents may type messages…* allows. Claude Code asks once whether to
+  terminal agents are typed in once the tile is idle, as *Who may wake idle agents…* allows. Claude Code asks once whether to
   trust the folder, which pre-approves the Accord and Tessera tools for it. The role file is yours to rewrite.
 - **Steward (Settings → Agents).** Point it at any OpenAI-compatible endpoint, such as a LLooM
   gateway with a local model, and it keeps a one-line summary of each tile on the card's footer.

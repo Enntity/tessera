@@ -20,6 +20,10 @@ public final class TerminalSession: NSObject {
     public private(set) var sessionId: String?
     /// Shut down by the user (or restored that way); Resume brings the conversation back.
     public private(set) var isSuspended = false
+    /// The last time the user's hands touched the terminal — keyboard or a paste through the
+    /// view — which a queued wake message waits out. `send(_:)`, how messages are typed in,
+    /// does not count.
+    public private(set) var lastUserInputAt: Date?
     /// With no known session id, may resuming fall back to the tool's "continue latest"?
     /// Only one tile per tool and folder should, or they'd all attach to the same conversation.
     @ObservationIgnored public var mayContinueLatest = true
@@ -632,7 +636,10 @@ extension TerminalSession: TerminalViewDelegate {
     }
 
     nonisolated public func send(source: TerminalView, data: ArraySlice<UInt8>) {
-        MainActor.assumeIsolated { send(Array(data)) }
+        MainActor.assumeIsolated {
+            lastUserInputAt = Date()
+            send(Array(data))
+        }
     }
 
     nonisolated public func scrolled(source: TerminalView, position: Double) {}

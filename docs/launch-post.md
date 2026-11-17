@@ -7,7 +7,8 @@ Tessera puts that coordination in one place on your Mac.
 An agent can use Tessera's CLI or MCP server to discover other sessions, read their current
 state, exchange messages, and ask you a question with answer choices. The question joins one
 Needs-you queue, wherever the agent is running. Messages have a recipient inbox, and typing a
-message into another terminal requires your approval by default.
+message into another terminal is typed once the agent sits idle at its prompt — and by default
+only the overseer skips your approval (a Settings choice, with a per-tile opt-out).
 
 With a LLooM head connected, agents can inspect shared resource holders, queues, and lease
 expiry. Every response includes freshness information. LLooM still handles reservations, so an

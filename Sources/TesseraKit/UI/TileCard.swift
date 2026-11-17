@@ -145,7 +145,13 @@ public struct TileCard<Content: View>: View {
             // A long path keeps its end: the folder itself.
             Text(lit(info.subtitle)).lineLimit(1).truncationMode(.head)
             Spacer(minLength: Style.Space.xs)
-            if info.activity == .failed, let detail = info.detail {
+            if let wake = info.wake {
+                // An agent's message headed for this tile's prompt: who, a peek, where it got to.
+                Label(privacy ? wakeLine(wake).obscured(true) : wakeLine(wake), systemImage: "envelope")
+                    .foregroundStyle(wake.state == .failed ? Style.coral : Style.muted)
+                    .lineLimit(1)
+                    .layoutPriority(1)
+            } else if info.activity == .failed, let detail = info.detail {
                 Text(detail).foregroundStyle(Style.coral).lineLimit(1)
             } else if let summary = info.summary {
                 // The steward's line on it, ahead of the folder when space is short.
@@ -158,6 +164,19 @@ public struct TileCard<Content: View>: View {
         .padding(.horizontal, Style.Space.m)
         .frame(height: Self.footerHeight(compact: compact))
         .overlay(alignment: .top) { Hairline() }
+    }
+
+    /// The footer's word on a wake message: "Tessera: Check your Accord… · waiting until idle".
+    private func wakeLine(_ wake: WakeMark) -> String {
+        let state: String
+        switch wake.state {
+        case .queued: state = "waiting until idle"
+        case .waiting: state = "waiting for your OK"
+        case .open: state = "open to paste"
+        case .typed: state = "typed " + wake.at.formatted(date: .omitted, time: .shortened)
+        case .failed: state = "delivery failed"
+        }
+        return "\(wake.from): \(wake.text.preview(40)) · \(state)"
     }
 }
 

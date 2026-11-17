@@ -26,6 +26,10 @@ public final class AccordBridge {
         public var changedAt: Date?
     }
     public internal(set) var tileRecords: [String: TileRecord] = [:]
+    /// Where a message sender lives on this board, by Accord address: a tile id for sessions bound
+    /// to a Tessera tile, else "<source>:<externalId>" (e.g. claude/<session id>) for the native
+    /// conversation the session reports — which is the overseer's own binding shape.
+    public private(set) var senderTiles: [String: String] = [:]
     public private(set) var incidents: [[String: Any]] = []
     public private(set) var projectedSessions: [AgentAppSession] = []
     public var retainedSessionIDs: Set<String> = []
@@ -143,7 +147,7 @@ public final class AccordBridge {
                 wasPrivate = privacy
                 seen.removeAll()
             }
-            if privacy { summaries.removeAll(); tileSummaries.removeAll(); tileRecords.removeAll(); incidents.removeAll(); projectedSessions = []; sessions?([]); connected = true; return }
+            if privacy { summaries.removeAll(); tileSummaries.removeAll(); tileRecords.removeAll(); senderTiles.removeAll(); incidents.removeAll(); projectedSessions = []; sessions?([]); connected = true; return }
             let values = digests?() ?? []
             for digest in values.filter({ seen[$0.id] != Self.fingerprint($0) }).sorted(by: { (published[$0.id] ?? .distantPast) < (published[$1.id] ?? .distantPast) }).prefix(16) {
                 var args = Self.reportArgs(digest, key: UUID().uuidString, nowMs: Int(Date().timeIntervalSince1970 * 1000))
@@ -185,6 +189,8 @@ public final class AccordBridge {
             let own = (try? await operation(c, "sessions", ["source": "tessera", "limit": 200]))?["sessions"] as? [[String: Any]] ?? []
             let held = Self.tileRecords((board["sessions"] as? [[String: Any]] ?? []) + own, authority: c.2)
             if held != tileRecords { tileRecords = held }
+            let senders = Self.senderTiles((board["sessions"] as? [[String: Any]] ?? []) + own, authority: c.2)
+            if senders != senderTiles { senderTiles = senders }
             acceptSnapshot(board, nativeIDs: current.union(nativeAliases?() ?? []))
             incidents = board["incidents"] as? [[String: Any]] ?? []
             questions?(board["questions"] as? [[String: Any]] ?? [])
@@ -293,6 +299,19 @@ public final class AccordBridge {
             let given = (value["givenTitle"] as? String).flatMap { $0.isEmpty ? nil : $0 }
             let changed = (value["progressAt"] as? NSNumber).map { Date(timeIntervalSince1970: $0.doubleValue / 1000) }
             return (tile, TileRecord(address: address, givenTitle: given, changedAt: changed))
+        }, uniquingKeysWith: { _, latest in latest })
+    }
+
+    /// Where each local-authority session's messages come from on this board: its tile, or the
+    /// native conversation its `nativeSession` binding names. Only this host's sessions count —
+    /// a linked host reports tiles of its own under the same sources.
+    static func senderTiles(_ sessions: [[String: Any]], authority: String) -> [String: String] {
+        Dictionary(sessions.compactMap { value -> (String, String)? in
+            guard let address = value["address"] as? String, address.hasPrefix(authority + "/") else { return nil }
+            if value["source"] as? String == "tessera", let external = value["externalId"] as? String { return (address, external) }
+            guard let binding = value["nativeSession"] as? [String: Any],
+                  let source = binding["source"] as? String, let external = binding["externalId"] as? String else { return nil }
+            return (address, source == "tessera" ? external : source + ":" + external)
         }, uniquingKeysWith: { _, latest in latest })
     }
 

@@ -10,6 +10,7 @@ let usage = """
       tessera board [--waiting]                 Every tile (id, title, state, summary) and the brief
       tessera whoami                            Which tile you are
       tessera read <tile> [--lines N]           What a tile shows now
+      tessera send <tile> <text…>               Send a message into a tile's prompt when it's idle
       tessera mcp                               Serve these as MCP tools over stdio
       tessera install [--dry-run]               Install Accord hookup and optional native Tessera tools
 
@@ -168,6 +169,9 @@ do {
     case "read":
         guard words.count >= 2 else { throw Failure("tessera read <tile> [--lines N]") }
         print(try callTool("read_tile", ["tile": words[1], "lines": Int(flag("--lines") ?? "") ?? 60]))
+    case "send":
+        guard words.count >= 3 else { throw Failure("tessera send <tile> <text…>") }
+        print(try callTool("send_to_tile", ["tile": words[1], "text": words.dropFirst(2).joined(separator: " ")]))
     case "install":
         try Installer(dryRun: has("--dry-run"), noStart: has("--no-start")).run()
     case "help", "-h":
