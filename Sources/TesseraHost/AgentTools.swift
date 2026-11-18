@@ -84,6 +84,11 @@ public final class AgentTools {
         case "close_tile":
             let tile = try workspace.resolveTile(args["tile"] as? String ?? "")
             return try workspace.closeTile(tile, force: args["force"] as? Bool ?? false, from: me.tile, label: me.label)
+        case "open_tile":
+            return try await workspace.openTile(agent: args["agent"] as? String, cwd: args["cwd"] as? String,
+                                                title: args["title"] as? String, prompt: args["prompt"] as? String,
+                                                resume: args["resume"] as? String, reopen: args["reopen"] as? String,
+                                                from: me.tile, label: me.label)
         case "read_tile":
             guard !privacy() else { throw Refusal("The developer has privacy mode on; tiles can't be read right now.") }
             let id = try workspace.resolveTile(args["tile"] as? String ?? "")
@@ -115,6 +120,15 @@ public final class AgentTools {
             let shared = workspace.accord.summaries[t.id]
             lines.append(Self.boardLine(t, isCaller: t.id == me, summary: shared ?? workspace.steward.summaries[t.id]?.summary ?? t.detail ?? "",
                                         fromAccord: shared != nil, record: workspace.accord.tileRecords[t.id]))
+        }
+        // Closed and hidden tiles keep their ids so an agent can open_tile them back.
+        let gone = workspace.hiddenTiles.map { ($0.id, $0.title, $0.subtitle, true) }
+            + workspace.closedTiles.map { ($0.id, $0.title, $0.subtitle, false) }
+        if !gone.isEmpty {
+            lines.append("Recently closed (\(gone.count)):")
+            for (id, title, subtitle, hidden) in gone.prefix(20) {
+                lines.append("- \(id) | \(title) | \(subtitle)\(hidden ? " | hidden" : "")")
+            }
         }
         return Redactor.redact(lines.joined(separator: "\n"))
     }

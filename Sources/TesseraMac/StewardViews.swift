@@ -51,6 +51,7 @@ struct AgentsSettings: View {
     @State private var key = ""
     @State private var installOutput: String?
     @State private var installing = false
+    @State private var opensPerHour = Workspace.agentOpensPerHour
 
     var body: some View {
         let steward = model.workspace.steward
@@ -94,6 +95,8 @@ struct AgentsSettings: View {
                     Text("The overseer and agents on this board").tag(WakePolicy.overseerAndPeers)
                     Text("No one; ask me each time").tag(WakePolicy.askAlways)
                 }
+                Stepper("Tiles an agent may open per hour: \(opensPerHour)", value: $opensPerHour, in: 1...60)
+                    .onChange(of: opensPerHour) { _, n in Preferences.store.set(n, forKey: "tessera.agentOpensPerHour") }
                 Text("Accord connects agents, messages, questions and shared resources. Tessera adds native board and screen inspection. A message for a terminal agent is typed once the tile sits idle at its prompt; asking first shows it as a card in the lane. A tile's own menu can keep it out of this entirely.").note()
                 HStack {
                     Spacer()

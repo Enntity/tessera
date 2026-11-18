@@ -301,11 +301,15 @@ public final class Workspace {
         return ids.filter { $0 != overseerId }
     }
 
+    /// Starts a terminal tile. `quietly` (an agent's `open_tile`) keeps the board as the developer
+    /// left it — no query reset, no selection change, the tile filed in `tab` and placed after
+    /// `after` (the caller's tile) or at the end.
     @discardableResult
-    public func launch(command: String?, cwd: String? = nil, title: String? = nil) -> String {
+    public func launch(command: String?, cwd: String? = nil, title: String? = nil,
+                       quietly: Bool = false, tab: String? = nil, after: String? = nil) -> String {
         let session = TerminalSession(command: command, cwd: cwd ?? defaultDirectory, title: title)
         adopt(session)
-        insert(session.id)
+        insert(session.id, quietly: quietly, tab: tab, after: after)
         if let cwd { noteDirectory(cwd) }
         return session.id
     }
@@ -406,16 +410,17 @@ public final class Workspace {
         return nil
     }
 
-    private func insert(_ id: String) {
-        groups.assign(id, to: tabForNewTiles())
+    private func insert(_ id: String, quietly: Bool = false, tab: String? = nil, after: String? = nil) {
+        groups.assign(id, to: quietly ? tab : tabForNewTiles())
         // New tiles land after the selection so related work clusters.
-        if let sel = selectedId, let i = order.firstIndex(of: sel) {
+        if let spot = (quietly ? after : selectedId), let i = order.firstIndex(of: spot) {
             order.insert(id, at: i + 1)
         } else {
             order.append(id)
         }
-        // An open tile keeps the selection (a tile started from the phone mustn't take it).
-        if expandedId == nil { selectedId = id }
+        // An open tile keeps the selection (a tile started from the phone mustn't take it);
+        // an agent's quiet open leaves it alone too.
+        if !quietly, expandedId == nil { selectedId = id }
         save()
     }
 
@@ -450,7 +455,7 @@ public final class Workspace {
     /// its conversation up again in its folder, a page loads its address. False when there is
     /// nothing to bring back.
     @discardableResult
-    public func reopen(_ id: String) -> Bool {
+    public func reopen(_ id: String, quietly: Bool = false) -> Bool {
         let closed = recentlyClosed.take(id)
         guard !exists(id) else { return false }
         if hiddenAgents.removeValue(forKey: id) != nil {
@@ -461,8 +466,8 @@ public final class Workspace {
             groups.assign(id, to: closed.tab)
         }
         guard exists(id) else { return false }
-        // An open tile keeps the selection.
-        if expandedId == nil { select(id) }
+        // An open tile keeps the selection, and an agent's reopen leaves it alone.
+        if !quietly, expandedId == nil { select(id) }
         save()
         return true
     }
@@ -895,12 +900,15 @@ public final class Workspace {
     @ObservationIgnored private var wokeAt: [String: Date] = [:]
 
     /// A tile can take a queued message when it runs an agent (never a bare shell), is running and
-    /// not suspended, sits at an idle or finished prompt — not working, asking, starting or ended —
-    /// hasn't had a queued message typed into it in the last 10 seconds, and the user hasn't
-    /// typed into it in the last 20 seconds.
-    static func canWake(activity: TileActivity, isAgent: Bool, running: Bool, suspended: Bool,
+    /// not suspended, has the agent in its foreground (a freshly opened tile's shell may sit at a
+    /// prompt first, and a message typed there would be a command once the agent exits), sits at an
+    /// idle or finished prompt — not working, asking, starting or ended — hasn't had a queued
+    /// message typed into it in the last 10 seconds, and the user hasn't typed into it in the last
+    /// 20 seconds.
+    nonisolated static func canWake(activity: TileActivity, isAgent: Bool, agentInForeground: Bool,
+                      running: Bool, suspended: Bool,
                       lastUserInputAt: Date?, lastWokeAt: Date? = nil, now: Date = Date()) -> Bool {
-        guard isAgent, running, !suspended, [.idle, .done].contains(activity) else { return false }
+        guard isAgent, agentInForeground, running, !suspended, [.idle, .done].contains(activity) else { return false }
         if let lastWokeAt, now.timeIntervalSince(lastWokeAt) < 10 { return false }
         return lastUserInputAt.map { now.timeIntervalSince($0) >= 20 } ?? true
     }
@@ -932,7 +940,8 @@ public final class Workspace {
             wakeAgain = false
             for tile in desk.queuedTiles {
                 guard let t = terminals[tile] else { desk.failQueued(tile); continue }
-                guard Self.canWake(activity: t.info.activity, isAgent: isWakeableTerminal(tile), running: t.isRunning,
+                guard Self.canWake(activity: t.info.activity, isAgent: isWakeableTerminal(tile),
+                                   agentInForeground: t.runsForegroundProgram, running: t.isRunning,
                                    suspended: t.isSuspended, lastUserInputAt: t.lastUserInputAt,
                                    lastWokeAt: wokeAt[tile]) else { continue }
                 if desk.deliverQueued(tile) { wokeAt[tile] = Date() }
@@ -1084,6 +1093,138 @@ public final class Workspace {
         guard approved, exists(request.tile) else { return }
         let by = "\(request.from) (approved by the developer)"
         if let onAgentClose { onAgentClose(request.tile, by) } else { close(request.tile, by: by) }
+    }
+
+    // MARK: Opening tiles
+
+    /// How many opens and reopens one caller gets per rolling hour (Settings → Agents).
+    public static var agentOpensPerHour: Int {
+        let set = Preferences.store.integer(forKey: "tessera.agentOpensPerHour")
+        return max(1, set == 0 ? 10 : set)
+    }
+
+    /// When each caller opened something lately, keyed by tile id or by label — the rolling
+    /// window for `agentOpensPerHour`; a restart resets it.
+    @ObservationIgnored private var opensByCaller: [String: [Date]] = [:]
+
+    #if DEBUG
+    /// Test seams: overrides the installed-agent set, and how long `openTile` waits for the
+    /// tile's Accord address.
+    @ObservationIgnored var openTileAgentsOverride: Set<String>?
+    @ObservationIgnored var accordAddressWait: TimeInterval = 10
+    #endif
+
+    /// Which agents `open_tile` may start, to their preset commands.
+    private static let openable: [String: String?] = ["shell": nil, "claude": "claude", "codex": "codex",
+                                                    "devin": "devin", "omp": "omp"]
+
+    /// `open_tile` and `tessera open`: starts a tile like the developer's New (or brings back a
+    /// closed one like Reopen), without disturbing the board the developer is looking at. The
+    /// reply gives the tile id and, when Accord has caught up, the tile's address.
+    @discardableResult
+    func openTile(agent: String?, cwd: String?, title: String?, prompt: String?, resume: String?,
+                  reopen: String?, from senderTile: String?, label: String) async throws -> String {
+        let by = senderTile.map { "\(label) (tile \($0))" } ?? label
+        func refuse(_ message: String, title: String? = nil, agent: String? = nil, cwd: String? = nil,
+                    resume: String? = nil, prompt: String? = nil) throws -> Never {
+            OpenLog.append(in: directory, title: title ?? agent ?? reopen ?? "tile", agent: agent ?? "tile", cwd: cwd,
+                           by: by, outcome: "refused", reason: message, resume: resume, prompt: prompt)
+            throw AgentTools.Refusal(message)
+        }
+        let caller = senderTile ?? label
+        let cutoff = Date().addingTimeInterval(-3600)
+        opensByCaller[caller] = (opensByCaller[caller] ?? []).filter { $0 > cutoff }
+        func takeSlot() throws {
+            guard (opensByCaller[caller] ?? []).count < Self.agentOpensPerHour else {
+                try refuse("\(label) has opened \(Self.agentOpensPerHour) tiles in the last hour (limit \(Self.agentOpensPerHour), Settings → Agents).")
+            }
+            opensByCaller[caller, default: []].append(Date())
+        }
+
+        if let reopen {
+            guard agent == nil, cwd == nil, title == nil, prompt == nil, resume == nil else {
+                try refuse("Reopen takes no other parameters.", title: reopen)
+            }
+            guard recentlyClosed.tiles.contains(where: { $0.id == reopen }) || hiddenAgents[reopen] != nil else {
+                try refuse("Not in Recently closed: \(reopen).", title: reopen)
+            }
+            try takeSlot()
+            guard self.reopen(reopen, quietly: true) else { try refuse("Couldn't reopen \(reopen).", title: reopen) }
+            let name = info(reopen)?.title ?? reopen
+            OpenLog.append(in: directory, tile: reopen, title: name, agent: "reopen", by: by, outcome: "reopened")
+            return "Reopened \(name) as tile \(reopen)."
+        }
+
+        let agentName = (agent ?? "").lowercased()
+        guard let preset = Self.openable[agentName] else {
+            try refuse("Only shell, claude, codex, devin or omp can be opened.", title: title, agent: agent)
+        }
+        guard agentName == "shell" || installedAgents.contains(agentName) else {
+            try refuse("\(agentName) isn't installed on this Mac's PATH.", title: title, agent: agentName)
+        }
+        guard agentName != "shell" || (prompt == nil && resume == nil) else {
+            try refuse("prompt and resume need an agent, not a shell.", title: title, agent: agentName)
+        }
+        var command = preset
+        if let resume {
+            guard SessionResume.isSafeId(resume) else {
+                try refuse("Not a session id: \(resume).", title: title, agent: agentName, resume: resume)
+            }
+            if let holding = order.first(where: { terminals[$0]?.sessionId == resume }) {
+                try refuse("That conversation is already open in tile \(holding).", title: title, agent: agentName, resume: resume)
+            }
+            guard let resumed = SessionResume.resumeCommand(original: preset!, sessionId: resume) else {
+                try refuse("\(agentName) can't resume \(resume).", title: title, agent: agentName, resume: resume)
+            }
+            command = resumed
+        }
+        guard let raw = cwd?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty else {
+            try refuse("Give a working directory.", title: title, agent: agentName)
+        }
+        let path = (raw as NSString).expandingTildeInPath.standardizedPath
+        var isDir: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: path, isDirectory: &isDir), isDir.boolValue else {
+            try refuse("Not a directory: \(path).", title: title, agent: agentName, cwd: path)
+        }
+        let name = title.map { String($0.trimmingCharacters(in: .whitespacesAndNewlines).prefix(120)) }
+        try takeSlot()
+        let id = launch(command: command, cwd: path, title: name?.isEmpty == false ? name : nil,
+                        quietly: true, tab: senderTile.flatMap { groups.group(of: $0)?.id }, after: senderTile)
+        var outcome: String?
+        if let prompt, !prompt.isEmpty {
+            do { outcome = try sendToTile(id, text: prompt, from: senderTile, label: label) }
+            catch { outcome = "The prompt wasn't sent: \(error.localizedDescription)" }
+        }
+        OpenLog.append(in: directory, tile: id, title: name ?? agentName, agent: agentName, cwd: path,
+                       by: by, outcome: "opened", resume: resume, prompt: prompt)
+        var reply = "Opened \(info(id)?.title ?? agentName) as tile \(id) (\(agentName) in \(path.abbreviatingHome))."
+        if let address = await accordAddress(for: id) { reply += " Accord: \(address)." }
+        else { reply += " Accord address not reported yet; it appears on board within a few seconds." }
+        if let outcome { reply += "\n" + outcome }
+        return reply
+    }
+
+    /// Which agent names `open_tile` accepts as installed — the detected presets, overridable in tests.
+    private var installedAgents: Set<String> {
+        #if DEBUG
+        if let openTileAgentsOverride { return openTileAgentsOverride }
+        #endif
+        return Set(presets.compactMap(\.command))
+    }
+
+    /// The tile's Accord address once Accord reports it, else nil after a short wait.
+    private func accordAddress(for id: String) async -> String? {
+        #if DEBUG
+        let wait = accordAddressWait
+        #else
+        let wait: TimeInterval = 10
+        #endif
+        await accord.refresh()
+        for _ in 0..<max(1, Int(wait * 2)) {
+            if let address = accord.tileRecords[id]?.address { return address }
+            try? await Task.sleep(nanoseconds: 500_000_000)
+        }
+        return accord.tileRecords[id]?.address
     }
 
     /// Canonical native identities, including Claude desktop's distinct CLI session ID.

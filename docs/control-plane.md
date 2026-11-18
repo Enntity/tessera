@@ -70,6 +70,7 @@ own tile is never closed:
 | `tessera read <tile> [--lines N]` | `read_tile` | Redacted native screen or transcript |
 | `tessera send <tile> <text…>` | `send_to_tile` | A message typed at a terminal agent's idle prompt (asks first as policy allows) |
 | `tessera close <tile> [--force]` | `close_tile` | Close an idle tile as the developer would (toast + Undo); `--force` asks first when busy |
+| `tessera open <agent> <cwd> [--title T] [--prompt TEXT] [--resume ID]` | `open_tile` | Open a shell/claude/codex/devin/omp tile quietly; `reopen` brings a closed tile back; capped per caller per hour |
 
 `tessera install` configures Accord and the optional native tools. `tessera mcp` serves native
 inspection over stdio. Removed Tessera messaging, questions and resource commands are not

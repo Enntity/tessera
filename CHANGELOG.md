@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Agents can open tiles too: `open_tile` (`tessera open <agent> <cwd>` / `tessera reopen <tile>`)
+  starts a shell, claude, codex, devin or omp tile in an existing directory — quietly, without
+  touching your view — optionally titled, resumed from a session id, or handed a first prompt
+  through the usual wake rules, and brings back a Recently closed tile by id. A per-caller
+  hourly cap (Settings → Agents) and an `opens.log` audit trail sit beside `closes.log`, and a
+  queued prompt is never typed into a shell's own prompt.
 - Agents can tidy the board: `close_tile` (`tessera close <tile> [--force]`) closes an idle tile
   or agent exactly as your own Close does — same toast and Undo — and dismisses a desk card.
   A working, asking or busy tile refuses unless `--force` puts a Close/Don't card on your desk,
