@@ -254,7 +254,7 @@ final class AppModel {
     /// "Reopen …", which also opens the tile).
     func reopen(_ ids: [String], open: Bool = false) {
         act(Style.Motion.zoom) {
-            let back = ids.filter(workspace.reopen)
+            let back = ids.filter { workspace.reopen($0) }
             if open, let id = back.first { workspace.open(id, nativeAt: appRect(for: id)) }
             if let toast = closedToast, !toast.ids.contains(where: isClosed) { closedToast = nil }
             pruneUndo()

@@ -12,6 +12,9 @@ let usage = """
       tessera read <tile> [--lines N]           What a tile shows now
       tessera send <tile> <text…>               Send a message into a tile's prompt when it's idle
       tessera close <tile> [--force]            Close an idle tile; --force asks the developer if busy
+      tessera open <agent> <cwd> [--title T] [--prompt TEXT] [--resume ID]
+                                                Open a shell or agent tile in a directory
+      tessera reopen <tile>                     Bring back a tile from Recently closed
       tessera mcp                               Serve these as MCP tools over stdio
       tessera install [--dry-run]               Install Accord hookup and optional native Tessera tools
 
@@ -28,7 +31,7 @@ struct Failure: Error, CustomStringConvertible {
     }
 }
 
-let valueFlags: Set<String> = ["--lines", "--as"]
+let valueFlags: Set<String> = ["--lines", "--as", "--title", "--prompt", "--resume"]
 var words: [String] = []
 var flags: [String: [String]] = [:]
 var args = Array(CommandLine.arguments.dropFirst())
@@ -176,6 +179,16 @@ do {
     case "close":
         guard words.count >= 2 else { throw Failure("tessera close <tile> [--force]") }
         print(try callTool("close_tile", ["tile": words[1], "force": has("--force")]))
+    case "open":
+        guard words.count >= 3 else { throw Failure("tessera open <agent> <cwd> [--title T] [--prompt TEXT] [--resume ID]") }
+        var args: [String: Any] = ["agent": words[1], "cwd": words[2]]
+        if let v = flag("--title") { args["title"] = v }
+        if let v = flag("--prompt") { args["prompt"] = v }
+        if let v = flag("--resume") { args["resume"] = v }
+        print(try callTool("open_tile", args))
+    case "reopen":
+        guard words.count >= 2 else { throw Failure("tessera reopen <tile>") }
+        print(try callTool("open_tile", ["reopen": words[1]]))
     case "install":
         try Installer(dryRun: has("--dry-run"), noStart: has("--no-start")).run()
     case "help", "-h":
