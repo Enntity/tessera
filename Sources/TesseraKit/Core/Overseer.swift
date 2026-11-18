@@ -77,4 +77,16 @@ public enum Overseer {
 
     /// The role as the user may read and rewrite it.
     public static func roleFile(in directory: URL) -> URL { directory.appendingPathComponent(files[0].path) }
+
+    /// What the lane card's line is quoting — an unseen reply, the steward's board brief, or its
+    /// standing invitation — so the card can name where the line came from.
+    public enum CardLineSource: String, Equatable, Sendable {
+        case reply, brief, prompt
+
+        public static func pick(unseenReply: Bool, stewardEnabled: Bool, briefHeadline: String?) -> Self {
+            if unseenReply { return .reply }
+            if stewardEnabled, let briefHeadline, !briefHeadline.isEmpty { return .brief }
+            return .prompt
+        }
+    }
 }
