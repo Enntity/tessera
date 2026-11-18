@@ -100,10 +100,23 @@ public final class StewardService {
         timer = t
     }
 
-    /// Demo and tests only: a made-up brief, shown as if the model had written it.
-    public func debugBrief(_ headline: String) {
+    /// Demo and tests only: a made-up brief, shown as if the model had written it. A JSON object
+    /// with a `headline` (plus optional `changes` and `attention` items) is taken whole, freshly
+    /// dated; anything else is the headline.
+    private struct DebugBrief: Decodable {
+        var headline: String
+        var changes: [String]?
+        var attention: [Steward.Brief.Item]?
+    }
+
+    public func debugBrief(_ text: String) {
         config.enabled = true
-        brief = Steward.Brief(headline: headline, changes: [], attention: [], closable: [], at: Date())
+        if let decoded = try? JSONDecoder().decode(DebugBrief.self, from: Data(text.utf8)), !decoded.headline.isEmpty {
+            brief = Steward.Brief(headline: decoded.headline, changes: decoded.changes ?? [],
+                                  attention: decoded.attention ?? [], closable: [], at: Date())
+        } else {
+            brief = Steward.Brief(headline: text, changes: [], attention: [], closable: [], at: Date())
+        }
     }
 
     /// Saves the settings; a non-empty `key` replaces the saved one. False for an unusable address.

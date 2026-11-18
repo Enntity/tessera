@@ -13,6 +13,8 @@ struct OverseerPanel: View {
     /// What the user picked; `asking` overrides it to the terminal until the prompt is answered.
     @State private var mode = Mode.chat
     @State private var draft = ""
+    /// The brief the user collapsed, by when it was written — a newer brief opens again.
+    @State private var collapsedBriefAt: Date?
     @FocusState private var composerFocused: Bool
 
     private enum Mode { case chat, terminal }
@@ -42,6 +44,7 @@ struct OverseerPanel: View {
                         .background(Style.state(.needsInput).opacity(0.08))
                         Hairline()
                     }
+                    briefBlock(maxHeight: min(780, geo.size.height - 2 * Style.Space.xl) * 0.4)
                     switch shown {
                     case .chat: chatBody
                     case .terminal:
@@ -153,6 +156,102 @@ struct OverseerPanel: View {
             .frame(maxWidth: .infinity)
         }
         composer
+    }
+
+    /// The steward's board brief, pinned above the chat or the terminal alike: what the lane's
+    /// card quotes when there is no unseen reply. Collapses to its header until the next brief lands, and caps its
+    /// height so a long brief doesn't push the chat away. Plain text only — the model read
+    /// untrusted screens, so nothing it writes becomes a link.
+    @ViewBuilder private func briefBlock(maxHeight: CGFloat) -> some View {
+        let steward = model.workspace.steward
+        if steward.config.enabled, let brief = steward.brief, !brief.headline.isEmpty {
+            let collapsed = collapsedBriefAt == brief.at
+            VStack(alignment: .leading, spacing: 0) {
+                Button {
+                    collapsedBriefAt = collapsed ? nil : brief.at
+                } label: {
+                    HStack(spacing: Style.Space.s) {
+                        Image(systemName: "doc.text.magnifyingglass")
+                            .font(Style.caption).foregroundStyle(Style.Overseer.violet)
+                        Text("Board brief").micro().foregroundStyle(Style.muted)
+                        Age(of: brief.at).font(Style.caption).foregroundStyle(Style.muted)
+                        if collapsed {
+                            Text(brief.headline.obscured(privacy))
+                                .font(Style.caption).foregroundStyle(Style.dim).lineLimit(1)
+                                .layoutPriority(-1)
+                        }
+                        Spacer()
+                        Image(systemName: collapsed ? "chevron.down" : "chevron.up")
+                            .font(Style.caption).foregroundStyle(Style.muted)
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                if !collapsed {
+                    // Hugs the content; the scrollable branch only wins when the brief is taller
+                    // than the room left, and is itself capped.
+                    ViewThatFits(in: .vertical) {
+                        briefDetail(brief)
+                        ScrollView { briefDetail(brief) }.frame(maxHeight: maxHeight)
+                    }
+                    .padding(.top, Style.Space.s)
+                }
+            }
+            .padding(Style.Space.m)
+            .background {
+                Style.Overseer.violet.opacity(0.07)
+                    .clipShape(RoundedRectangle(cornerRadius: Style.Radius.m, style: .continuous))
+            }
+            .padding(.horizontal, Style.Space.l)
+            .padding(.top, Style.Space.m)
+        }
+    }
+
+    /// The expanded brief body: full headline, attention rows, changes, and the follow-up question.
+    @ViewBuilder private func briefDetail(_ brief: Steward.Brief) -> some View {
+        VStack(alignment: .leading, spacing: Style.Space.m) {
+            Text(brief.headline.obscured(privacy))
+                .font(Style.caption).foregroundStyle(Style.ink)
+                .fixedSize(horizontal: false, vertical: true)
+                .textSelection(.enabled)
+            if !brief.attention.isEmpty {
+                VStack(alignment: .leading, spacing: Style.Space.xs) {
+                    ForEach(brief.attention) { item in
+                        Button {
+                            model.closeOverseer()
+                            model.open(item.id)
+                        } label: {
+                            HStack(alignment: .firstTextBaseline, spacing: Style.Space.s) {
+                                Image(systemName: "exclamationmark.circle")
+                                    .font(Style.caption).foregroundStyle(Style.state(.needsInput))
+                                Text((model.workspace.info(item.id)?.title ?? item.id).obscured(privacy))
+                                    .font(Style.caption).foregroundStyle(Style.ink)
+                                Text(item.why.obscured(privacy))
+                                    .font(Style.caption).foregroundStyle(Style.dim)
+                            }
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+            if !brief.changes.isEmpty {
+                VStack(alignment: .leading, spacing: Style.Space.xxs) {
+                    ForEach(brief.changes, id: \.self) { change in
+                        Text("· " + change.obscured(privacy))
+                            .font(Style.caption).foregroundStyle(Style.dim)
+                    }
+                }
+            }
+            Button {
+                model.openOverseer(asking: "About the board brief: \"\(brief.headline)\" — tell me more and what I should do.")
+            } label: {
+                Text("Ask Tessera about this").font(Style.caption).foregroundStyle(Style.dim)
+                    .padding(.horizontal, Style.Space.m).padding(.vertical, Style.Space.xs)
+                    .overlay(Capsule().strokeBorder(Style.Neutral.border))
+            }
+            .buttonStyle(.plain)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private static let suggestions = [

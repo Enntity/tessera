@@ -209,4 +209,17 @@ extension OverseerChatTests {
         XCTAssertFalse(workspace.steward.digests?().contains { $0.id == id } ?? true)
         XCTAssertTrue(workspace.accord.digests?().contains { $0.id == id } ?? false)
     }
+
+    /// The card's line names its source: an unseen reply, then the brief, then the invitation —
+    /// and the brief only counts when the steward is on and has something to say.
+    func testTheCardLineNamesItsSource() {
+        func pick(_ u: Bool, _ s: Bool, _ h: String?) -> Overseer.CardLineSource {
+            Overseer.CardLineSource.pick(unseenReply: u, stewardEnabled: s, briefHeadline: h)
+        }
+        XCTAssertEqual(pick(true, true, "two tiles need you"), .reply)
+        XCTAssertEqual(pick(false, true, "two tiles need you"), .brief)
+        XCTAssertEqual(pick(false, false, "two tiles need you"), .prompt)
+        XCTAssertEqual(pick(false, true, ""), .prompt)
+        XCTAssertEqual(pick(false, true, nil), .prompt)
+    }
 }

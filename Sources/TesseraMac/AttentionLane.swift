@@ -409,10 +409,13 @@ struct OverseerCard: View {
                     Spacer()
                     Text("⌘O").font(Style.caption).foregroundStyle(Style.muted)
                 }
-                line
-                    .font(Style.caption).foregroundStyle(Style.dim)
-                    .lineLimit(3)
-                    .fixedSize(horizontal: false, vertical: true)
+                VStack(alignment: .leading, spacing: Style.Space.xxs) {
+                    sourceCaption
+                    line
+                        .lineLimit(3)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .font(Style.caption).foregroundStyle(Style.dim)
                 // Not a field — the panel's composer is; a click lands there with the cursor ready.
                 HStack(spacing: Style.Space.s) {
                     Text("Ask Tessera…").font(Style.caption).foregroundStyle(Style.muted)
@@ -443,20 +446,50 @@ struct OverseerCard: View {
         .animation(Style.Motion.quick, value: hovering)
     }
 
-    /// The card's line: an unseen reply wins, then the steward's brief, then what it is for.
+    /// What the card's line is quoting — an unseen reply wins, then the steward's brief, then
+    /// what it is for.
+    private var lineSource: Overseer.CardLineSource {
+        let workspace = model.workspace
+        let chat = workspace.overseerChat
+        return Overseer.CardLineSource.pick(unseenReply: chat.unread && chat.latestReply != nil,
+                                            stewardEnabled: workspace.steward.config.enabled,
+                                            briefHeadline: workspace.steward.brief?.headline)
+    }
+
+    /// Where the line came from and how old it is; nothing for the standing invitation. The
+    /// whole text is one click away, in the panel.
+    @ViewBuilder private var sourceCaption: some View {
+        switch lineSource {
+        case .reply:
+            let at = model.workspace.overseerChat.latestReply?.timestamp
+            Text("Latest reply" + (at.map { " · \($0.shortAge())" } ?? ""))
+                .micro().foregroundStyle(Style.muted)
+        case .brief:
+            let at = model.workspace.steward.brief?.at
+            Text("Board brief" + (at.map { " · \($0.shortAge())" } ?? ""))
+                .micro().foregroundStyle(Style.muted)
+        case .prompt:
+            EmptyView()
+        }
+    }
+
+    /// The card's line: an unseen reply, the steward's brief, or what it is for.
     /// Plain text for both — the model read untrusted screens, so nothing it writes becomes a link.
     @ViewBuilder private var line: some View {
         let workspace = model.workspace
         let chat = workspace.overseerChat
-        if chat.unread, let reply = chat.latestReply {
-            if privacy {
-                Text(reply.text.preview(220).obscured(true))
-            } else {
-                Text(reply.text.markdownPreview(220))
+        switch lineSource {
+        case .reply:
+            if let reply = chat.latestReply {
+                if privacy {
+                    Text(reply.text.preview(220).obscured(true))
+                } else {
+                    Text(reply.text.markdownPreview(220))
+                }
             }
-        } else if workspace.steward.config.enabled, let brief = workspace.steward.brief, !brief.headline.isEmpty {
-            Text(brief.headline.obscured(privacy))
-        } else {
+        case .brief:
+            Text((workspace.steward.brief?.headline ?? "").obscured(privacy))
+        case .prompt:
             Text("Ask what's going on across the board, or have Tessera get the agents moving.")
         }
     }

@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Fixed: the overseer card's line could be the steward's board brief, but opening the card never
+  showed it. The panel now pins the full brief above the chat or terminal (attention rows open
+  their tile, it collapses until a newer brief lands, and "Ask Tessera about this" follows up), and
+  the card captions its line "Latest reply" or "Board brief" with its age.
 - Agents can open tiles too: `open_tile` (`tessera open <agent> <cwd>` / `tessera reopen <tile>`)
   starts a shell, claude, codex, devin or omp tile in an existing directory — quietly, without
   touching your view — optionally titled, resumed from a session id, or handed a first prompt
