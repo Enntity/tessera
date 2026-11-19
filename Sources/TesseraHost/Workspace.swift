@@ -182,6 +182,11 @@ public final class Workspace {
         overseerChat.attach(self)
         overseerChat.start()
         accord.digests = { [weak self] in self?.stewardDigests().filter { !$0.id.hasPrefix("accord:") && ![AgentFlavor.lloom.rawValue, AgentFlavor.agentDesk.rawValue, AgentFlavor.accord.rawValue].contains($0.flavor) } ?? [] }
+        accord.presentTiles = { [weak self] in self?.presentTileIDs ?? [] }
+        accord.sweepRefused = { [weak self] text in
+            self.map { TileLog.append(in: $0.directory, file: "accord.log",
+                                      fields: ["at": ISO8601DateFormatter().string(from: Date()), "event": "closed-sweep-skipped", "detail": text]) }
+        }
         accord.nativeAliases = { [weak self] in self?.nativeSessionAliases ?? [] }
         accord.lookback = { [weak self] in self?.agents.lookback ?? 36 * 3600 }
         accord.sessions = { [weak self] values in self?.agents.setExternal(values, source: "accord") }
@@ -916,6 +921,8 @@ public final class Workspace {
     #if DEBUG
     /// Test seam: overrides `isWakeableTerminal`.
     @ObservationIgnored var isWakeableTerminalOverride: ((String) -> Bool)?
+    /// Test seam: overrides `tileHolds` so close rules can be tested without a fleet board.
+    @ObservationIgnored var tileHoldsOverride: ((String) -> [TileHold])?
     #endif
 
     /// The tile is a terminal running an agent conversation — the only thing a message may be
@@ -1019,13 +1026,25 @@ public final class Workspace {
         case ok, busy(String), never(String)
     }
 
+    /// A reservation the tile's Accord session (or its observation) holds on shared hardware.
+    public struct TileHold: Equatable, Sendable {
+        public var resource: String
+        public var reservation: String
+        public var until: Date?
+        public init(resource: String, reservation: String, until: Date?) {
+            self.resource = resource
+            self.reservation = reservation
+            self.until = until
+        }
+    }
+
     /// The close rules, shared by the tool and the CLI: the overseer's own tile is never
     /// closed; a desk card dismisses; an idle shell or agent closes; a tile that is working,
-    /// asking, starting, being typed into, or holding a non-agent program in its foreground
-    /// asks first.
+    /// asking, starting, being typed into, holding a non-agent program in its foreground, or
+    /// holding a shared reservation asks first.
     nonisolated static func closeCheck(isOverseer: Bool, isDeskCard: Bool, isTerminal: Bool, activity: TileActivity,
                            running: Bool, suspended: Bool, isAgent: Bool, foregroundProgram: Bool,
-                           lastUserInputAt: Date?, now: Date = Date()) -> CloseCheck {
+                           lastUserInputAt: Date?, holds: [TileHold] = [], now: Date = Date()) -> CloseCheck {
         if isOverseer { return .never("the overseer's own tile") }
         if isDeskCard { return .ok }
         if isTerminal && (!running || suspended) { return .ok }
@@ -1038,6 +1057,9 @@ public final class Workspace {
         if isTerminal {
             if let lastUserInputAt, now.timeIntervalSince(lastUserInputAt) < 20 { return .busy("being typed into") }
             if !isAgent && foregroundProgram { return .busy("running a program other than its shell") }
+        }
+        if !holds.isEmpty {
+            return .busy("holds " + holds.map { "\($0.resource) (reservation \($0.reservation))" }.joined(separator: ", "))
         }
         return .ok
     }
@@ -1060,7 +1082,8 @@ public final class Workspace {
         let check = Self.closeCheck(isOverseer: id == overseerId, isDeskCard: id.hasPrefix(AgentDesk.idPrefix),
                                   isTerminal: t != nil, activity: info.activity, running: t?.isRunning ?? false,
                                   suspended: t?.isSuspended ?? false, isAgent: t != nil && isWakeableTerminal(id),
-                                  foregroundProgram: t?.runsForegroundProgram ?? false, lastUserInputAt: t?.lastUserInputAt)
+                                  foregroundProgram: t?.runsForegroundProgram ?? false, lastUserInputAt: t?.lastUserInputAt,
+                                  holds: tileHolds(id))
         let by = senderTile.map { "\(label) (tile \($0))" } ?? label
         func log(_ outcome: String, reason: String? = nil) {
             CloseLog.append(in: directory, tile: id, title: info.title, kind: info.kind.rawValue,
@@ -1082,6 +1105,64 @@ public final class Workspace {
             guard !exists(id) else { throw AgentTools.Refusal("Couldn't close \(info.title).") }
             return "\(info.kind.closedLabel) \(info.title)."
         }
+    }
+
+    /// Tiles that still exist on the board, hidden conversations and the overseer included: a
+    /// close that only hides a tile keeps its Accord observation live.
+    var presentTileIDs: Set<String> { Set(order).union(hiddenAgents.keys).union(overseerId.map { [$0] } ?? []) }
+
+    /// The shared reservations a tile's agent — or the observation that stands for it — holds,
+    /// by the fleet board Accord projects. An unavailable board yields none: close works as it
+    /// did before reservations were visible.
+    func tileHolds(_ id: String) -> [TileHold] {
+        #if DEBUG
+        if let tileHoldsOverride { return tileHoldsOverride(id) }
+        #endif
+        var addresses = Set(accord.senderTiles.filter { $0.value == id }.keys)
+        if let record = accord.tileRecords[id] { addresses.insert(record.address) }
+        return Self.tileHolds(fleet.board, addresses: addresses)
+    }
+
+    /// Held reservations on the fleet board whose holder is one of `addresses`: only claims the
+    /// resource lists as held count — queued requests are not holds.
+    nonisolated static func tileHolds(_ board: LLoomSchedule.Board?, addresses: Set<String>) -> [TileHold] {
+        guard let board else { return [] }
+        let heldIds = Set(board.resources.flatMap { $0.holders ?? [] })
+        let labels = Dictionary(board.resources.map { ($0.id, $0.label ?? $0.id) }, uniquingKeysWith: { a, _ in a })
+        return board.reservations.compactMap { lease in
+            guard heldIds.contains(lease.id), let session = lease.session else { return nil }
+            let address = session.hasPrefix("accord:") ? String(session.dropFirst(7)) : session
+            guard addresses.contains(address) else { return nil }
+            return TileHold(resource: labels[lease.resource] ?? lease.resource, reservation: lease.id,
+                            until: lease.expiresAt.map { Date(timeIntervalSince1970: $0 / 1000) })
+        }
+    }
+
+    /// The warning the developer sees before closing tiles whose agents hold shared hardware:
+    /// which tiles hold what until when, and that Accord releases it after the orphan grace.
+    /// Nil when no named tile holds anything.
+    nonisolated static func closeWarning(_ tiles: [(title: String, holds: [TileHold])]) -> String? {
+        let holding = tiles.filter { !$0.holds.isEmpty }
+        guard !holding.isEmpty else { return nil }
+        func clause(_ hold: TileHold) -> String {
+            hold.until.map { "\(hold.resource) until \(Self.holdTime($0))" } ?? "\(hold.resource) with no deadline"
+        }
+        let parts = holding.map { "\($0.title) holds " + $0.holds.map(clause).joined(separator: " and ") }
+        var seen = Set<String>(), resources: [String] = []
+        for hold in holding.flatMap(\.holds) where seen.insert(hold.resource).inserted { resources.append(hold.resource) }
+        return parts.joined(separator: "; ") + ". Closing ends \(holding.count == 1 ? "this agent" : "these agents"). "
+            + "Accord releases \(resources.joined(separator: " and ")) 15 minutes later unless the agent comes back."
+    }
+
+    /// The warning text before the developer's own close of tiles that hold reservations; nil
+    /// when nothing held is in the way and close proceeds as today.
+    public func closeWarning(for ids: [String]) -> String? {
+        Self.closeWarning(ids.compactMap { id in info(id).map { (title: $0.title, holds: tileHolds(id)) } })
+    }
+
+    /// A hold's end as the developer reads it.
+    nonisolated static func holdTime(_ date: Date) -> String {
+        DateFormatter.localizedString(from: date, dateStyle: .none, timeStyle: .short)
     }
 
     /// The developer's answer to a close request: approve closes the tile through the same path,
