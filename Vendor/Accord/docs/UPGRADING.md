@@ -13,10 +13,10 @@ second authority or copy tokens between hosts. Keep the previous package availab
 binary rollback; database rollback is a separate recovery operation and can invalidate
 fencing history. See [recovery](RECOVERY.md).
 
-## Install 0.6.9
+## Install 0.7.0
 
 ```sh
-npm install -g https://github.com/Enntity/accord/releases/download/v0.6.9/enntity-accord-0.6.9.tgz
+npm install -g https://github.com/Enntity/accord/releases/download/v0.7.0/enntity-accord-0.7.0.tgz
 accord install
 ```
 
@@ -47,13 +47,52 @@ accord --version
 accord doctor
 ```
 
-The CLI should report `0.6.9`; the doctor should report `ready`. The CLI version identifies
+The CLI should report `0.7.0`; the doctor should report `ready`. The CLI version identifies
 the package invoked by your shell, so also check the running service's command line
 against the new install path. Restart your agent sessions to load the updated MCP bridge.
 
 On linked hosts, verify `accord find`, send and acknowledge a test message, and exercise
 reserve, extend and release on a dedicated cooperative resource. Check that extension
 keeps the claim and generation. Do not use an active GPU workload as a smoke test.
+
+## Changes from 0.6.10
+
+Two migrations. Migration 19 adds session retirement: `retired_at`, `retired_reason`
+and `successor` on sessions and observations, a `lifecycle` field on public records,
+and the host's `lifecycle_since` floor. Migration 20 adds orphaned reservations: `orphaned_at`,
+`orphan_reason` and `warned_deadline` on reservations, `orphan_grace_ms`, `age_out_ms`
+and `registered_at` on `resource_bindings`, retirement columns on `remote_routes`, and
+the `lifecycle_outbox` used to carry lifecycle notices between linked hosts. Both apply
+in place; existing migration checksums and stored records are unchanged. The old 0.6.10
+binary does not understand migrations 19 and 20 and will refuse that database; keep the
+normal upgrade/recovery precautions above. Never delete the migration record or restore
+older fencing history just to make a downgrade start.
+
+Rollback after this release is therefore not "reinstall 0.6.10". As with 0.6.9, the
+staged recovery package is the 0.6.10 implementation with migrations 19 and 20 added and
+a distinct recovery version; it opens an upgraded database without rewriting its history.
+Binary rollback is that recovery build, not the plain 0.6.10 archive.
+
+Session retirement is configured by a new `lifecycle` section in `awareness.json`:
+`observedRetireMs` (default 24 h) for observations scanned from transcript roots,
+`joinedRetireMs` (default 72 h) for enrolled sessions and adapter-reported observations,
+and `notify`, the addresses told when a claim holder goes stale. No `lifecycle` key means
+the defaults. The automatic pass measures silence from no earlier than the upgrade (`lifecycle_since`),
+so nothing retires for silence in the first 24–72 h afterward.
+Review what the pass would retire first with `accord lifecycle sweep --dry-run`.
+
+Upgrade all linked hosts together. A host running 0.6.10 or older answers a `lifecycle`
+notice with an unknown-operation error; the notice stays queued and is retried for up to
+seven days, then dropped with an event. A host upgraded late applies the retirement it
+receives then, so a remote holder's orphan grace counts from that delivery.
+
+## Changes from 0.6.9
+
+No migration; the database and configuration are unchanged. A data directory whose
+socket path exceeds the platform limit now serves its local socket from a private
+`/tmp` directory, published through `endpoints.json` as before. A `session-report`
+timestamp slightly ahead of the coordinator's clock is clamped to now instead of
+rejected.
 
 ## Changes from 0.6.8
 

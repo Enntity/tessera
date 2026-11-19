@@ -194,7 +194,8 @@ export class Overseer {
     });
   }
   quietEligible(row) {
-    if (this.db.prepare('SELECT 1 FROM sessions WHERE id=? AND closed_at IS NOT NULL').get(row.id)) return false;
+    if (this.db.prepare('SELECT 1 FROM sessions WHERE id=? AND (closed_at IS NOT NULL OR retired_at IS NOT NULL)').get(row.id)) return false;
+    if (row.retired_at !== null && row.retired_at !== undefined) return false;
     return row.source !== 'agent' || !this.db.prepare('SELECT 1 FROM session_bindings b JOIN session_views n ON n.source=b.source AND n.external_id=b.external_id WHERE b.actor=? AND n.hidden=0').get(row.id);
   }
   quiet() {
@@ -326,6 +327,7 @@ export class Overseer {
         !rule?.enabled ||
         session.hidden ||
         session.private ||
+        (session.retired_at !== null && session.retired_at !== undefined) ||
         session.snoozed_until > now ||
         (session.expected_at && session.expected_at > now) ||
         ["done", "failed", "exited", "cancelled", "waiting", "blocked"].includes(

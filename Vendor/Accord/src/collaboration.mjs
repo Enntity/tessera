@@ -7,6 +7,7 @@ import { MessengerStore } from '../vendor/messenger/store.js';
 import { createHmac,randomBytes } from 'node:crypto';
 import { hash, id, token, text, integer, requireThat, loopbackUrl, request } from './common.mjs';
 import { windowDuration } from './reservation-policy.mjs';
+import { orphanGraceDefaultMs, orphanClaims, orphaningReasons } from './lifecycle.mjs';
 
 const linkProof=(key,authority,nonce)=>createHmac('sha256',key).update(`accord-link-v1\0${authority}\0${nonce}`).digest('hex');
 
@@ -36,7 +37,7 @@ export class Collaboration {
       return {address:this.address(actor)};
     });
   }
-  directory(query='') {
+  directory(query='',{includeRetired=false}={}) {
     requireThat(typeof query==='string'&&query.length<=200,'INVALID_INPUT','Search must be <=200 characters',400);
     const found=[];
     const needle=query.toLowerCase();
@@ -44,7 +45,8 @@ export class Collaboration {
       LEFT JOIN sessions s ON s.id=p.actor LEFT JOIN session_views v ON v.id=p.actor
       LEFT JOIN session_bindings b ON b.source=v.source AND b.external_id=v.external_id AND v.private=0
       WHERE NOT EXISTS (SELECT 1 FROM remote_routes r WHERE r.actor=p.actor)
-      AND NOT EXISTS (SELECT 1 FROM session_views hidden WHERE hidden.id=p.actor AND hidden.hidden=1)`;
+      AND NOT EXISTS (SELECT 1 FROM session_views hidden WHERE hidden.id=p.actor AND hidden.hidden=1)
+      ${includeRetired?'':'AND v.retired_at IS NULL AND (s.id IS NULL OR s.retired_at IS NULL)'}`;
     // Preserve participant-before-observation ordering without sorting the entire
     // retained directory before yielding its first row.
     function* ordered(db){
@@ -122,14 +124,14 @@ export class Collaboration {
     if(identity!==undefined){requireThat(identity&&typeof identity==='object','INVALID_INPUT','Invalid remote identity',400);text(identity.label,'remote label',120);}
     this.store.mutate(()=>{
       if(!this.db.prepare('SELECT id FROM actors WHERE id=?').get(actor.id))this.store.provision(actor.id,token(),'worker');
-      this.db.prepare('INSERT OR IGNORE INTO remote_routes VALUES(?,?,?)').run(actor.id,peer.authority,actorId);
+      this.db.prepare('INSERT OR IGNORE INTO remote_routes(actor,authority,session_id) VALUES(?,?,?)').run(actor.id,peer.authority,actorId);
       // The authenticated origin supplies display metadata; it grants no authority.
       if(identity)this.db.prepare("INSERT INTO participants VALUES(?,?,'[]','','',?) ON CONFLICT(actor) DO UPDATE SET label=excluded.label").run(actor.id,redact(identity.label),this.store.now());
     });
     return actor;
   }
-  async find(query='',network=true,selfAddress) {
-    const hosts=[{authority:this.store.authority,status:'observed',participants:this.directory(query)}];
+  async find(query='',network=true,selfAddress,args={}) {
+    const hosts=[{authority:this.store.authority,status:'observed',participants:this.directory(query,{includeRetired:args.includeRetired===true})}];
     if(network)hosts.push(...await Promise.all(this.db.prepare('SELECT authority FROM links').all().map(async p=>{
       // A link speaks only for its own host, however it describes itself.
       try{const {participants,observations,resources}=await this.forward(p.authority,'directory',{query},{id:'directory'}),own=r=>String(r.address??r.id).startsWith(p.authority+'/');
@@ -138,6 +140,30 @@ export class Collaboration {
     })));
     for(const host of hosts)Object.assign(host,splitDiscovery([...(host.participants??[]),...(host.observations??[])],selfAddress));
     return {hosts,participants:hosts.flatMap(h=>h.participants),observations:hosts.flatMap(h=>h.observations),guidance:discoveryGuidance};
+  }
+  // A retired recipient fails permanently. Successor chains resolve to the last
+  // known actor, never more than 10 deep.
+  retiredRecipient(session) {
+    const row = this.db.prepare('SELECT successor FROM sessions WHERE id=? AND retired_at IS NOT NULL').get(session)
+      ?? this.db.prepare('SELECT successor FROM session_views WHERE id=? AND retired_at IS NOT NULL').get(session);
+    if (!row) return null;
+    let successor = row.successor;
+    const seen = new Set([session]);
+    for (let depth = 0; successor && depth < 10; depth++) {
+      if (seen.has(successor)) break;
+      seen.add(successor);
+      const next = this.db.prepare('SELECT successor FROM sessions WHERE id=?').get(successor)?.successor
+        ?? this.db.prepare('SELECT successor FROM session_views WHERE id=?').get(successor)?.successor;
+      if (!next) break;
+      successor = next;
+    }
+    return { successor };
+  }
+  retiredError({ successor }) {
+    return Object.assign(
+      new Error(`Recipient is retired${successor ? `; use successor ${this.store.authority}/${successor}` : ''}`),
+      { code: 'RECIPIENT_RETIRED', status: 410, ...(successor ? { successor: `${this.store.authority}/${successor}` } : {}) },
+    );
   }
   recipientExists(recipient) {
     // Enrollment is enough to receive a reply, including legacy sessions that
@@ -155,7 +181,11 @@ export class Collaboration {
       requireThat(body.to.split('/').length===2,'INVALID_INPUT','Use the recipient address from find',400);
       requireThat(body.to!==this.address(actor),'SELF_MESSAGE','Send to another participant; self-messages are not supported',400);
       const [authority,recipient]=body.to.split('/');
-      if(authority===this.store.authority)requireThat(this.recipientExists(recipient),'RECIPIENT_UNKNOWN','Recipient is not registered; use an address from find or a received message',404);
+      if(authority===this.store.authority){
+        requireThat(this.recipientExists(recipient),'RECIPIENT_UNKNOWN','Recipient is not registered; use an address from find or a received message',404);
+        const retired=this.retiredRecipient(recipient);
+        if(retired)throw this.retiredError(retired);
+      }
       requireThat(authority===this.store.authority||this.db.prepare('SELECT 1 FROM links WHERE authority=?').get(authority),'HOST_UNKNOWN','Recipient host is not linked',404);
       requireThat(this.db.prepare("SELECT count(*) n FROM message_outbox WHERE state='queued'").get().n<100000,'CAPACITY_LIMIT','Pending message limit reached');
       requireThat(body.delivery===undefined||['inbox','native-prompt'].includes(body.delivery),'INVALID_INPUT','Unknown delivery preference',400);
@@ -168,11 +198,70 @@ export class Collaboration {
     text(envelope.id,'id',128);text(envelope.from,'from',220);text(envelope.text,'text',4000);
     const [authority,recipient]=String(envelope.to).split('/');
     requireThat(authority===this.store.authority&&this.recipientExists(recipient),'RECIPIENT_UNKNOWN','Recipient is not registered',404);
+    const retired=this.retiredRecipient(recipient);
+    if(retired)throw this.retiredError(retired);
     const from=this.principal(envelope.from),to=this.principal(envelope.to);
     const conversation=this.messages.createConversation(from,{members:[to.handle]});
     this.messages.sendMessage(from,{conversationId:conversation.id,clientMessageId:envelope.id,body:envelope.text,data:{id:envelope.id,from:envelope.from,to:envelope.to,kind:envelope.kind,delivery:envelope.delivery==='native-prompt'?'native-prompt':'inbox'}});
     try{this.onDeliver?.(recipient);}catch{/* A delivered message stays delivered if its hint fails. */}
     return {id:envelope.id,state:'delivered'};
+  }
+  // A linked host reports that one of its own sessions retired or revived; the
+  // route maps it to the proxy actor that holds this host's resources. The link
+  // speaks only for its own authority, and a replayed notice changes nothing.
+  lifecycleNotice(peer, payload) {
+    requireThat(payload && typeof payload === 'object', 'INVALID_INPUT', 'Invalid lifecycle notice', 400);
+    text(payload.session, 'session', 128);
+    requireThat(payload.event === 'retired' || payload.event === 'revived', 'INVALID_INPUT', 'Invalid lifecycle event', 400);
+    const stale = [];
+    const applied = this.store.mutate(() => {
+      const route = this.db.prepare('SELECT * FROM remote_routes WHERE authority=? AND session_id=?').get(peer.authority, payload.session);
+      if (!route) return false;
+      const now = this.store.now();
+      if (payload.event === 'revived') {
+        if (!this.db.prepare("UPDATE remote_routes SET retired_at=NULL,retired_reason=NULL,successor=NULL WHERE actor=? AND retired_at IS NOT NULL").run(route.actor).changes) return false;
+        // Revival within grace reclaims the same claims and generations.
+        for (const r of this.db.prepare(`SELECT r.id reservation, c.id claim FROM reservations r JOIN claims c ON c.task_id=r.task_id
+            WHERE c.actor=? AND c.state IN ('preparing','running') AND r.orphaned_at IS NOT NULL`).all(route.actor)) {
+          this.db.prepare("UPDATE reservations SET orphaned_at=NULL,orphan_reason=NULL WHERE id=?").run(r.reservation);
+          this.store.emit('reservation.reclaimed', { reservation: r.reservation, claim: r.claim, actor: route.actor });
+        }
+        this.store.emit('session.revived', { session: route.actor });
+        return true;
+      }
+      const reason = typeof payload.reason === 'string' ? payload.reason : '';
+      requireThat(['closed', 'silent', ...orphaningReasons].includes(reason), 'INVALID_INPUT', 'Invalid lifecycle reason', 400);
+      const successor = typeof payload.successor === 'string' && payload.successor ? `${peer.authority}/${payload.successor}` : null;
+      if (reason === 'closed') {
+        // A close fences immediately, even when an earlier retirement already
+        // marked the route; an orphaned hold does not finish its grace.
+        const fresh = route.retired_at === null;
+        this.db.prepare("UPDATE remote_routes SET retired_at=COALESCE(retired_at,?),retired_reason=COALESCE(retired_reason,'closed'),successor=COALESCE(?,successor) WHERE actor=?").run(now, successor, route.actor);
+        const claims = this.db.prepare("SELECT * FROM claims WHERE actor=? AND state IN ('preparing','running')").all(route.actor);
+        for (const claim of claims) {
+          this.store.fence(claim, 'session ended');
+          this.store.emit('claim.session_ended', { claim: claim.id, session: route.actor });
+        }
+        if (fresh || claims.length) this.store.emit('session.retired', { session: route.actor, reason: 'closed' });
+        return true;
+      }
+      // Positive end evidence upgrades an earlier silent retirement, as it
+      // does locally; anything else on a retired route is a replayed notice.
+      const cond = orphaningReasons.has(reason) ? "(retired_at IS NULL OR retired_reason='silent')" : "retired_at IS NULL";
+      if (!this.db.prepare(`UPDATE remote_routes SET retired_at=COALESCE(retired_at,?),retired_reason=?,successor=COALESCE(?,successor) WHERE actor=? AND ${cond}`).run(now, reason, successor, route.actor).changes) return false;
+      if (orphaningReasons.has(reason)) orphanClaims(this.db, (kind, data) => this.store.emit(kind, data), now, route.actor, reason);
+      if (reason === 'silent')
+        for (const claim of this.db.prepare("SELECT id,resource,generation,deadline FROM claims WHERE actor=? AND state IN ('preparing','running','releasing','revoking') ORDER BY created_at DESC LIMIT 1").all(route.actor)) {
+          const key = `stale:${claim.id}:${claim.generation}`;
+          if (this.db.prepare("SELECT 1 FROM commands WHERE actor=? AND key=?").get('accord-lifecycle', key)) continue;
+          this.db.prepare("INSERT INTO commands VALUES(?,?,'','{}')").run('accord-lifecycle', key);
+          this.store.emit('session.stale_holder', { session: route.actor, claim: claim.id, resource: claim.resource, generation: claim.generation });
+          stale.push({ session: route.actor, claim: claim.id, resource: claim.resource, generation: claim.generation, deadline: claim.deadline });
+        }
+      this.store.emit('session.retired', { session: route.actor, reason });
+      return true;
+    });
+    return { applied: !!applied, stale };
   }
   async flush() {
     if(this.sending){this.again=true;return;}this.sending=true;
@@ -187,8 +276,29 @@ export class Collaboration {
           if(authority===this.store.authority)this.deliver(envelope);
           else await this.forward(authority,'deliver',envelope,{id:row.actor});
           this.store.mutate(()=>{this.db.prepare("UPDATE message_outbox SET state='delivered',error=NULL WHERE id=?").run(row.id);this.store.emit('message.delivered',{id:row.id});});
-        }catch(e){this.store.mutate(()=>this.db.prepare('UPDATE message_outbox SET error=? WHERE id=?').run(e.code??'HOST_UNAVAILABLE',row.id));}
+        }catch(e){
+          // A retired recipient never revives for this envelope; mark it failed
+          // permanently instead of retrying forever.
+          const permanent=e.code==='RECIPIENT_RETIRED';
+          this.store.mutate(()=>this.db.prepare(permanent?"UPDATE message_outbox SET state='failed',error=? WHERE id=?":"UPDATE message_outbox SET error=? WHERE id=?").run(e.code??'HOST_UNAVAILABLE',row.id));
+        }
       }));
+      // Lifecycle notices ride the same cadence as mail: retried while queued,
+      // and dropped after a week so a permanently unreachable or old-version
+      // link never accumulates them.
+      for(const row of this.db.prepare("SELECT * FROM lifecycle_outbox WHERE state='queued' ORDER BY last_attempt,created_at LIMIT 32").all()){
+        if(row.created_at<this.store.now()-7*86400000){
+          this.store.mutate(()=>{this.db.prepare("UPDATE lifecycle_outbox SET state='dropped' WHERE id=?").run(row.id);this.store.emit('lifecycle.notice_dropped',{authority:row.authority,session:row.session_id,event:row.event});});
+          continue;
+        }
+        try{
+          this.store.mutate(()=>this.db.prepare('UPDATE lifecycle_outbox SET last_attempt=?,attempts=attempts+1 WHERE id=?').run(this.store.now(),row.id));
+          await this.forward(row.authority,'lifecycle',JSON.parse(row.payload),{id:'accord-lifecycle'});
+          this.store.mutate(()=>this.db.prepare("UPDATE lifecycle_outbox SET state='delivered' WHERE id=?").run(row.id));
+        }catch(e){
+          this.store.mutate(()=>this.db.prepare('UPDATE lifecycle_outbox SET attempts=attempts+1 WHERE id=?').run(row.id));
+        }
+      }
     }finally{this.sending=false;}
     if(this.again){this.again=false;return this.flush();}
   }
@@ -310,7 +420,9 @@ export class Collaboration {
     const row=this.db.prepare('SELECT r.*,t.resource,t.state task_state FROM reservations r JOIN tasks t ON t.id=r.task_id WHERE r.id=?').get(reservationId);
     requireThat(row,'NOT_FOUND','Unknown reservation',404);requireThat(row.actor===actor.id,'NOT_OWNER','Reservation belongs to another session',403);
     const claim=this.db.prepare('SELECT * FROM claims WHERE task_id=? ORDER BY created_at DESC LIMIT 1').get(row.task_id);
+    const grace=this.db.prepare('SELECT orphan_grace_ms FROM resource_bindings WHERE id=?').get(row.resource)?.orphan_grace_ms??orphanGraceDefaultMs;
     return {id:row.id,resource:row.pool&&!claim?row.pool:row.resource,state:claim?.state==='closed'?claim.outcome:claim?.state??row.task_state,
+      ...(row.orphaned_at!==null?{orphaned:{since:row.orphaned_at,reason:row.orphan_reason,releaseAt:row.orphaned_at+grace}}:{}),
       mode:row.duration_ms===null?'heartbeat':'window',renewalRequired:row.duration_ms===null,durationMs:row.duration_ms,
       authority:this.store.authority,generation:claim?.generation??null,workloadUnitPrefix:claim?'accord-'+hash(this.store.authority+'/'+claim.id+'/'+claim.generation).slice(0,20)+'-':null,claimId:claim?.id??null,deadline:claim?.deadline??null,queuedUntil:row.queued_until,error:claim?.error??null};
   }
@@ -350,9 +462,20 @@ export class Collaboration {
   // A holder that did not release must not find out by surprise that its hold is gone.
   endedClaim(sender,claim) {
     const row=this.db.prepare('SELECT id,actor FROM reservations WHERE task_id=?').get(claim.task_id);
-    const session=row&&this.db.prepare('SELECT closed_at,expires_at FROM sessions WHERE id=?').get(row.actor);
+    const session=row&&this.db.prepare('SELECT closed_at,expires_at,retired_at,successor FROM sessions WHERE id=?').get(row.actor);
     if(!row||claim.outcome==='released'||session&&(session.closed_at!==null||session.expires_at<=this.store.now()))return;
-    const to=this.holder(row.actor);if(!to)return;
+    // A retired holder's successor hears that the hold ended; a successor
+    // inherits nothing, so it must reserve again for the same resource.
+    let actor=row.actor,route;
+    if(session&&session.retired_at!==null){
+      const next=session.successor&&this.db.prepare('SELECT closed_at,expires_at,retired_at FROM sessions WHERE id=?').get(session.successor);
+      if(!next||next.closed_at!==null||next.retired_at!==null||next.expires_at<=this.store.now())return;
+      actor=session.successor;
+    }else route=this.db.prepare('SELECT retired_at,successor FROM remote_routes WHERE actor=?').get(row.actor);
+    // A retired remote holder's notice goes to the successor address the origin
+    // host named; without one there is nobody left to tell.
+    if(route&&route.retired_at!==null&&!route.successor)return;
+    const to=route&&route.retired_at!==null?route.successor:this.holder(actor);if(!to)return;
     const how=claim.deadline<=this.store.now()?'reached its deadline and ended':`ended as ${claim.outcome}: Accord revoked it before its deadline`;
     this.send(sender,{key:`ended:${claim.id}:${claim.generation}`,to,kind:'message',text:`Accord reports reservation ${row.id} on ${claim.resource} ${how}. Confirm with accord_reservation; the resource is no longer held for you, so reserve again if you still need it.`});
     void this.flush().catch(()=>{});
@@ -370,7 +493,8 @@ export class Collaboration {
     const seen=new Set(),full=new Set();
     for(const row of waiting){
       const session=this.db.prepare('SELECT * FROM sessions WHERE id=?').get(row.actor);
-      if(row.queued_until<=this.store.now()||session&&(session.closed_at!==null||session.expires_at<=this.store.now())){
+      const remote=this.db.prepare('SELECT retired_at FROM remote_routes WHERE actor=?').get(row.actor);
+      if(row.queued_until<=this.store.now()||session&&(session.closed_at!==null||session.expires_at<=this.store.now()||session.retired_at!==null)||remote&&remote.retired_at!==null){
         this.store.mutate(()=>this.db.prepare("UPDATE tasks SET state='cancelled' WHERE id=?").run(row.task_id));continue;
       }
       if(row.pool){

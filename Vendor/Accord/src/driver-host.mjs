@@ -12,8 +12,8 @@ export function driverHost(directory,controlToken){
   const drivers=new Map([['artifact',new ArtifactDriver(join(directory,'driver.sqlite'))]]);
   for(const row of db.prepare('SELECT * FROM registrations').all())drivers.set(row.id,create(join(directory,`process-${row.id}.sqlite`),JSON.parse(row.manifest)));
   // Ownership policy may change in place; the registration row is its current declaration.
-  const ownership=resource=>{const row=db.prepare('SELECT manifest FROM registrations WHERE id=?').get(resource),{maxOwnershipMs,allowIndefinite}=row?JSON.parse(row.manifest):{};return {maxOwnershipMs,allowIndefinite};};
-  const identity=manifest=>JSON.stringify({...manifest,maxOwnershipMs:undefined,allowIndefinite:undefined});
+  const ownership=resource=>{const row=db.prepare('SELECT manifest FROM registrations WHERE id=?').get(resource),{maxOwnershipMs,allowIndefinite,orphanGraceMs,ageOutMs}=row?JSON.parse(row.manifest):{};return {maxOwnershipMs,allowIndefinite,orphanGraceMs,ageOutMs};};
+  const identity=manifest=>JSON.stringify({...manifest,maxOwnershipMs:undefined,allowIndefinite:undefined,orphanGraceMs:undefined,ageOutMs:undefined});
   const describe=(resource,driver)=>({id:resource,instance:driver.status().instance,plugin:resource==='artifact'?'artifact':driver.manifest.plugin,
     enforcement:resource==='artifact'?'artifact-API':plugins.find(p=>p.id===driver.manifest.plugin).enforcement,asset:driver.manifest?.asset??'builtin:artifact',...ownership(resource)});
   const list=()=>[...drivers].map(([r,d])=>describe(r,d));

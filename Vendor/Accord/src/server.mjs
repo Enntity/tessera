@@ -18,6 +18,7 @@ import { Store } from './store.mjs';
 import { bootstrapView } from './bootstrap-view.mjs';
 import { find as compactFind } from './compact.mjs';
 import { createHttp, bearer, readBody, hash, request, integer, requireThat, loopbackUrl, text } from './common.mjs';
+import { orphanGraceDefaultMs, cooperativeAgeOutDefaultMs } from './lifecycle.mjs';
 
 export function coordinator({ db, claimSecret, driverUrl, driverToken, driverInstance, leaderMs = 5000, tickMs = 100, hostName = 'local', telemetryCollectors, driverRequest=request }) {
   integer(leaderMs, 'leaderMs', 500, 30000); integer(tickMs, 'tickMs', 10, 1000);
@@ -46,6 +47,7 @@ export function coordinator({ db, claimSecret, driverUrl, driverToken, driverIns
   }
   managers.onRunning=row=>{try{collaboration.granted(overseer.actor,{key:`grant:${row.id}`,reservation:row.id,actor:row.actor,resource:row.resource,queuedAt:row.created_at});}catch{/* A notice is a hint. */}};
   const observationRuntime=awarenessRuntime(dirname(db),awareness);
+  awareness.lifecycleConfig=()=>observationRuntime.lifecycle();
   const secretFor = claim => createHmac('sha256', claimSecret).update(claim.id).digest('base64url');
   const sessionSecret = sessionId => createHmac('sha256', claimSecret).update(`session:${sessionId}`).digest('base64url');
   const instanceFor=resource=>resource==='artifact'?driverInstance:store.binding(resource)?.instance;
@@ -63,6 +65,54 @@ export function coordinator({ db, claimSecret, driverUrl, driverToken, driverIns
     reportFailure(error);
   }
 
+  // Lifecycle notices run on the reconcile tick: both are deduplicated by send
+  // keys, so a crash before or after the mark never duplicates or loses one.
+  function lifecycleNotices(){
+    // Orphaned holds tell the successor (which inherits nothing) and each
+    // configured address once; when the hold ends, a second notice confirms.
+    const orphans=store.db.prepare(`SELECT r.id reservation,r.orphaned_at,r.orphan_reason,r.task_id,c.id claim,c.generation,c.actor,c.resource,c.state,c.outcome,
+        COALESCE(b.orphan_grace_ms,?) grace,s.successor local_successor,rr.successor remote_successor FROM reservations r JOIN claims c ON c.task_id=r.task_id
+        LEFT JOIN resource_bindings b ON b.id=c.resource LEFT JOIN sessions s ON s.id=c.actor LEFT JOIN remote_routes rr ON rr.actor=c.actor WHERE r.orphaned_at IS NOT NULL`).all(orphanGraceDefaultMs);
+    const notify=observationRuntime.lifecycle().notify??[];
+    // A remote actor whose origin reported 'silent' is a stale holder: this
+    // host's notify list hears once per claim generation (send-key deduped,
+    // retried each tick until delivered).
+    for(const h of store.db.prepare(`SELECT rr.authority,rr.session_id,c.id claim,c.generation,c.deadline,c.resource
+        FROM remote_routes rr JOIN claims c ON c.actor=rr.actor
+        WHERE rr.retired_reason='silent' AND c.state IN ('preparing','running','releasing','revoking')`).all())
+      for(const to of notify)try{
+        collaboration.send(overseer.actor,{key:`lifecycle.stale:${h.claim}:${h.generation}:${hash(to).slice(0,12)}`,to,kind:'notification',
+          text:`Accord reports ${h.authority}/${h.session_id} still holds ${h.resource} with no live session; claim ${h.claim} is held until ${new Date(h.deadline).toISOString()}.`});
+      }catch{/* A notice is a hint. */}
+    for(const o of orphans){
+      const ended=['releasing','revoking','closed'].includes(o.state);
+      // A remote route already stores its successor as a full address.
+      const successor=o.local_successor?`${store.authority}/${o.local_successor}`:o.remote_successor;
+      for(const to of [...(successor?[successor]:[]),...notify])try{
+        collaboration.send(overseer.actor,{key:`lifecycle.orphan:${o.reservation}:${ended?'ended':o.orphaned_at}:${hash(to).slice(0,12)}`,to,kind:'notification',
+          text:ended?`Accord reports orphaned reservation ${o.reservation} on ${o.resource} ended (${o.state==='closed'?o.outcome:o.state}). Successors never inherit holds: reserve again if you still need it.`
+            :`Accord reports reservation ${o.reservation} on ${o.resource} is orphaned (${o.orphan_reason}); it releases at ${new Date(o.orphaned_at+o.grace).toISOString()} unless its holder revives. Successors never inherit holds: reserve again if you need the resource.`});
+      }catch{/* A notice is a hint. */}
+    }
+    // One warning per window deadline, at a lead scaled to the window; an
+    // extension changes the deadline and so re-arms the warning.
+    for(const w of store.db.prepare(`SELECT c.id claim,c.generation,c.deadline,c.resource,r.id reservation,r.actor,r.duration_ms,r.warned_deadline
+        FROM reservations r JOIN claims c ON c.task_id=r.task_id
+        LEFT JOIN sessions s ON s.id=c.actor LEFT JOIN remote_routes rr ON rr.actor=c.actor
+        WHERE r.duration_ms IS NOT NULL AND c.state='running'
+        AND (s.id IS NULL OR (s.retired_at IS NULL AND s.closed_at IS NULL AND s.expires_at>?))
+        AND (rr.actor IS NULL OR rr.retired_at IS NULL)
+        AND (r.warned_deadline IS NULL OR r.warned_deadline!=c.deadline)`).all(store.now())){
+      const lead=Math.min(Math.max(Math.floor(w.duration_ms*0.1),60000),900000);
+      if(store.now()<w.deadline-lead)continue;
+      const to=collaboration.holder(w.actor);if(!to)continue;
+      try{
+        collaboration.send(overseer.actor,{key:`expiring:${w.claim}:${w.generation}:${w.deadline}`,to,kind:'message',
+          text:`Accord reports reservation ${w.reservation} on ${w.resource} ends at ${new Date(w.deadline).toISOString()}. Extend with accord_extend if you still need it; otherwise release it.`});
+      }catch{continue;}
+      store.mutate(()=>store.db.prepare('UPDATE reservations SET warned_deadline=? WHERE id=? AND (warned_deadline IS NULL OR warned_deadline!=?)').run(w.deadline,w.reservation,w.deadline));
+    }
+  }
   const claimFlights=new Map(),retryAfter=new Map();
   // Pending claim states are a durable outbox. One flight per resource preserves
   // ordering; independent arrivals can use an empty slot without waiting for a
@@ -73,6 +123,7 @@ export function coordinator({ db, claimSecret, driverUrl, driverToken, driverIns
     try {
       store.sweep();
       collaboration.schedule();
+      try{lifecycleNotices();}catch{/* Notices retry on the next tick. */}
       void managers.reconcile().catch(()=>{});
       const pending=store.pending(),ids=new Set(pending.map(c=>c.id));
       for(const id of retryAfter.keys())if(!ids.has(id))retryAfter.delete(id);
@@ -142,6 +193,16 @@ export function coordinator({ db, claimSecret, driverUrl, driverToken, driverIns
     if(closed||unhealthy||pruning)return;pruning=true;
     try{awareness.expireStale();}catch{/* The next pass retries. */}
     try{
+      const config=observationRuntime.lifecycle(),result=awareness.retirePass(config);
+      // One notice per stale-holder episode per configured address; the send key
+      // carries the claim generation so a crash between marking and sending is safe.
+      for(const holder of result.stale)for(const to of config.notify??[])try{
+        collaboration.send(overseer.actor,{key:`lifecycle.stale:${holder.claim}:${holder.generation}:${to}`,to,kind:'notification',
+          text:`Accord lifecycle: session ${holder.session} is silent but still holds ${holder.resource} (claim ${holder.claim}, generation ${holder.generation}, deadline ${holder.deadline}). It is stale, not retired. Reserve only if needed.`});
+      }catch{/* A notice is a hint. */}
+    }catch{/* The next pass retries. */}
+    try{store.ageOutCooperative();}catch{/* The next pass retries. */}
+    try{
       const managed=store.db.prepare("SELECT id FROM resource_bindings WHERE plugin='managed-http'").all().map(r=>r.id);
       const installed=(await request(driverUrl,driverToken,'/control/resources')).resources.filter(r=>r.plugin==='managed-http').map(r=>r.id);
       for(const id of new Set([...managed,...installed])){
@@ -180,9 +241,10 @@ export function coordinator({ db, claimSecret, driverUrl, driverToken, driverIns
         requireThat(status.instance===(resource.id==='artifact'?driverInstance:resource.instance)&&(!status.authority||status.authority===store.authority),'DRIVER_REPLACED','Driver identity mismatch');
       }catch(error){driverError=error.code==='DRIVER_REPLACED'?error.code:'DRIVER_UNAVAILABLE';}
       const holder=held.get(resource.id),queue=queues.get(resource.id)??[];
+      const orphan=holder&&store.db.prepare('SELECT orphaned_at,orphan_reason FROM reservations WHERE task_id=?').get(holder.task_id);
       return {id:`${store.authority}/${resource.id}`,localId:resource.id,...(resource.pool?{pool:resource.pool}:{}),plugin:resource.plugin??'artifact',asset:resource.asset??'builtin:artifact',
-        label:status?.label??resource.id,maxOwnershipMs:resource.allow_indefinite?null:resource.max_ownership_ms??28800000,externalWorkloads:status?.externalWorkloads??null,hosts:status?.hosts??[],queue,state:!driverError&&!status?.blocked&&!holder&&!status.claim_id?(queue.length?'queued':'unclaimed'):holder?'held':'unknown',enforcement:resource.enforcement??'artifact-API',driver:driverError||'reachable',
-        holder:holder?{claim:holder.id,actor:holder.actor,address:holder.origin_authority?`${holder.origin_authority}/${holder.origin_session}`:`${store.authority}/${holder.actor}`,label:holder.label,generation:holder.generation,state:holder.state,deadline:holder.deadline,task:holder.task_id}:null};
+        label:status?.label??resource.id,maxOwnershipMs:resource.allow_indefinite?null:resource.max_ownership_ms??28800000,orphanGraceMs:resource.orphan_grace_ms??orphanGraceDefaultMs,...(resource.plugin==='cooperative'?{ageOutMs:resource.age_out_ms??cooperativeAgeOutDefaultMs}:{}),externalWorkloads:status?.externalWorkloads??null,hosts:status?.hosts??[],queue,state:!driverError&&!status?.blocked&&!holder&&!status.claim_id?(queue.length?'queued':'unclaimed'):holder?'held':'unknown',enforcement:resource.enforcement??'artifact-API',driver:driverError||'reachable',
+        holder:holder?{claim:holder.id,actor:holder.actor,address:holder.origin_authority?`${holder.origin_authority}/${holder.origin_session}`:`${store.authority}/${holder.actor}`,label:holder.label,generation:holder.generation,state:holder.state,deadline:holder.deadline,task:holder.task_id,...(orphan?.orphaned_at!==null&&orphan?{orphaned:{since:orphan.orphaned_at,reason:orphan.orphan_reason,releaseAt:orphan.orphaned_at+(resource.orphan_grace_ms??orphanGraceDefaultMs)}}:{})}:null};
     }));
     store.assertLeader();
     return {protocol:'accord/1',authority:store.authority,name:hostName,epoch:store.epoch,observedAt:store.now(),paused:board.paused,pools:collaboration.pools(resources),
@@ -238,6 +300,8 @@ export function coordinator({ db, claimSecret, driverUrl, driverToken, driverIns
     if(operation==='manager-schedules'){requireThat(actor.role==='admin','FORBIDDEN','Operator required',403);return managers.schedules();}
     if(operation==='summary-configure')return observationRuntime.configureSummary(actor,args);
     if(operation==='session-bind')return awareness.bind(actor,args);
+    if(operation==='lifecycle-retire')return awareness.retire(actor,args);
+    if(operation==='lifecycle-sweep')return awareness.sweep(actor,args);
     if(['context-inbox','context-wait'].includes(operation)) {
       requireThat(actor.role==='admin','FORBIDDEN','Trusted local hook required',403);attention.key(args);
       if(operation==='context-wait')return attention.wake(args,signal);
@@ -265,7 +329,7 @@ export function coordinator({ db, claimSecret, driverUrl, driverToken, driverIns
     if(operation==='overseer-signal')return overseer.signal(actor,args);
     if(operation==='announce'){const result=collaboration.announce(actor,args);awareness.announce(actor,args);return result;}
     if(operation==='find'){
-      const [result,local]=await Promise.all([collaboration.find(args.query??'',true,collaboration.address(actor)),catalog()]);
+      const [result,local]=await Promise.all([collaboration.find(args.query??'',true,collaboration.address(actor),{includeRetired:args.includeRetired===true}),catalog()]);
       result.hosts[0].resources=local.resources;
       return args.detail===true?result:compactFind(result,args.query??'');
     }
@@ -340,6 +404,12 @@ export function coordinator({ db, claimSecret, driverUrl, driverToken, driverIns
       if(['sessions','session-read','jobs','overseer','memories','memory-read'].includes(body.operation)){
         requireThat(peer.share_sessions,'NOT_SHARED','This host does not share session activity with this link',403);
         return {authority:store.authority,value:await collaborate(null,body.operation,body.args)};
+      }
+      if(body.operation==='lifecycle'){
+        // Link-credential only, like deliver: the peer speaks for its own
+        // sessions, mapped to this host's proxy actors through remote_routes.
+        const result=collaboration.lifecycleNotice(peer,body.args);
+        store.assertLeader();return {authority:store.authority,value:{applied:result.applied}};
       }
       const actor=collaboration.remoteActor(peer,body.actor,body.identity);
       let value;

@@ -1,5 +1,60 @@
 # Changelog
 
+## 0.7.0
+
+- Orphaned reservations (migration 20): a session retired with `tile-closed`,
+  `process-exited`, `superseded` or `operator` orphans the reservations it holds
+  in `preparing`/`running`. Each reports `orphaned {since, reason, releaseAt}`
+  and releases after the resource's `orphanGraceMs` (0–24 h, default 15 min);
+  the ordinary fence then applies — managed holds wait for provider-confirmed
+  stop and an unconfirmed release stays held. Revival inside the grace reclaims
+  the same claim and generation; a successor inherits nothing, hears the orphan
+  and the end, and must reserve again, as does each `lifecycle.notify` address.
+  Retirements and revivals also propagate over host links through a durable
+  `lifecycle` notice: the resource host applies the same orphan/stale/fence
+  rules to the session's remote actor, with the grace counted from receipt.
+- Window reservations warn the holder once per deadline before expiry, at a
+  lead of 10% of the window clamped between one and fifteen minutes; extending
+  re-arms the warning and retired or closed holders are never warned.
+- `cooperative` manifests may declare `ageOutMs` (0 = never, default 30 days):
+  an idle cooperative resource leaves the catalog after that period, measured
+  from its `registered_at`, with `resource.aged_out` recorded.
+
+- Session retirement (migration 19): sessions and observations gain `retired_at`,
+  `retired_reason` and `successor`, and public records gain a `lifecycle` field
+  (`live`/`idle`/`stale`/`exited`/`retired`) alongside the unchanged `presence`.
+  Explicit close retires with reason `closed`; the admin `lifecycle-retire`
+  operation (`accord retire`) retires a session or everything bound to a native
+  observation; a host-observed `exited`/`cancelled` report retires the observation
+  and — when the reporter owns it — its bound actors.
+- The periodic silence pass retires observations quiet for
+  `lifecycle.observedRetireMs` (default 24 h) and enrolled sessions for
+  `lifecycle.joinedRetireMs` (default 72 h) in `awareness.json`, floored by
+  `lifecycle_since` so the upgrade backlog ages from the migration. Silent
+  claim holders go `stale` with one `lifecycle.notify` notice per claim
+  generation; queued reservations of retired sessions are cancelled.
+- Retired records stay readable by id but leave `find`, `sessions`, bootstrap
+  previews and quiet-work check-ins (`includeRetired` opts back in). Retiring
+  resolves open incidents (`subject-retired`). Authenticated activity revives a
+  silence-retired session; a transcript rescan revives only with activity newer
+  than its retirement, so dead subagents stay retired. Sends to a retired
+  address fail `RECIPIENT_RETIRED` with the successor, permanently and without
+  retries, including over host links. `lifecycle-sweep`
+  (`accord lifecycle sweep [--dry-run]`) retires the true backlog on operator
+  review and emits `lifecycle.swept`.
+
+## 0.6.10
+
+- A `session-report` whose `sourceProgressAt` runs slightly ahead of the coordinator's
+  clock is clamped to now instead of rejected, so an adapter on a faster clock no longer
+  loses its reports; a timestamp more than a day ahead is still `INVALID_INPUT`.
+- A data directory whose `accord.sock` path exceeds the platform socket limit no longer
+  fails `up` with `DATA_PATH`: the local socket binds in a private `/tmp` directory
+  instead (`0700`, the socket `0600`, a symlinked or foreign-owned path is refused), is
+  published through `endpoints.json`'s `local` URL like before, and is removed with its
+  empty directory on close. `hook.sh` finds it through `endpoints.json`, so hold and
+  wake keep working for long data paths.
+
 ## 0.6.9
 
 - `accord_title` (through `accord_more`; CLI `title`) gives any session a display name

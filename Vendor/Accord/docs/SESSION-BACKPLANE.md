@@ -138,6 +138,97 @@ For other detectors, configure `kind:external` with a `source`, then publish
 `accord signal --input signal.json`. These are administrator operations.
 Disable a rule by reapplying its configuration with `enabled:false`.
 
+## Retirement
+
+Retirement is durable bookkeeping, not deletion. A retired session or observation
+stays readable by id, and its `retiredAt`, `retiredReason` and optional
+`successor` are visible in its public record. Public records also carry
+`lifecycle`: `live` (heartbeat, report or announce within two minutes), `idle`,
+`stale` (past its silence threshold but held back as a reservation holder),
+`exited` (terminal, not yet retired), or `retired`. The older `presence` field
+(`recent`/`unknown`/`offline`) is unchanged for existing clients.
+
+Retirement happens four ways:
+
+- **Explicit close.** Closing a session also retires it with reason `closed`;
+  the credential stays revoked and nothing revives it.
+- **Positive end evidence.** The administrator operation `lifecycle-retire`
+  (CLI `accord retire`) takes `{session}` or `{source, externalId}` plus
+  `reason` of `tile-closed`, `process-exited` or `operator`. By
+  `(source, externalId)` it retires the observation and every enrolled actor
+  bound to it. A host observation reported `exited` or `cancelled` retires
+  itself, and when the reporting adapter owns the observation its bound actors
+  retire too (`done` does not: a finished conversation can resume).
+- **Silence.** The periodic pass retires scanned observations silent for
+  `lifecycle.observedRetireMs` (default 24 h) and enrolled sessions plus
+  adapter-reported observations for `lifecycle.joinedRetireMs` (default 72 h),
+  measured from the latest of heartbeat, progress, announce and report.
+  `lifecycle_since` — set when the lifecycle columns were added — floors
+  last-activity, so the pre-upgrade backlog ages from the upgrade, not its
+  full history. Observations from a `roots[].source` are transcript-scanned:
+  the scanner refreshes them from file activity. Every other reported source
+  is the adapter's responsibility — an adapter is expected to re-report each
+  observation it still considers live; an unchanged report from the owner
+  refreshes the heartbeat (no revision, progress or summary change) and
+  revives a silence-retired observation.
+- **Supersession.** Rebinding a `(source, externalId)` to a new actor retires
+  the displaced one with reason `superseded` and records the successor.
+
+A silent session holding a claim in `preparing`, `running`, `releasing` or
+`revoking` is never retired: windows are promised to need no heartbeat. It goes
+`stale` instead, emitting `session.stale_holder` and one notification per claim
+generation to each address in `lifecycle.notify`. A silent session with only a
+queued reservation retires normally and its queue entry is cancelled, the same
+way a closed session's is. Retired subjects are excluded from `find`,
+`sessions`, bootstrap previews and quiet-work check-ins (`find` and
+`sessions` accept `includeRetired:true`); retiring resolves their open
+incidents with reason `subject-retired`. A holder retired by `tile-closed`,
+`process-exited`, `superseded` or `operator` also orphans each reservation it
+holds in `preparing` or `running`: the reservation marks `orphaned_at` with the
+retirement reason and releases after the resource's `orphanGraceMs` (default
+fifteen minutes), the same fence an expired lease takes. Revival inside the
+grace reclaims the hold; a successor inherits nothing and must reserve again.
+The successor and each `lifecycle.notify` address are told once when the hold
+orphans and once when it ends.
+
+Retirement and revival also propagate over host links: the retiring host enqueues
+one durable `lifecycle` notice per link (retried like mail, dropped after a
+week), and the receiving host applies the matching effect to the proxy actor in
+`remote_routes` — `closed` fences immediately, an orphaning reason orphans its
+held reservations with the grace counted from notice *receipt*, `silent` marks
+it a stale holder, and `revived` reclaims within grace. Positive end evidence
+upgrades an earlier `silent` mark on either side: an orphaning reason orphans
+then, with the grace counted from that receipt, and `closed` still fences at
+once — so a hold on another host is never stranded by an intervening silence
+retirement.
+
+Configure thresholds and notifications in `awareness.json`, which reloads on
+the observation loop:
+
+```json
+{
+  "lifecycle": {
+    "observedRetireMs": 86400000,
+    "joinedRetireMs": 259200000,
+    "notify": ["AUTHORITY/admin"]
+  }
+}
+```
+
+Revival is narrow: an authenticated heartbeat, announce or report from a
+retired, non-closed session clears `retired_at`, marks it `live` and emits
+`session.revived`. A native observation revives only when a report carries
+activity newer than its `retired_at` — a rescan of a dead transcript never
+reasserts `working`. Revival touches retirement fields only; a released or
+revoked claim is never reactivated.
+
+The one-time `lifecycle-sweep` operation (CLI `accord lifecycle sweep
+[--dry-run]`) applies the same rules against true last activity, ignoring
+`lifecycle_since`. It returns counts by category — observations by source,
+enrolled sessions by harness, stale holders, incidents resolved, queued
+reservations cancelled — with up to twenty sample ids and titles each. A dry
+run writes nothing; a real sweep emits `lifecycle.swept` with its counts.
+
 The overseer sends a durable check-in. It never releases, kills, renews or steals
 a resource. Delivery, native wakeup, agent reading and agent action are separate
 facts. Installed context hooks deliver new messages at
