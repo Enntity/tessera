@@ -226,6 +226,17 @@ final class AppModel {
     /// the Edit menu (⌘Z). Every close comes through here. `by` names who asked — the toast says
     /// so when it wasn't the developer.
     func close(_ ids: [String], by: String = "the developer") {
+        // A tile whose agent holds shared hardware asks first: closing ends the agent and the
+        // reservation only orphans. An unavailable Accord yields no warning, as before.
+        if by == "the developer", let warning = workspace.closeWarning(for: ids) {
+            let alert = NSAlert()
+            alert.messageText = ids.count == 1 ? "Close this tile?" : "Close \(ids.count) tiles?"
+            alert.informativeText = warning
+            alert.alertStyle = .warning
+            alert.addButton(withTitle: "Close")
+            alert.addButton(withTitle: "Cancel")
+            guard alert.runModal() == .alertFirstButtonReturn else { return }
+        }
         act(Style.Motion.standard) {
             let closed = ids.compactMap { workspace.close($0, by: by) }
             guard let first = closed.first else { return }

@@ -124,6 +124,31 @@ final class CloseTileTests: XCTestCase {
         XCTAssertFalse(workspace.desk.sessions.contains { $0.id == card.id })
     }
 
+    /// An idle agent tile holding a shared reservation is refused without force; force asks the
+    /// developer on a card whose text names the hold.
+    @MainActor
+    func testAnIdleAgentHoldingAReservationNeedsForce() async throws {
+        let workspace = try board()
+        workspace.overseerCommand = "cat"
+        workspace.isWakeableTerminalOverride = { _ in true }
+        let over = try XCTUnwrap(workspace.overseer())
+        let tile = workspace.launch(command: "sleep 30", cwd: dir.path)
+        defer { workspace.shutDown(tile) }
+        workspace.tileHoldsOverride = { $0 == tile ? [Workspace.TileHold(resource: "lloom-spark04", reservation: "res-9", until: nil)] : [] }
+        for _ in 0..<400 where workspace.info(tile)?.activity != .idle { try await Task.sleep(nanoseconds: 50_000_000) }
+        XCTAssertEqual(workspace.info(tile)?.activity, .idle)
+        var (text, failed) = try await tool(workspace, ["tile": tile], tile: over)
+        XCTAssertTrue(failed)
+        XCTAssertTrue(text.contains("holds lloom-spark04 (reservation res-9)"), text)
+        XCTAssertTrue(workspace.exists(tile))
+        (text, failed) = try await tool(workspace, ["tile": tile, "force": true], tile: over)
+        XCTAssertFalse(failed)
+        let card = workspace.desk.sessions.first { $0.id.hasPrefix("ask:close:") }
+        XCTAssertEqual(card?.snapshot.detail?.contains("res-9"), true, card?.snapshot.detail ?? "")
+        XCTAssertTrue(workspace.exists(tile))
+    }
+
+    /// A tile holding nothing closes exactly as it did before reservations were visible.
     @MainActor
     func testAnIdleAgentClosesAtOnce() async throws {
         let workspace = try board()

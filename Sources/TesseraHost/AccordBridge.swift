@@ -37,6 +37,9 @@ public final class AccordBridge {
     @ObservationIgnored public var nativeAliases: (() -> Set<String>)?
     @ObservationIgnored public var lookback: () -> TimeInterval = { 36 * 3600 }
     @ObservationIgnored public var digests: (() -> [Steward.Digest])?
+    /// Tiles that still exist on the board, hidden and minimised ones included: the
+    /// closed-observation sweep never reports one of these exited.
+    @ObservationIgnored public var presentTiles: (() -> Set<String>)?
     @ObservationIgnored public var paused: (() -> Bool)?
     @ObservationIgnored public var deliver: ((String, String, String, String, Bool) -> Bool)?
     @ObservationIgnored public var questions: (([[String: Any]]) -> Void)?
@@ -47,6 +50,11 @@ public final class AccordBridge {
     @ObservationIgnored private var seen: [String: String] = [:]
     @ObservationIgnored private var published: [String: Date] = [:]
     @ObservationIgnored private var records: [String: String] = [:]
+    /// When Tessera's own observations were last swept for tiles closed while it was away.
+    @ObservationIgnored private var lastClosedCheck: Date?
+    /// Called once per incident when the closed-observation sweep is refused as unsafe.
+    @ObservationIgnored public var sweepRefused: ((String) -> Void)?
+    @ObservationIgnored private var sweepRefusedLogged = false
     @ObservationIgnored private var answered: Set<String> = []
     @ObservationIgnored private var timer: Timer?
     @ObservationIgnored private var busy = false
@@ -118,7 +126,7 @@ public final class AccordBridge {
         guard identity["authority"] as? String == c.2 else { throw URLError(.userAuthenticationRequired) }
         return try await call(c, path: "v1/collaboration", body: ["operation": op, "args": args])
     }
-    private static func fingerprint(_ digest: Steward.Digest) -> String {
+    nonisolated static func fingerprint(_ digest: Steward.Digest) -> String {
         SHA256.hash(data: Data((digest.state + "\n" + (digest.detail ?? "") + "\n" + digest.text).utf8)).map { String(format: "%02x", $0) }.joined()
     }
     /// The `session-report` arguments for a digest. `sourceProgressAt` goes out only once the tile
@@ -132,6 +140,50 @@ public final class AccordBridge {
             "events": digest.text.isEmpty ? [] : [["key": fingerprint(digest), "kind": "observation", "text": String(digest.text.suffix(12000))]]]
         if digest.idleMinutes > 0 { args["sourceProgressAt"] = max(0, nowMs - digest.idleMinutes * 60000) }
         return args
+    }
+
+    /// Which digests this pass reports: a changed fingerprint always goes out; an unchanged one
+    /// goes again once `refreshEvery` has passed so the observation stays live on Accord. Changed
+    /// ones first, then the longest since their last report; the caller's budget caps the batch.
+    nonisolated static func digestsToReport(_ digests: [Steward.Digest], seen: [String: String], published: [String: Date],
+                                now: Date, refreshEvery: TimeInterval = 3600, limit: Int = 16) -> [Steward.Digest] {
+        let changed = digests.filter { seen[$0.id] != fingerprint($0) }
+        let due = digests.filter { seen[$0.id] == fingerprint($0) && now.timeIntervalSince(published[$0.id] ?? .distantPast) >= refreshEvery }
+        return Array((changed + due)
+            .sorted { a, b in
+                let fa = seen[a.id] != fingerprint(a), fb = seen[b.id] != fingerprint(b)
+                return fa != fb ? fa : (published[a.id] ?? .distantPast) < (published[b.id] ?? .distantPast)
+            }
+            .prefix(limit))
+    }
+
+    /// An observation of ours that Accord still considers open: neither retired nor terminal.
+    /// A coordinator that predates the `terminal` field is read through the state string instead.
+    nonisolated static func liveObservation(_ value: [String: Any]) -> Bool {
+        guard value["source"] as? String == "tessera", value["retiredAt"] == nil else { return false }
+        if let terminal = value["terminal"] as? Bool { return !terminal }
+        return !["done", "failed", "exited", "cancelled"].contains(value["state"] as? String ?? "")
+    }
+
+    /// Accord observations of tiles that no longer exist here and have not ended there: tiles
+    /// closed while Tessera was away. Hidden and minimised tiles still exist (presentTileIDs
+    /// includes them); retired and terminal ones need no report.
+    nonisolated static func closedObservations(_ own: [[String: Any]], presentTileIDs: Set<String>) -> [String] {
+        own.compactMap { value in
+            guard liveObservation(value), let tile = value["externalId"] as? String,
+                  !presentTileIDs.contains(tile) else { return nil }
+            return tile
+        }
+    }
+
+    /// The sweep is refused rather than mass-report: an empty present set means the workspace
+    /// didn't load (a failed restore must not retire every agent), and a missing share beyond
+    /// max(5, half the live observations) is implausible for tiles genuinely closed while away.
+    /// The caller logs once and retries at the next check.
+    nonisolated static func closedSweepAllowed(_ own: [[String: Any]], presentTileIDs: Set<String>, missing: [String]) -> Bool {
+        guard !presentTileIDs.isEmpty else { return false }
+        let live = own.filter(liveObservation).count
+        return missing.count <= max(5, live / 2)
     }
     public func refresh() async {
         guard !busy, FileManager.default.fileExists(atPath: profile.path) else { return }
@@ -149,7 +201,7 @@ public final class AccordBridge {
             }
             if privacy { summaries.removeAll(); tileSummaries.removeAll(); tileRecords.removeAll(); senderTiles.removeAll(); incidents.removeAll(); projectedSessions = []; sessions?([]); connected = true; return }
             let values = digests?() ?? []
-            for digest in values.filter({ seen[$0.id] != Self.fingerprint($0) }).sorted(by: { (published[$0.id] ?? .distantPast) < (published[$1.id] ?? .distantPast) }).prefix(16) {
+            for digest in Self.digestsToReport(values, seen: seen, published: published, now: Date()) {
                 var args = Self.reportArgs(digest, key: UUID().uuidString, nowMs: Int(Date().timeIntervalSince1970 * 1000))
                 var result: [String: Any]?
                 do {
@@ -186,11 +238,32 @@ public final class AccordBridge {
             }, uniquingKeysWith: { _, latest in latest })
             // The board is Accord's most recent sessions; a tile idle for days is not among them, so
             // read back all of Tessera's own. An Accord that predates `source` answers with the same recent list.
+            // Accord's `list` caps at 200; with more, the most recent 200 cover the sweep.
             let own = (try? await operation(c, "sessions", ["source": "tessera", "limit": 200]))?["sessions"] as? [[String: Any]] ?? []
             let held = Self.tileRecords((board["sessions"] as? [[String: Any]] ?? []) + own, authority: c.2)
             if held != tileRecords { tileRecords = held }
             let senders = Self.senderTiles((board["sessions"] as? [[String: Any]] ?? []) + own, authority: c.2)
             if senders != senderTiles { senderTiles = senders }
+            // A tile closed while Tessera was away was never reported; its observation is still
+            // live on Accord. Sweep the first pass after connecting, then every ten minutes —
+            // but never on a board that looks emptied or mostly gone: that is a broken restore,
+            // and reporting would retire live agents and their reservations.
+            if lastClosedCheck == nil || Date().timeIntervalSince(lastClosedCheck!) >= 600 {
+                lastClosedCheck = Date()
+                let present = presentTiles?() ?? Set(values.map(\.id))
+                let missing = Self.closedObservations(own, presentTileIDs: present)
+                if Self.closedSweepAllowed(own, presentTileIDs: present, missing: missing) {
+                    sweepRefusedLogged = false
+                    for tile in missing {
+                        _ = try? await operation(c, "session-report", ["key": UUID().uuidString, "source": "tessera", "externalId": tile,
+                            "title": "Closed native session", "state": "exited"])
+                    }
+                } else if !sweepRefusedLogged {
+                    sweepRefusedLogged = true
+                    let live = own.filter(Self.liveObservation).count
+                    sweepRefused?("closed-observation sweep skipped: \(missing.count) of \(live) live observations have no tile on the board")
+                }
+            }
             acceptSnapshot(board, nativeIDs: current.union(nativeAliases?() ?? []))
             incidents = board["incidents"] as? [[String: Any]] ?? []
             questions?(board["questions"] as? [[String: Any]] ?? [])
@@ -289,6 +362,8 @@ public final class AccordBridge {
     func connectionFailed() {
         // A transport failure is not a session exit. Preserve the last good board.
         connected = false
+        lastClosedCheck = nil
+        sweepRefusedLogged = false
     }
     /// Accord's record of each tile Tessera reported to it, by tile id. Only this host's sessions
     /// count: a linked host's Tessera reports tiles of its own under the same source.

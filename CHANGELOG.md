@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Closing a tile whose agent holds a shared reservation now asks first, naming the resource and
+  its deadline, since Accord releases it 15 minutes after the agent ends; `close_tile` refuses
+  such a tile unless forced. Tessera re-reports live tiles at least hourly so idle tiles stay
+  reachable on Accord, and reports tiles closed while it wasn't running (never on a failed or
+  partial restore).
 - Fixed: the overseer card's line could be the steward's board brief, but opening the card never
   showed it. The panel now pins the full brief above the chat or terminal (attention rows open
   their tile, it collapses until a newer brief lands, and "Ask Tessera about this" follows up), and
