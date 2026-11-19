@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 // State/fingerprint/settle semantics adapted from Tessera Steward and AgentDesk.
 import { hash, id, integer, requireThat, text, token } from "./common.mjs";
+import { applyRetirement, enqueueLifecycle, lifecycleFor, parseLifecycle, lifecycleDefaults } from "./lifecycle.mjs";
 
 export const awarenessSchema = `
 CREATE TABLE remote_routes(actor TEXT PRIMARY KEY REFERENCES actors(id),authority TEXT NOT NULL,session_id TEXT NOT NULL);
@@ -75,6 +76,45 @@ export class SessionAwareness {
   constructor(store) {
     this.store = store;
     this.db = store.db;
+    // The server installs the operator's lifecycle section from awareness.json.
+    this.lifecycleConfig = () => lifecycleDefaults;
+  }
+  thresholds() {
+    const c = parseLifecycle(this.lifecycleConfig());
+    return { observedMs: c.observedRetireMs, joinedMs: c.joinedRetireMs, scanned: c.scannedSources };
+  }
+  lifecycleFloor() {
+    return Number(
+      this.db.prepare("SELECT value FROM meta WHERE key='lifecycle_since'").get()?.value ?? 0,
+    );
+  }
+  // Retirement clears only on fresh authenticated activity; a closed session's
+  // credential is gone before this can run, so nothing here reopens it.
+  revive(subject) {
+    const session = this.db.prepare("SELECT closed_at FROM sessions WHERE id=?").get(subject);
+    if (session && session.closed_at !== null) return;
+    const sessionChanged = this.db
+      .prepare("UPDATE sessions SET retired_at=NULL,retired_reason=NULL WHERE id=? AND retired_at IS NOT NULL")
+      .run(subject).changes;
+    const changed = sessionChanged + this.db
+      .prepare("UPDATE session_views SET retired_at=NULL,retired_reason=NULL WHERE id=? AND retired_at IS NOT NULL")
+      .run(subject).changes;
+    if (changed) {
+      // Revival within grace reclaims the same claims and generations; nothing
+      // transfers to a successor, which has to reserve again.
+      for (const r of this.db
+        .prepare(`SELECT r.id reservation, c.id claim FROM reservations r JOIN claims c ON c.task_id=r.task_id
+          WHERE c.actor=? AND c.state IN ('preparing','running') AND r.orphaned_at IS NOT NULL`)
+        .all(subject)) {
+        this.db.prepare("UPDATE reservations SET orphaned_at=NULL,orphan_reason=NULL WHERE id=?").run(r.reservation);
+        this.store.emit("reservation.reclaimed", { reservation: r.reservation, claim: r.claim, actor: subject });
+      }
+      if (sessionChanged) enqueueLifecycle(this.db, this.store.now(), subject, "revived");
+      this.store.emit("session.revived", { session: subject });
+    }
+  }
+  retireRow(id, options) {
+    return applyRetirement(this.db, (kind, data) => this.store.emit(kind, data), this.store.now(), id, options);
   }
   bind(actor, body) {
     requireThat(
@@ -98,12 +138,17 @@ export class SessionAwareness {
       // Only a trusted host binding can grant the resumed conversation access
       // to prior mailboxes. Neither labels nor working directories establish this.
       this.db.prepare('INSERT OR IGNORE INTO session_mailbox_aliases VALUES(?,?,?)').run(body.source,body.externalId,body.actor);
+      const prior=this.db.prepare('SELECT actor FROM session_bindings WHERE source=? AND external_id=?').get(body.source,body.externalId);
       this.db
         .prepare(
           "INSERT INTO session_bindings VALUES(?,?,?) ON CONFLICT(source,external_id) DO UPDATE SET actor=excluded.actor",
         )
         .run(body.source, body.externalId, body.actor);
-      return { bound: true };
+      // A rebound conversation belongs to the new actor; the displaced one is
+      // retired with a successor pointer so stale addresses still resolve.
+      if(prior&&prior.actor!==body.actor)
+        this.retireRow(prior.actor,{reason:'superseded',successor:body.actor});
+      return { bound: true, ...(prior&&prior.actor!==body.actor?{superseded:prior.actor}:{}) };
     });
   }
   row(session) {
@@ -157,6 +202,11 @@ export class SessionAwareness {
       snoozedUntil: row.snoozed_until,
       presence:
         this.store.now() - row.heartbeat_at < 120000 ? "recent" : "unknown",
+      lifecycle: lifecycleFor(row, this.store.now(), this.thresholds()),
+      ...(row.retired_at !== null && row.retired_at !== undefined
+        ? { retiredAt: row.retired_at, retiredReason: row.retired_reason }
+        : {}),
+      ...(row.successor ? { successor: `${this.store.authority}/${row.successor}` } : {}),
       terminal: terminal.has(row.state),
     };
   }
@@ -279,10 +329,44 @@ export class SessionAwareness {
           "Source timestamps require a host adapter",
           403,
         );
-        integer(body.sourceProgressAt, "sourceProgressAt", 0, now);
+        // A source clock a fraction ahead of ours is clamped, not refused; a day ahead is garbage.
+        integer(body.sourceProgressAt, "sourceProgressAt", 0, now + 86400000);
       }
       const revision = (old?.revision ?? 0) + (changed ? 1 : 0),
-        progress = changed ? (body.sourceProgressAt ?? now) : old.progress_at;
+        progress = changed ? (body.sourceProgressAt == null ? now : Math.min(body.sourceProgressAt, now)) : old.progress_at;
+      // A host-observed exit is positive end evidence. Bound actors retire
+      // only when the reporter owns the observation: another adapter's exit
+      // report must not retire sessions it does not own. This also runs for a
+      // report on an already-retired observation, whose bound actor may still
+      // be live.
+      const endEvidence = () => {
+        const reason = source === "tessera" ? "tile-closed" : "process-exited";
+        this.retireRow(session, { reason });
+        if (old?.owner === actor.id)
+          for (const b of this.db
+            .prepare("SELECT actor FROM session_bindings WHERE source=? AND external_id=?")
+            .all(source, external))
+          this.retireRow(b.actor, { reason });
+      };
+      // A rescan of a dead transcript must not reassert working on a retired
+      // observation: only activity newer than the retirement revives it. An
+      // authenticated session's own report always revives it. For a source the
+      // scanner does not own, an unchanged report from the observation's owner
+      // is the adapter confirming it is still live, so it refreshes the
+      // heartbeat and revives.
+      const endState = source !== "agent" && ["exited", "cancelled"].includes(state);
+      const ownerReport = old && old.owner === actor.id;
+      // A positive end report never revives; it keeps the observation retired
+      // and just settles its bound actors.
+      const reviving = old && old.retired_at !== null && !endState &&
+        (source === "agent" ||
+          (changed && progress > old.retired_at) ||
+          (source !== "agent" && ownerReport && !this.thresholds().scanned.includes(source)));
+      if (old && old.retired_at !== null && !reviving) {
+        if (endState) endEvidence();
+        return this.public(old);
+      }
+      if (reviving || source === "agent") this.revive(session);
       const summary = privacy
         ? ""
         : (detail || fresh.at(-1)?.body || old?.summary || title)
@@ -362,6 +446,7 @@ export class SessionAwareness {
           privacy ? "" : location,
           now,
         );
+      if (endState) endEvidence();
       return this.public(this.row(session));
     });
   }
@@ -438,6 +523,7 @@ export class SessionAwareness {
       this.db
         .prepare("UPDATE participants SET updated_at=? WHERE actor=?")
         .run(now, actor.id);
+      this.revive(actor.id);
       return { heartbeatAt: now };
     });
   }
@@ -455,9 +541,176 @@ export class SessionAwareness {
       return { expired: stale.length };
     });
   }
+  // Administrative retirement: a session id, or every actor bound to a native
+  // observation such as ('tessera', tileId). Positive end evidence only.
+  retire(actor, body) {
+    requireThat(actor.role === "admin", "FORBIDDEN", "Administrator required", 403);
+    requireThat(
+      ["tile-closed", "process-exited", "operator"].includes(body.reason),
+      "INVALID_INPUT",
+      "reason must be tile-closed, process-exited or operator",
+      400,
+    );
+    const bySession = body.session !== undefined;
+    requireThat(
+      bySession !== (body.source !== undefined || body.externalId !== undefined),
+      "INVALID_INPUT",
+      "Name a session id, or a source and externalId",
+      400,
+    );
+    return this.store.command(actor, body, "lifecycle.retire", () => {
+      const retired = [],
+        now = this.store.now(),
+        drop = (id) => {
+          if (applyRetirement(this.db, (k, d) => this.store.emit(k, d), now, id, { reason: body.reason }))
+            retired.push(id);
+        };
+      if (bySession) {
+        text(body.session, "session", 200);
+        requireThat(
+          this.db
+            .prepare("SELECT 1 FROM sessions WHERE id=? UNION SELECT 1 FROM session_views WHERE id=? LIMIT 1")
+            .get(body.session, body.session),
+          "NOT_FOUND",
+          "Unknown session",
+          404,
+        );
+        drop(body.session);
+      } else {
+        text(body.source, "source", 64);
+        text(body.externalId, "externalId", 200);
+        const view = this.db
+            .prepare("SELECT id FROM session_views WHERE source=? AND external_id=?")
+            .get(body.source, body.externalId),
+          bound = this.db
+            .prepare("SELECT actor FROM session_bindings WHERE source=? AND external_id=?")
+            .all(body.source, body.externalId);
+        requireThat(view || bound.length, "NOT_FOUND", "Nothing observed or bound there", 404);
+        if (view) drop(view.id);
+        for (const b of bound) drop(b.actor);
+      }
+      return { retired, reason: body.reason };
+    });
+  }
+  retireCandidates({ observedMs, joinedMs, floor }) {
+    const now = this.store.now(),
+      held = new Set(
+        this.db
+          .prepare("SELECT DISTINCT actor FROM claims WHERE state IN ('preparing','running','releasing','revoking')")
+          .all()
+          .map((r) => r.actor),
+      );
+    // Silence counts heartbeat, progress, announce and report; floor lifts the
+    // pre-upgrade backlog so it ages from the migration instead of its history.
+    // Transcript-scanned sources refresh from file activity, so they use the
+    // short threshold; adapter-reported sources (tessera and the like) use the
+    // joined one, since their reporter re-reports live observations.
+    const scanned = this.thresholds().scanned,
+      inScanned = scanned.length ? `(${scanned.map(() => "?").join(",")})` : "(NULL)";
+    const observations = this.db
+        .prepare(
+          `SELECT id,source,title,state FROM session_views WHERE retired_at IS NULL AND source!='agent'
+           AND ?-MAX(heartbeat_at,progress_at,observed_at,?)>=CASE WHEN source IN ${inScanned} THEN ? ELSE ? END`,
+        )
+        .all(now, floor, ...scanned, observedMs, joinedMs),
+      sessions = this.db
+        .prepare(
+          `SELECT s.id,s.harness,s.label title FROM sessions s
+           LEFT JOIN session_views v ON v.id=s.id LEFT JOIN participants p ON p.actor=s.id
+           WHERE s.retired_at IS NULL AND s.closed_at IS NULL AND s.expires_at>?
+           AND ?-MAX(COALESCE(v.heartbeat_at,0),COALESCE(v.progress_at,0),COALESCE(v.observed_at,0),COALESCE(p.updated_at,0),s.created_at,?)>=?`,
+        )
+        .all(now, now, floor, joinedMs)
+        .map((s) => ({ ...s, held: held.has(s.id) }));
+    return { observations, sessions };
+  }
+  // The periodic silence pass. A holder of an active claim is never retired: a
+  // window reservation is promised to need no heartbeat, so it goes stale and
+  // notifies once per claim generation instead.
+  retirePass({ observedRetireMs = lifecycleDefaults.observedRetireMs, joinedRetireMs = lifecycleDefaults.joinedRetireMs } = {}) {
+    const { observations, sessions } = this.retireCandidates({
+      observedMs: observedRetireMs,
+      joinedMs: joinedRetireMs,
+      floor: this.lifecycleFloor(),
+    });
+    const stale = [];
+    const result = this.store.mutate(() => {
+      const now = this.store.now();
+      let retired = 0;
+      for (const o of observations)
+        if (applyRetirement(this.db, (k, d) => this.store.emit(k, d), now, o.id, { reason: "silent" })) retired++;
+      for (const s of sessions) {
+        if (s.held) {
+          const claim = this.db
+            .prepare("SELECT id,resource,generation,deadline FROM claims WHERE actor=? AND state IN ('preparing','running','releasing','revoking') ORDER BY created_at DESC LIMIT 1")
+            .get(s.id);
+          if (!claim) continue;
+          const key = `stale:${claim.id}:${claim.generation}`;
+          if (this.db.prepare("SELECT 1 FROM commands WHERE actor=? AND key=?").get("accord-lifecycle", key)) continue;
+          this.db.prepare("INSERT INTO commands VALUES(?,?,'','{}')").run("accord-lifecycle", key);
+          this.store.emit("session.stale_holder", {
+            session: s.id, claim: claim.id, resource: claim.resource, generation: claim.generation,
+          });
+          stale.push({ session: s.id, claim: claim.id, resource: claim.resource, generation: claim.generation, deadline: claim.deadline });
+          continue;
+        }
+        if (applyRetirement(this.db, (k, d) => this.store.emit(k, d), now, s.id, { reason: "silent" })) retired++;
+      }
+      return { retired };
+    });
+    return { ...result, stale };
+  }
+  // The operator's one-time sweep applies the same rules against true activity,
+  // ignoring lifecycle_since. A dry run writes nothing.
+  sweep(actor, { dryRun = false } = {}) {
+    requireThat(actor.role === "admin", "FORBIDDEN", "Administrator required", 403);
+    requireThat(typeof dryRun === "boolean", "INVALID_INPUT", "dryRun must be boolean", 400);
+    const t = this.thresholds(),
+      { observations, sessions } = this.retireCandidates({ observedMs: t.observedMs, joinedMs: t.joinedMs, floor: 0 }),
+      retiringSessions = sessions.filter((s) => !s.held),
+      staleHolders = sessions.filter((s) => s.held),
+      retiring = [...observations.map((o) => o.id), ...retiringSessions.map((s) => s.id)];
+    const inList = retiring.length ? `(${retiring.map(() => "?").join(",")})` : "(NULL)",
+      incidents = this.db
+        .prepare(`SELECT count(*) n FROM overseer_incidents WHERE state!='resolved' AND session_id IN ${inList}`)
+        .get(...retiring).n,
+      queued = this.db
+        .prepare(`SELECT count(*) n FROM tasks t JOIN reservations r ON r.task_id=t.id WHERE t.state='queued' AND r.actor IN ${inList}`)
+        .get(...retiring).n,
+      sample = (rows) => rows.slice(0, 20).map((r) => ({ id: r.id, title: r.title })),
+      by = (rows, key) => {
+        const m = {};
+        for (const r of rows) m[r[key] ?? "agent"] = (m[r[key] ?? "agent"] ?? 0) + 1;
+        return m;
+      },
+      counts = {
+        observations: { count: observations.length, bySource: by(observations, "source"), sample: sample(observations) },
+        sessions: { count: retiringSessions.length, byHarness: by(retiringSessions, "harness"), sample: sample(retiringSessions) },
+        staleHolders: { count: staleHolders.length, sample: sample(staleHolders) },
+        incidentsResolved: incidents,
+        queuedReservationsCancelled: queued,
+      };
+    if (dryRun) return { dryRun: true, ...counts };
+    this.store.mutate(() => {
+      const now = this.store.now();
+      for (const id of retiring)
+        applyRetirement(this.db, (k, d) => this.store.emit(k, d), now, id, { reason: "silent" });
+      this.db
+        .prepare(`UPDATE tasks SET state='cancelled' WHERE state='queued' AND id IN (SELECT task_id FROM reservations WHERE actor IN ${inList})`)
+        .run(...retiring);
+      this.store.emit("lifecycle.swept", {
+        observations: observations.length,
+        sessions: retiringSessions.length,
+        staleHolders: staleHolders.length,
+        incidentsResolved: incidents,
+        queuedReservationsCancelled: queued,
+      });
+    });
+    return { dryRun: false, ...counts };
+  }
   // `source` narrows to one adapter's sessions, live ones first, so an adapter can read back
   // all it reported: the default list is the most recent progress, and a name is not progress.
-  list({ query = "", limit = 50, source } = {}) {
+  list({ query = "", limit = 50, source, includeRetired = false } = {}) {
     integer(limit, "limit", 1, 200);
     if (source !== undefined) text(source, "source", 64);
     requireThat(
@@ -467,21 +720,22 @@ export class SessionAwareness {
       400,
     );
     const words = query.match(/[\p{L}\p{N}_-]+/gu) ?? [];
+    const retired = includeRetired === true ? "" : " AND v.retired_at IS NULL";
     const rows = words.length
       ? this.db
           .prepare(
-            `SELECT v.* FROM session_search f JOIN session_views v ON v.id=f.session_id WHERE v.hidden=0 AND (:source IS NULL OR v.source=:source) AND session_search MATCH :match ORDER BY rank LIMIT :limit`,
+            `SELECT v.* FROM session_search f JOIN session_views v ON v.id=f.session_id WHERE v.hidden=0${retired} AND (:source IS NULL OR v.source=:source) AND session_search MATCH :match ORDER BY rank LIMIT :limit`,
           )
           .all({ source: source ?? null, match: words.map((w) => '"' + w + '"').join(" AND "), limit })
       : source !== undefined
       ? this.db
           .prepare(
-            "SELECT * FROM session_views WHERE hidden=0 AND source=? ORDER BY state='exited',progress_at DESC LIMIT ?",
+            `SELECT * FROM session_views v WHERE v.hidden=0${retired} AND v.source=? ORDER BY v.state='exited',v.progress_at DESC LIMIT ?`,
           )
           .all(source, limit)
       : this.db
           .prepare(
-            "SELECT * FROM session_views WHERE hidden=0 ORDER BY progress_at DESC LIMIT ?",
+            `SELECT * FROM session_views v WHERE v.hidden=0${retired} ORDER BY v.progress_at DESC LIMIT ?`,
           )
           .all(limit);
     return { sessions: rows.map((r) => this.public(r)) };

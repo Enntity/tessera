@@ -92,13 +92,55 @@ reject windows rather than silently granting a short lease.
 Both modes remain subject to the resource ownership limit. A `managed-http` manifest may declare
 `maxOwnershipMs` (one minute to 30 days) or `allowIndefinite: true`; a resource that
 declares neither allows eight hours, and the catalog reports the effective
-`maxOwnershipMs` (`null` when indefinite). Re-registering the same resource may change
-only these two fields. Session close, expiry, and a heartbeat's coordinator restart
+`maxOwnershipMs` (`null` when indefinite). Any manifest may declare `orphanGraceMs`
+(zero to one day, default fifteen minutes; zero releases at once) and a `cooperative`
+manifest may also declare `ageOutMs` (zero means never, default 30 days). Re-registering
+the same resource may change only these fields. Session close, expiry, and a heartbeat's coordinator restart
 initiate recovery. A window keeps its claim, generation and deadline across a coordinator
 restart: it reports `preparing` until the driver reconfirms the grant, and is revoked only
 if the driver cannot. A reservation that lost ownership is terminal; it does not
 silently reacquire another generation, and a participating holder that did not release
 receives a notice. A fresh request joins the queue again.
+
+A holder that retires without closing — its tile closed, its process exited, it
+was superseded, or an operator retired it — orphans its held reservations. An
+orphaned hold stays held for `orphanGraceMs` while the reservation reports
+`orphaned {since, reason, releaseAt}`; the successor and each `lifecycle.notify`
+address hear once, and again when the hold ends. Authenticated activity inside
+the grace reclaims the same claim and generation. After the grace the ordinary
+release path runs: managed resources wait for the provider's confirmed stop and
+an unconfirmed release stays held, while cooperative holds confirm the logical
+end. A successor inherits nothing — it must reserve again — and a silent holder
+is never orphaned, since its stale-holder notice already covers it.
+
+This also works across host links. When a *local* session retires (any reason,
+including `closed` and `silent`) or revives, each linked host gets one durable
+`lifecycle` notice carrying `{session, event, reason, successor?, at}`; it is
+retried on the mail cadence and dropped after a week if the peer is down or too
+old to answer. The receiving host maps the session through `remote_routes` —
+a link speaks only for its own sessions — and applies the same rules to the
+proxy actor: `closed` fences its claims at once, an orphaning reason marks its
+holds with `orphaned_at` at *receipt* time (grace counts from when the resource
+host learns, not when the origin retired), `silent` marks it stale-holder and
+notifies the *local* `lifecycle.notify`, and `revived` clears it and reclaims
+within grace. Positive end evidence upgrades an earlier `silent` mark on
+either side — a session that retired silently while holding only remote
+claims still orphans them when its tile later closes, with the grace counted
+from the upgraded notice's receipt. Queued requests from a retired remote
+actor are cancelled, and a retired remote holder's successor — an address on
+the origin host — hears the orphan and end notices too.
+
+A window reservation warns its holder once per deadline before it ends, at a
+lead of 10% of the window clamped between one and fifteen minutes: extend with
+`accord_extend` or release. An extension changes the deadline and re-arms the
+warning; retired or closed holders are never warned, and deadlines stay
+authoritative regardless.
+
+The ten-minute prune also ages out cooperative resources: one whose effective
+`ageOutMs` is positive is removed once nothing holds, awaits or depends on it
+and neither its registration nor any task touched it within that period, with
+`resource.aged_out` recorded. Managed and process resources never age out, and
+existing resources are measured from the migration that added the field.
 
 A provider that no longer offers a resource answers its `availability` call with HTTP 404 and
 error code `resource_unknown`. Once nothing holds, awaits or depends on that resource, the

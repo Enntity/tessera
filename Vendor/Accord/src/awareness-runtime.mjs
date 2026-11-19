@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { ProductObservers } from "./product-observers.mjs";
 import { TranscriptObserver } from "./observers.mjs";
 import { SessionSummaries, modelSummarizer } from "./session-summaries.mjs";
+import { parseLifecycle, lifecycleDefaults } from "./lifecycle.mjs";
 
 // Optional adapters reload independently of ownership. Invalid adapter settings
 // disable observations and expose a diagnostic; they cannot stop lease recovery.
@@ -25,12 +26,16 @@ export function awarenessRuntime(data, awareness) {
     products: [],
     lastScan: null,
   };
+  // The lifecycle section is operator config, not adapter wiring: it keeps its
+  // last good parse even if the rest of awareness.json fails to load.
+  let lifecycle = lifecycleDefaults;
   function configure() {
     const raw = existsSync(path) ? readFileSync(path, "utf8") : "{}";
     if (raw === signature) return;
     observer = products = summaries = null;
     if (raw.length > 1024 * 1024) throw Error("Adapter config too large");
     const config = JSON.parse(raw);
+    lifecycle = parseLifecycle(config.lifecycle);
     if (config.private)
       for (const row of awareness.db
         .prepare("SELECT DISTINCT source FROM session_views")
@@ -43,6 +48,9 @@ export function awarenessRuntime(data, awareness) {
     const roots = config.private ? [] : (config.roots ?? []);
     if (!Array.isArray(roots) || roots.length > 16)
       throw Error("Invalid roots");
+    // The scanner refreshes these sources from file activity, so they keep the
+    // short silence threshold; adapter-reported sources get the joined one.
+    lifecycle = { ...lifecycle, scannedSources: roots.map((r) => r.source) };
     observer = new TranscriptObserver({ awareness, roots });
     products = new ProductObservers({
       awareness,
@@ -105,6 +113,7 @@ export function awarenessRuntime(data, awareness) {
       return {configured:true,enabled:!!config.summary};
     },
     status: () => ({ ...status }),
+    lifecycle: () => lifecycle,
     async close() {
       closed = true;
       clearInterval(timer);

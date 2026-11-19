@@ -6,6 +6,7 @@ import { processSchema } from './process-schema.mjs';
 import { workloadJournalMigration } from './workload-schema.mjs';
 import { transaction, requireThat, text, integer, hash, equal, id, token } from './common.mjs';
 import * as posix from './plugins/posix-process-group.mjs';
+import { lifecycleFields } from './lifecycle.mjs';
 
 export const processPlugin = posix.descriptor;
 export function validateManifest(value) {
@@ -17,7 +18,7 @@ export function validateManifest(value) {
   integer(value.terminationGraceMs??200,'terminationGraceMs',0,5000);
   const env=value.env??{};requireThat(env&&typeof env==='object'&&!Array.isArray(env)&&Object.keys(env).length<=32,'RESOURCE_MANIFEST','Invalid environment',400);
   for(const [k,v] of Object.entries(env))requireThat(/^[A-Z_][A-Z0-9_]*$/.test(k)&&typeof v==='string'&&v.length<=2000&&!v.includes('\0'),'RESOURCE_MANIFEST','Invalid environment entry',400);
-  return {schema:1,id:value.id,asset:value.asset,plugin:value.plugin,command:value.command,cwd:resolve(value.cwd),env,terminationGraceMs:value.terminationGraceMs??200};
+  return {schema:1,id:value.id,asset:value.asset,plugin:value.plugin,command:value.command,cwd:resolve(value.cwd),env,terminationGraceMs:value.terminationGraceMs??200,...lifecycleFields(value)};
 }
 export class ProcessDriver extends ArtifactDriver {
   constructor(file,manifest){

@@ -3,13 +3,14 @@ import { ManagedDriver,managedManifest,managedPlugin } from './managed-driver.mj
 import { ArtifactDriver } from './driver.mjs';
 import { validateManifest as processManifest,ProcessDriver,processPlugin } from './process-driver.mjs';
 import { requireThat,text } from './common.mjs';
+import { lifecycleFields } from './lifecycle.mjs';
 export const cooperativePlugin={id:'cooperative',enforcement:'cooperative agreement only; no external process or device control'};
 export const plugins=[cooperativePlugin,processPlugin,managedPlugin];
 export function validateResource(value){
   if(value?.plugin==='managed-http')return managedManifest(value);
   if(value?.plugin!=='cooperative')return processManifest(value);
   requireThat(value.schema===1&&/^[a-z][a-z0-9-]{0,63}$/.test(value.id)&&value.id!=='artifact','RESOURCE_MANIFEST','Invalid resource schema or ID',400);
-  text(value.asset,'asset',200);return {schema:1,id:value.id,asset:value.asset,plugin:'cooperative'};
+  text(value.asset,'asset',200);return {schema:1,id:value.id,asset:value.asset,plugin:'cooperative',...lifecycleFields(value,{ageOut:true})};
 }
 class CooperativeDriver extends ArtifactDriver {
   // Nothing to fence here, so a restart keeps the grant a bounded window resumes.

@@ -18,9 +18,12 @@ full() {
 # The token travels on curl's standard input, never its argument list, and -q keeps it
 # away from ~/.curlrc. Only the service's own socket gets it: a TCP port could be anyone's.
 poll() {
-  [ -S "$data/accord.sock" ] || return 1
+  # A data dir too long for a socket binds it under /tmp instead; endpoints.json records where.
+  sock=$(sed -n 's/.*"local" *: *"unix:\([^"]*\)".*/\1/p' "$data/endpoints.json" 2>/dev/null)
+  [ -n "$sock" ] || sock="$data/accord.sock"
+  [ -S "$sock" ] || return 1
   printf 'header = "Authorization: Bearer %s"\n' "$(cat "$data/admin.token" 2>/dev/null)" |
-    curl -q -sS --unix-socket "$data/accord.sock" -K - --max-time 60 -H 'Content-Type: application/json' \
+    curl -q -sS --unix-socket "$sock" -K - --max-time 60 -H 'Content-Type: application/json' \
       -d "{\"operation\":\"context-wait\",\"args\":{\"source\":\"$source\",\"externalId\":\"$id\",\"waiter\":\"$$\",\"waitMs\":55000$1}}" \
       http://localhost:8787/v1/collaboration 2>/dev/null
 }

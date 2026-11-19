@@ -2,8 +2,8 @@
 // Token hashing/equality adapted from enntity-messenger/src/auth.js (08a788e).
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { createRequire } from 'node:module';
-import { mkdirSync, chmodSync, rmSync } from 'node:fs';
-import { dirname, isAbsolute } from 'node:path';
+import { mkdirSync, chmodSync, rmSync, rmdirSync, lstatSync } from 'node:fs';
+import { dirname, isAbsolute, join } from 'node:path';
 import http from 'node:http';
 
 export const id = () => randomUUID();
@@ -118,13 +118,23 @@ export function listen(server, port = 0) {
 // loopback port while the service is down, so a client must never prove itself to one.
 export async function listenLocal(server, directory) {
   if (process.platform === 'win32') return null;
-  const path = directory + '/accord.sock';
-  requireThat(Buffer.byteLength(path) < 104, 'DATA_PATH', 'Data directory path is too long for a local socket', 400);
-  chmodSync(directory, 0o700); rmSync(path, { force: true });
+  chmodSync(directory, 0o700);
+  let path = join(directory, 'accord.sock'), fallback = null;
+  if (Buffer.byteLength(path) >= 104) {
+    // A long data path still gets a local socket, moved to a private short directory.
+    fallback = join('/tmp', 'accord-' + hash(directory).slice(0, 16));
+    mkdirSync(fallback, { mode: 0o700, recursive: true });
+    const stat = lstatSync(fallback);
+    requireThat(stat.isDirectory() && !stat.isSymbolicLink() && stat.uid === process.getuid(), 'DATA_PATH', 'Unsafe fallback socket directory', 400);
+    chmodSync(fallback, 0o700);
+    path = join(fallback, 'accord.sock');
+    requireThat(Buffer.byteLength(path) < 104, 'DATA_PATH', 'Data directory path is too long for a local socket', 400);
+  }
+  rmSync(path, { force: true });
   const local = http.createServer((req, res) => server.emit('request', req, res));
   await new Promise((resolve, reject) => { local.once('error', reject); local.listen(path, resolve); });
   chmodSync(path, 0o600);
-  return { url: `unix:${path}`, close() { local.closeAllConnections(); local.close(); rmSync(path, { force: true }); } };
+  return { url: `unix:${path}`, close() { local.closeAllConnections(); local.close(); rmSync(path, { force: true }); if (fallback) { try { rmdirSync(fallback); } catch {} } } };
 }
 function overSocket(url, credential, path, body, timeout) {
   const payload = body === undefined ? undefined : JSON.stringify(body);

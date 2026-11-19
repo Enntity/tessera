@@ -5,6 +5,7 @@ import { isAbsolute } from 'node:path';
 import { ArtifactDriver } from './driver.mjs';
 import { workloadJournalMigration } from './workload-schema.mjs';
 import { transaction, requireThat, text, integer, loopbackUrl, request, equal, hash } from './common.mjs';
+import { lifecycleFields } from './lifecycle.mjs';
 export const managedPlugin = {id:'managed-http',enforcement:'provider-confirmed prepare, workload stop, and restoration; unavailable provider remains held'};
 const migration = `ALTER TABLE state ADD COLUMN phase TEXT NOT NULL DEFAULT 'idle';`;
 export function managedManifest(v) {
@@ -17,7 +18,7 @@ export function managedManifest(v) {
   if(v.maxOwnershipMs!==undefined)integer(v.maxOwnershipMs,'maxOwnershipMs',60000,2592000000);
   requireThat(v.allowIndefinite===undefined||typeof v.allowIndefinite==='boolean','RESOURCE_MANIFEST','allowIndefinite must be boolean',400);
   return {schema:1,id:v.id,asset:v.asset,plugin:managedPlugin.id,endpoint,tokenFile:v.tokenFile,label:String(v.label??v.id).slice(0,120),hosts:(v.hosts??[]).slice(0,32).map(String),
-    ...(v.maxOwnershipMs!==undefined?{maxOwnershipMs:v.maxOwnershipMs}:{}),...(v.allowIndefinite?{allowIndefinite:true}:{})};
+    ...(v.maxOwnershipMs!==undefined?{maxOwnershipMs:v.maxOwnershipMs}:{}),...(v.allowIndefinite?{allowIndefinite:true}:{}),...lifecycleFields(v)};
 }
 export class ManagedDriver extends ArtifactDriver {
   constructor(file,manifest) {

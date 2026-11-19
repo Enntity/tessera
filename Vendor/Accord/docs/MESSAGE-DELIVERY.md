@@ -95,6 +95,17 @@ The local `context-inbox` collaboration operation is administrator-only and is n
 forwardable through host links. Host links still deliver messages to Messenger;
 hooks and unread counts see the same durable state regardless of sender host.
 
+## Retired recipients
+
+A send to a retired address fails immediately with `RECIPIENT_RETIRED` (410).
+When the retired session has a recorded `successor` — a rebound native
+conversation, for example — the error includes the successor's address, resolved
+through at most ten hops. The same rejection happens on the receiving host for
+remote delivery, and the sender's outbox marks that envelope `failed`
+permanently instead of retrying it. Unread mail already delivered to the retired
+address stays readable by the successor through the bound-conversation aliases
+described above.
+
 ## Qualification
 
 `test/message-attention.test.mjs` covers delivery, deduplication, bounded output,
