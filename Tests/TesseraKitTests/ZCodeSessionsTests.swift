@@ -63,10 +63,60 @@ final class ZCodeSessionsTests: XCTestCase {
         let now = Date()
         let fresh = now.addingTimeInterval(-5)
         XCTAssertEqual(ZCodeSessionScanner.activity(status: "running", meta: ["lastError": NSNull()], updatedAt: fresh, now: now).activity, .working)
+        XCTAssertEqual(ZCodeSessionScanner.activity(status: "running", meta: ["lastError": ["message": "terminated"]], updatedAt: fresh, now: now).activity, .working)
         XCTAssertEqual(ZCodeSessionScanner.activity(status: "error", meta: [:], updatedAt: fresh, now: now).activity, .failed)
         XCTAssertEqual(ZCodeSessionScanner.activity(status: "completed", meta: [:], updatedAt: fresh, now: now).activity, .done)
         XCTAssertEqual(ZCodeSessionScanner.activity(status: "running", meta: [:], updatedAt: now.addingTimeInterval(-3600), now: now).activity, .idle)
         XCTAssertEqual(ZCodeSessionScanner.activity(status: "running", meta: ["pendingInteraction": ["kind": "permission"]], updatedAt: fresh, now: now).activity, .needsInput)
+    }
+
+    func testFailedCardRecoversFromNewTurnDespiteStaleTaskIndex() throws {
+        let home = FileManager.default.temporaryDirectory.appendingPathComponent("tessera-zcode-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: home) }
+        let root = home.appendingPathComponent(".enntity-zcode")
+        let dbURL = root.appendingPathComponent("cli/db/db.sqlite")
+        let now = Date()
+        let ms = Int64(now.timeIntervalSince1970 * 1000)
+        try Self.database(root.appendingPathComponent("v2/tasks-index.sqlite"), sql: """
+        CREATE TABLE tasks(workspace_path TEXT, workspace_identity TEXT, task_id TEXT, title TEXT, task_status TEXT, updated_at INTEGER, archived INTEGER, deleted INTEGER, meta_json TEXT);
+        INSERT INTO tasks VALUES('/work/project',NULL,'task','Synthetic ZCode task','error',\(ms),0,0,'{"lastError":{"message":"terminated"}}');
+        """)
+        try Self.database(dbURL, sql: """
+        CREATE TABLE session(id TEXT PRIMARY KEY, title TEXT, directory TEXT, time_updated INTEGER, time_archived INTEGER, parent_id TEXT, last_outcome TEXT);
+        CREATE TABLE turn_usage(session_id TEXT, completed_at INTEGER);
+        CREATE TABLE session_input(session_id TEXT, delivery TEXT, status TEXT, time_updated INTEGER);
+        INSERT INTO session VALUES('task','Task','/work/project',\(ms),NULL,NULL,'error');
+        INSERT INTO turn_usage VALUES('task',\(ms - 3000));
+        INSERT INTO session_input VALUES('task','startNow','promoted',\(ms - 4000));
+        INSERT INTO session_input VALUES('task','guide','promoted',\(ms - 2000));
+        INSERT INTO session_input VALUES('task','queue','admitted',\(ms - 2000));
+        """)
+
+        let scanner = ZCodeSessionScanner(home: home, environment: [:])
+        func snapshot(at date: Date = now) throws -> ConversationSnapshot {
+            try XCTUnwrap(scanner.scan(lookback: 3600, now: date).first).snapshot
+        }
+        XCTAssertEqual(try snapshot().activity, .failed)
+        XCTAssertEqual(try snapshot().detail, "Task failed")
+
+        try Self.database(dbURL, sql: "UPDATE session_input SET status = 'promoted' WHERE delivery = 'queue'")
+        XCTAssertEqual(try snapshot().activity, .working)
+        XCTAssertNil(try snapshot().detail)
+        XCTAssertEqual(try snapshot(at: now.addingTimeInterval(16 * 60)).activity, .idle)
+
+        try Self.database(dbURL, sql: """
+        UPDATE session SET last_outcome = 'completed';
+        INSERT INTO turn_usage VALUES('task',\(ms - 1000));
+        """)
+        XCTAssertEqual(try snapshot().activity, .done)
+        XCTAssertNil(try snapshot().detail)
+
+        try Self.database(dbURL, sql: """
+        INSERT INTO session_input VALUES('task','startNow','promoted',\(ms - 500));
+        UPDATE session SET last_outcome = 'error';
+        INSERT INTO turn_usage VALUES('task',\(ms));
+        """)
+        XCTAssertEqual(try snapshot().activity, .failed)
     }
 
     private static func database(_ url: URL, sql: String) throws {

@@ -78,7 +78,11 @@ struct ZCodeSessionScanner {
             let transcript = Self.readTranscript(db, sessionIDs: candidates.map { $0.0.id })
             for (row, task) in candidates {
                 let items = transcript[row.id] ?? []
-                let state = Self.activity(status: task.status, meta: task.meta, updatedAt: task.updatedAt, now: now)
+                var state = Self.activity(status: task.status, meta: task.meta, updatedAt: task.updatedAt, now: now)
+                if state.activity == .failed,
+                   let recovered = Self.recoveredActivity(db, sessionID: row.id, updatedAt: row.updatedAt, now: now) {
+                    state = (recovered, nil)
+                }
                 let title = task.title.isEmpty ? row.title : task.title
                 found[row.id] = AgentAppSession(id: "zcode:" + row.id, flavor: .zcodeDesktop,
                                                 title: title.isEmpty ? "Enntity ZCode task" : title,
@@ -211,7 +215,6 @@ struct ZCodeSessionScanner {
            let kind = pending["kind"] as? String {
             return (.needsInput, kind == "permission" ? "Permission needed" : "Input needed")
         }
-        if let error = meta["lastError"], !(error is NSNull) { return (.failed, "Task failed") }
         switch status?.lowercased() {
         case "running", "waiting", "paused":
             guard now.timeIntervalSince(updatedAt) <= 15 * 60 else { return (.idle, nil) }
@@ -220,7 +223,34 @@ struct ZCodeSessionScanner {
         case "error", "failed", "errored": return (.failed, "Task failed")
         default: break
         }
+        if let error = meta["lastError"], !(error is NSNull) { return (.failed, "Task failed") }
         return (.idle, nil)
+    }
+
+    private static func recoveredActivity(_ db: OpaquePointer, sessionID: String, updatedAt: Date, now: Date) -> TileActivity? {
+        // The task index retains the previous terminal outcome while ZCode runs a new turn.
+        // A promoted input starts a turn. Queued input and guidance within a turn do not.
+        let sql = """
+        SELECT last_outcome,
+               (SELECT max(time_updated) FROM session_input
+                WHERE session_id = session.id AND status = 'promoted' AND delivery IN ('startNow', 'queue')),
+               (SELECT max(completed_at) FROM turn_usage WHERE session_id = session.id)
+        FROM session WHERE id = ?
+        """
+        guard let stmt = prepare(db, sql) else { return nil }
+        defer { sqlite3_finalize(stmt) }
+        bind([sessionID], to: stmt)
+        guard sqlite3_step(stmt) == SQLITE_ROW else { return nil }
+
+        if sqlite3_column_type(stmt, 1) != SQLITE_NULL, sqlite3_column_type(stmt, 2) != SQLITE_NULL,
+           sqlite3_column_int64(stmt, 1) > sqlite3_column_int64(stmt, 2) {
+            return now.timeIntervalSince(updatedAt) <= 15 * 60 ? .working : .idle
+        }
+        switch text(stmt, 0) {
+        case "completed": return .done
+        case "interrupted": return .idle
+        default: return nil
+        }
     }
 
     private static func prepare(_ db: OpaquePointer, _ sql: String) -> OpaquePointer? {
