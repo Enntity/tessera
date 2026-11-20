@@ -86,7 +86,9 @@ struct ZCodeSessionScanner {
                 let title = task.title.isEmpty ? row.title : task.title
                 found[row.id] = AgentAppSession(id: "zcode:" + row.id, flavor: .zcodeDesktop,
                                                 title: title.isEmpty ? "Enntity ZCode task" : title,
-                                                cwd: row.directory, openURL: nil, resumeCommand: nil,
+                                                cwd: row.directory,
+                                                openURL: AgentApp.zcode.conversationURL(row.id, workspace: row.directory),
+                                                resumeCommand: nil,
                                                 snapshot: ConversationSnapshot(items: items, activity: state.activity,
                                                                                detail: state.detail,
                                                                                lastEventAt: row.updatedAt),

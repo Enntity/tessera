@@ -53,15 +53,23 @@ public enum AgentApp: String, Codable, CaseIterable, Sendable {
         }
     }
 
-    /// The deep link to an existing conversation: `claude://code/continue?session=…` / `codex://threads/…`.
-    public func conversationURL(_ id: String) -> URL? {
+    /// Links to an existing conversation. ZCode also needs its local workspace path.
+    public func conversationURL(_ id: String, workspace: String? = nil) -> URL? {
         switch self {
         case .claude:
             var c = URLComponents(string: "claude://code/continue")
             c?.queryItems = [URLQueryItem(name: "session", value: id)]
             return c?.url
         case .codex: return URL(string: "codex://threads/\(id)")
-        case .deepseekHarness, .zcode, .antigravity: return nil
+        case .zcode:
+            guard let workspace, !workspace.isEmpty else { return nil }
+            var c = URLComponents(string: "enntity-zcode://session/open")
+            c?.percentEncodedQueryItems = Self.encodedQueryItems([
+                URLQueryItem(name: "task", value: id),
+                URLQueryItem(name: "workspace", value: workspace)
+            ])
+            return c?.url
+        case .deepseekHarness, .antigravity: return nil
         }
     }
 
@@ -87,12 +95,16 @@ public enum AgentApp: String, Codable, CaseIterable, Sendable {
         case .deepseekHarness, .zcode, .antigravity:
             return nil
         }
-        // The apps parse these like web URLs (`+` means space), so encode values strictly.
+        c.percentEncodedQueryItems = items.isEmpty ? nil : Self.encodedQueryItems(items)
+        return c.url
+    }
+
+    private static func encodedQueryItems(_ items: [URLQueryItem]) -> [URLQueryItem] {
+        // These apps parse query values like web URLs, where a literal plus means a space.
         var allowed = CharacterSet.urlQueryAllowed
-        allowed.remove(charactersIn: "&=+?#")
-        c.percentEncodedQueryItems = items.isEmpty ? nil : items.map {
+        allowed.remove(charactersIn: "&=+?#%")
+        return items.map {
             URLQueryItem(name: $0.name, value: $0.value?.addingPercentEncoding(withAllowedCharacters: allowed))
         }
-        return c.url
     }
 }

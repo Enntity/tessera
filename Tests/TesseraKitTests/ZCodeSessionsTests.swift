@@ -47,6 +47,7 @@ final class ZCodeSessionsTests: XCTestCase {
         let session = try XCTUnwrap(sessions.first)
         XCTAssertEqual(session.title, "Synthetic ZCode task")
         XCTAssertEqual(session.cwd, "/work/project")
+        XCTAssertEqual(session.openURL?.absoluteString, "enntity-zcode://session/open?task=visible&workspace=/work/project")
         XCTAssertEqual(session.snapshot.activity, .needsInput)
         XCTAssertEqual(session.snapshot.detail, "Input needed")
         XCTAssertEqual(session.snapshot.items.map(\.text), ["Hello world", "Reply"])
@@ -57,6 +58,14 @@ final class ZCodeSessionsTests: XCTestCase {
         XCTAssertFalse(BoardQuery.Chip.dsh.holds(tile))
         XCTAssertEqual(AgentApp.opening(.zcodeDesktop, installed: [.zcode]), .zcode)
         XCTAssertFalse(AgentApp.zcode.canCreateConversation)
+    }
+
+    func testConversationLinkPreservesWorkspacePath() throws {
+        let path = "/Volumes/JMac External/A+B & 100% #1"
+        let url = try XCTUnwrap(AgentApp.zcode.conversationURL("sess_example-123", workspace: path))
+        let query = try XCTUnwrap(URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems)
+        XCTAssertEqual(query, [.init(name: "task", value: "sess_example-123"), .init(name: "workspace", value: path)])
+        XCTAssertTrue(url.absoluteString.contains("A%2BB"))
     }
 
     func testActivityUsesFreshStatusAndIgnoresNullErrorAndStaleRunning() {
