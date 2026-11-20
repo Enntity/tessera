@@ -79,9 +79,9 @@ struct ZCodeSessionScanner {
             for (row, task) in candidates {
                 let items = transcript[row.id] ?? []
                 var state = Self.activity(status: task.status, meta: task.meta, updatedAt: task.updatedAt, now: now)
-                if state.activity == .failed,
-                   let recovered = Self.recoveredActivity(db, sessionID: row.id, updatedAt: row.updatedAt, now: now) {
-                    state = (recovered, nil)
+                if state.activity != .needsInput, state.activity != .working,
+                   let turn = Self.persistedTurnActivity(db, sessionID: row.id, updatedAt: row.updatedAt, now: now) {
+                    state = (turn, nil)
                 }
                 let title = task.title.isEmpty ? row.title : task.title
                 found[row.id] = AgentAppSession(id: "zcode:" + row.id, flavor: .zcodeDesktop,
@@ -227,9 +227,9 @@ struct ZCodeSessionScanner {
         return (.idle, nil)
     }
 
-    private static func recoveredActivity(_ db: OpaquePointer, sessionID: String, updatedAt: Date, now: Date) -> TileActivity? {
-        // The task index retains the previous terminal outcome while ZCode runs a new turn.
-        // A promoted input starts a turn. Queued input and guidance within a turn do not.
+    private static func persistedTurnActivity(_ db: OpaquePointer, sessionID: String, updatedAt: Date, now: Date) -> TileActivity? {
+        // The task index can retain the previous outcome throughout a new turn. A promoted
+        // input starts a turn, while queued input and guidance within a turn do not.
         let sql = """
         SELECT last_outcome,
                (SELECT max(time_updated) FROM session_input
@@ -242,15 +242,15 @@ struct ZCodeSessionScanner {
         bind([sessionID], to: stmt)
         guard sqlite3_step(stmt) == SQLITE_ROW else { return nil }
 
-        if sqlite3_column_type(stmt, 1) != SQLITE_NULL, sqlite3_column_type(stmt, 2) != SQLITE_NULL,
-           sqlite3_column_int64(stmt, 1) > sqlite3_column_int64(stmt, 2) {
+        let outcome = text(stmt, 0)
+        let hasFinishedTurn = sqlite3_column_type(stmt, 2) != SQLITE_NULL
+        if sqlite3_column_type(stmt, 1) != SQLITE_NULL,
+           hasFinishedTurn ? sqlite3_column_int64(stmt, 1) > sqlite3_column_int64(stmt, 2) : outcome == nil {
             return now.timeIntervalSince(updatedAt) <= 15 * 60 ? .working : .idle
         }
-        switch text(stmt, 0) {
-        case "completed": return .done
-        case "interrupted": return .idle
-        default: return nil
-        }
+        if outcome == "completed" { return .done }
+        if outcome == "interrupted" { return .idle }
+        return nil
     }
 
     private static func prepare(_ db: OpaquePointer, _ sql: String) -> OpaquePointer? {

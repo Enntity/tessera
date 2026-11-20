@@ -70,32 +70,41 @@ final class ZCodeSessionsTests: XCTestCase {
         XCTAssertEqual(ZCodeSessionScanner.activity(status: "running", meta: ["pendingInteraction": ["kind": "permission"]], updatedAt: fresh, now: now).activity, .needsInput)
     }
 
-    func testFailedCardRecoversFromNewTurnDespiteStaleTaskIndex() throws {
+    func testCardFollowsPromotedTurnsDespiteStaleTaskIndex() throws {
         let home = FileManager.default.temporaryDirectory.appendingPathComponent("tessera-zcode-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: home) }
         let root = home.appendingPathComponent(".enntity-zcode")
+        let indexURL = root.appendingPathComponent("v2/tasks-index.sqlite")
         let dbURL = root.appendingPathComponent("cli/db/db.sqlite")
         let now = Date()
         let ms = Int64(now.timeIntervalSince1970 * 1000)
-        try Self.database(root.appendingPathComponent("v2/tasks-index.sqlite"), sql: """
+        try Self.database(indexURL, sql: """
         CREATE TABLE tasks(workspace_path TEXT, workspace_identity TEXT, task_id TEXT, title TEXT, task_status TEXT, updated_at INTEGER, archived INTEGER, deleted INTEGER, meta_json TEXT);
-        INSERT INTO tasks VALUES('/work/project',NULL,'task','Synthetic ZCode task','error',\(ms),0,0,'{"lastError":{"message":"terminated"}}');
+        INSERT INTO tasks VALUES('/work/project',NULL,'task','Synthetic ZCode task',NULL,\(ms),0,0,'{}');
         """)
         try Self.database(dbURL, sql: """
         CREATE TABLE session(id TEXT PRIMARY KEY, title TEXT, directory TEXT, time_updated INTEGER, time_archived INTEGER, parent_id TEXT, last_outcome TEXT);
         CREATE TABLE turn_usage(session_id TEXT, completed_at INTEGER);
         CREATE TABLE session_input(session_id TEXT, delivery TEXT, status TEXT, time_updated INTEGER);
-        INSERT INTO session VALUES('task','Task','/work/project',\(ms),NULL,NULL,'error');
-        INSERT INTO turn_usage VALUES('task',\(ms - 3000));
+        INSERT INTO session VALUES('task','Task','/work/project',\(ms),NULL,NULL,NULL);
         INSERT INTO session_input VALUES('task','startNow','promoted',\(ms - 4000));
-        INSERT INTO session_input VALUES('task','guide','promoted',\(ms - 2000));
-        INSERT INTO session_input VALUES('task','queue','admitted',\(ms - 2000));
         """)
 
         let scanner = ZCodeSessionScanner(home: home, environment: [:])
         func snapshot(at date: Date = now) throws -> ConversationSnapshot {
             try XCTUnwrap(scanner.scan(lookback: 3600, now: date).first).snapshot
         }
+        XCTAssertEqual(try snapshot().activity, .working)
+
+        try Self.database(indexURL, sql: """
+        UPDATE tasks SET task_status = 'error', meta_json = '{"lastError":{"message":"terminated"}}';
+        """)
+        try Self.database(dbURL, sql: """
+        UPDATE session SET last_outcome = 'error';
+        INSERT INTO turn_usage VALUES('task',\(ms - 3000));
+        INSERT INTO session_input VALUES('task','guide','promoted',\(ms - 2000));
+        INSERT INTO session_input VALUES('task','queue','admitted',\(ms - 2000));
+        """)
         XCTAssertEqual(try snapshot().activity, .failed)
         XCTAssertEqual(try snapshot().detail, "Task failed")
 
@@ -111,8 +120,12 @@ final class ZCodeSessionsTests: XCTestCase {
         XCTAssertEqual(try snapshot().activity, .done)
         XCTAssertNil(try snapshot().detail)
 
+        try Self.database(indexURL, sql: "UPDATE tasks SET task_status = 'completed', meta_json = '{}'")
+        try Self.database(dbURL, sql: "INSERT INTO session_input VALUES('task','startNow','promoted',\(ms - 500))")
+        XCTAssertEqual(try snapshot().activity, .working)
+
+        try Self.database(indexURL, sql: "UPDATE tasks SET task_status = 'error'")
         try Self.database(dbURL, sql: """
-        INSERT INTO session_input VALUES('task','startNow','promoted',\(ms - 500));
         UPDATE session SET last_outcome = 'error';
         INSERT INTO turn_usage VALUES('task',\(ms));
         """)
