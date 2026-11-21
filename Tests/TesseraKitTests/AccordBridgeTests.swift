@@ -191,6 +191,28 @@ extension AccordBridgeTests {
 }
 
 extension AccordBridgeTests {
+    func testFleetKeepsResourcesFromPeerWithPrivateJobs() async throws {
+        let fleet = try await FleetService.nativeFleet(hosts: [["authority": "mini"], ["authority": "spark"]]) { operation, host in
+            if operation == "resources" { return ["resources": [["id": host + "/machine"]]] }
+            if host == "mini" { throw AccordRequestError.activityNotShared }
+            return ["jobs": [["id": "serving"]]]
+        }
+        XCTAssertEqual(fleet.resources.compactMap { $0["id"] as? String }, ["mini/machine", "spark/machine"])
+        XCTAssertEqual(fleet.jobs.compactMap { $0["id"] as? String }, ["spark/serving"])
+    }
+
+    func testFleetStillSurfacesUnexpectedJobErrors() async {
+        do {
+            _ = try await FleetService.nativeFleet(hosts: [["authority": "mini"]]) { operation, _ in
+                if operation == "jobs" { throw URLError(.cannotConnectToHost) }
+                return ["resources": []]
+            }
+            XCTFail("A disconnected peer must report a stale fleet")
+        } catch {
+            XCTAssertEqual((error as? URLError)?.code, .cannotConnectToHost)
+        }
+    }
+
     func testMigratedFleetReadsNativeResourcesAcrossAuthorities() async throws {
         XCTAssertTrue(FleetService.managersReachable([["state":"migrated"], ["state":"observed"]]))
         XCTAssertFalse(FleetService.managersReachable([["state":"unknown"]]))
