@@ -262,7 +262,7 @@ public final class AccordBridge {
             if senders != senderTiles { senderTiles = senders }
             // The agent record comes from find, one participant per agent; an older Accord has
             // no `agent` object and simply yields nothing here.
-            if let found = try? await operation(c, "find", ["detail": true]),
+            if let found = try? await operation(c, "find", ["detail": true, "local": true]),
                let participants = (found["hosts"] as? [[String: Any]])?.first?["participants"] as? [[String: Any]] {
                 let agents = Self.agentByTile(participants, authority: c.2)
                 var merged = tileRecords
@@ -468,7 +468,7 @@ public final class AccordBridge {
               designatedOverseer != address else { return }
         do {
             if let designateOperation { try await designateOperation(address) }
-            else { _ = try await operation(c, "overseer-designate", ["address": address]) }
+            else { _ = try await operation(c, "overseer-designate", ["key": "designate:" + address, "address": address]) }
             designatedOverseer = address
         } catch {
             designationDenied = true

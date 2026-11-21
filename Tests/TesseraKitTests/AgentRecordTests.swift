@@ -159,3 +159,54 @@ final class AgentRecordTests: XCTestCase {
                        "- tile-1 | Worker | Shell | working | ~/src | accord mac/observed-1")
     }
 }
+
+extension AgentRecordTests {
+    /// A one-off check against a real new Accord: run it with
+    /// `ACCORD_FIXTURE_CLI=/path/to/accord/src/cli.mjs swift test --filter testRealAccord…`.
+    /// Until the vendored Accord carries the agent record, the default run skips it.
+    func testRealAccordServesFindLocalDesignationAndOperatorTitles() async throws {
+        guard let cli = ProcessInfo.processInfo.environment["ACCORD_FIXTURE_CLI"],
+              FileManager.default.fileExists(atPath: cli) else {
+            throw XCTSkip("set ACCORD_FIXTURE_CLI to an agent-record Accord cli.mjs to run")
+        }
+        let dir = URL(fileURLWithPath: "/tmp/accord-record-\(UUID().uuidString.prefix(8))")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: dir) }
+        let script = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("scripts/accord-fixture.mjs")
+        let profile = dir.appendingPathComponent("accord-connection.json")
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        process.arguments = ["node", script.path, dir.appendingPathComponent("accord-data").path, profile.path]
+        process.environment = ProcessInfo.processInfo.environment.merging(["ACCORD_TEST_CLI": cli]) { _, new in new }
+        process.standardOutput = FileHandle.nullDevice
+        try process.run()
+        addTeardownBlock { if process.isRunning { process.terminate(); process.waitUntilExit() } }
+        for _ in 0..<200 where !FileManager.default.fileExists(atPath: profile.path) && process.isRunning {
+            try await Task.sleep(nanoseconds: 50_000_000)
+        }
+        let bridge = AccordBridge(profile: profile)
+
+        // find {local:true, detail:true}: the only host is this fixture's authority, and each
+        // participant carries an agent object.
+        let found = try await bridge.request("find", args: ["detail": true, "local": true])
+        let hosts = try XCTUnwrap(found["hosts"] as? [[String: Any]])
+        XCTAssertEqual(hosts.count, 1)
+        let authority = try XCTUnwrap(hosts[0]["authority"] as? String)
+        let participants = try XCTUnwrap(hosts[0]["participants"] as? [[String: Any]])
+        let me = try XCTUnwrap(participants.first)
+        XCTAssertTrue(String(describing: me["address"] ?? "").hasPrefix(authority + "/"))
+        XCTAssertNotNil(me["agent"] as? [String: Any])
+        let address = try XCTUnwrap(me["address"] as? String)
+
+        // overseer-designate takes an idempotency key and a local address.
+        let designated = try await bridge.request("overseer-designate", args: ["key": "designate:" + address, "address": address])
+        XCTAssertEqual(designated["overseer"] as? String, address)
+
+        // session-title lands in the operator layer; the same key replays instead of duplicating.
+        let id = try XCTUnwrap(address.split(separator: "/").last.map(String.init))
+        let titled = try await bridge.request("session-title", args: ["key": "fixture-title-1", "id": id, "title": "The Overseer"])
+        XCTAssertEqual(titled["titleSource"] as? String ?? (titled["agent"] as? [String: Any])?["titleSource"] as? String, "operator")
+        let replayed = try await bridge.request("session-title", args: ["key": "fixture-title-1", "id": id, "title": "The Overseer"])
+        XCTAssertEqual(replayed["titleSource"] as? String ?? (replayed["agent"] as? [String: Any])?["titleSource"] as? String, "operator")
+    }
+}
