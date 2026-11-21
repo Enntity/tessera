@@ -106,6 +106,20 @@ permanently instead of retrying it. Unread mail already delivered to the retired
 address stays readable by the successor through the bound-conversation aliases
 described above.
 
+## Scheduled deliveries
+
+A `schedule` produces ordinary outbox messages sent from the
+`<authority>/accord-scheduler` principal, never from the owner, so they bypass
+the self-message rule and cannot be mistaken for the owner's own words. The
+message text reads `Scheduled by <owner label> (<schedule id>): <text>` plus
+any event detail; the envelope data carries `scheduledBy` (the owner's
+address) and `scheduleId`, which surfaces in the inbox view so adapters such
+as Tessera can apply the owner's wake policy — including native-prompt
+delivery when the schedule requested `wake`. Tessera support lands in a later
+change. Scheduled message ids are deterministic, so retries cannot duplicate
+a delivery; every other outbox rule — `RECIPIENT_*` failures, expiry and the
+durable queue — applies unchanged.
+
 ## Qualification
 
 `test/message-attention.test.mjs` covers delivery, deduplication, bounded output,

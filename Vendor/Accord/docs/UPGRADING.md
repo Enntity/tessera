@@ -13,10 +13,10 @@ second authority or copy tokens between hosts. Keep the previous package availab
 binary rollback; database rollback is a separate recovery operation and can invalidate
 fencing history. See [recovery](RECOVERY.md).
 
-## Install 0.7.0
+## Install 0.8.0
 
 ```sh
-npm install -g https://github.com/Enntity/accord/releases/download/v0.7.0/enntity-accord-0.7.0.tgz
+npm install -g https://github.com/Enntity/accord/releases/download/v0.8.0/enntity-accord-0.8.0.tgz
 accord install
 ```
 
@@ -47,13 +47,45 @@ accord --version
 accord doctor
 ```
 
-The CLI should report `0.7.0`; the doctor should report `ready`. The CLI version identifies
+The CLI should report `0.8.0`; the doctor should report `ready`. The CLI version identifies
 the package invoked by your shell, so also check the running service's command line
 against the new install path. Restart your agent sessions to load the updated MCP bridge.
 
 On linked hosts, verify `accord find`, send and acknowledge a test message, and exercise
 reserve, extend and release on a dedicated cooperative resource. Check that extension
 keeps the claim and generation. Do not use an active GPU workload as a smoke test.
+
+## Changes from 0.7.0
+
+Two migrations. Migration 21 adds durable scheduled messages: the `schedules`
+table (owner, target, trigger, rate limits, fire count and expiry) and the
+`schedule_cursor` used to scan the events log for event triggers, plus an
+`events(kind,at)` index for the per-hour rate checks. The cursor is initialised
+to the end of the log at upgrade, so events logged before the upgrade never
+fire a new schedule. Migration 22 adds the agent record: `agent_tiles`
+non-exclusive tile links, the layered `titles` table (existing `given_title`
+copied into the `peer` layer) and `sessions.client` for the connecting client's
+name. Both apply in place; existing migration checksums and stored records are
+unchanged.
+
+Migrations 21 and 22 are forward-only: the 0.7.0 binary does not understand
+them and will refuse an upgraded database. Rollback is therefore not
+"reinstall 0.7.0" — restore the pre-activation database backup the deployment
+procedure takes before the coordinator restarts, then run the 0.7.0 binary
+against it. As before, never delete the migration record or restore older
+fencing history just to make a downgrade start.
+
+New operations are version-tolerant where it matters: a 0.8.0 client's
+`session-link-tile` call is best-effort, so enrollment still succeeds against
+an un-upgraded host, and `find {local:true}` never fans out. Operations a
+0.7.0 host does not know (`overseer-designate`, `schedule`, `schedules`,
+`schedule-cancel`, `topic-publish`, `workload-report`, `session-link-tile`)
+answer unknown-operation on that host only; local behaviour is unaffected.
+Schedule delivery is ordinary message delivery from the local authority's
+`accord-scheduler` principal, so a schedule fires cross-host as soon as the
+sending host is upgraded — the receiving host needs nothing new. Upgrade
+linked hosts together so layered titles and agent records propagate; an
+un-upgraded peer simply reports participants without the `agent` record.
 
 ## Changes from 0.6.10
 

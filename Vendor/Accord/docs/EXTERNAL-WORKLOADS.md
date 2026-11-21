@@ -81,6 +81,12 @@ through `accord_workload` with `action: register|launch|list`, `targets` or
 Each attachment launches once. To run another stage, create and register another
 fresh object. Accord retains stopped containers for the owner to inspect or remove.
 
+For attribution, also label your containers `io.enntity.owner=<your Accord
+address>` and `io.enntity.job=<job name>`. Resource listings show them as
+`declared` owners of the workloads they observe on the host — an observation,
+not ownership. Registering through `accord_workload` still gives the stronger
+`reservation` attribution. See `docs/telemetry.md` for the precedence order.
+
 For a watcher that can recreate or restart work, put it in a dedicated, never-started
 systemd user service with `KillMode=control-group`, no activation triggers or enabled
 dependencies, and no escape from the service cgroup. Its name must begin with the reservation’s returned `workloadUnitPrefix` and end

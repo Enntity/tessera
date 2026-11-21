@@ -57,6 +57,7 @@ export function redact(value) {
     );
 }
 const terminal = new Set(["done", "failed", "exited", "cancelled"]);
+const DEFAULT_LABELS = new Set(['MCP agent', 'shell agent', 'agent']);
 // A live MCP session heartbeats every 30 s and observers stop reading transcripts this
 // old, so a session silent this long has nobody left to report for it.
 export const staleSessionMs = 36 * 3600000;
@@ -73,9 +74,10 @@ export const sessionStates = [
   "unknown",
 ];
 export class SessionAwareness {
-  constructor(store) {
+  constructor(store, { hostName = 'local' } = {}) {
     this.store = store;
     this.db = store.db;
+    this.hostName = hostName;
     // The server installs the operator's lifecycle section from awareness.json.
     this.lifecycleConfig = () => lifecycleDefaults;
   }
@@ -151,6 +153,41 @@ export class SessionAwareness {
       return { bound: true, ...(prior&&prior.actor!==body.actor?{superseded:prior.actor}:{}) };
     });
   }
+  // A non-exclusive link between an actor and the tile it runs in. Unlike a
+  // mailbox binding it displaces nothing: one tile can hold many nested
+  // sessions, while an actor belongs to one tile at a time.
+  linkTile(actor, body) {
+    requireThat(actor.role === "admin", "FORBIDDEN", "Only the host launcher may link tiles", 403);
+    text(body.actor, "actor", 128); text(body.tile, "tile", 200);
+    requireThat(["agent", "nested"].includes(body.role), "INVALID_INPUT", "role is agent or nested", 400);
+    requireThat(
+      this.db.prepare("SELECT id FROM sessions WHERE id=? AND closed_at IS NULL AND expires_at>?").get(body.actor, this.store.now()),
+      "SESSION_EXPIRED", "Linking requires a live authenticated session");
+    return this.store.command(actor, body, "session.link-tile", () => {
+      this.db
+        .prepare("INSERT INTO agent_tiles VALUES(?,?,?,?) ON CONFLICT(actor) DO UPDATE SET tile=excluded.tile,role=excluded.role,linked_at=excluded.linked_at")
+        .run(body.actor, body.tile, body.role, this.store.now());
+      return { linked: true };
+    });
+  }
+  designate(actor, body) {
+    requireThat(actor.role === "admin", "FORBIDDEN", "Administrator required", 403);
+    const address = body.address ?? null;
+    if (address !== null) {
+      text(address, "address", 220);
+      const [authority, recipient] = String(address).split("/");
+      requireThat(authority === this.store.authority && recipient, "INVALID_INPUT", "Designate a local address, or null to clear", 400);
+    }
+    return this.store.command(actor, body, "overseer.designate", () => {
+      if (address === null) this.db.prepare("DELETE FROM meta WHERE key='overseer_address'").run();
+      else this.db.prepare("INSERT INTO meta VALUES('overseer_address',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(address);
+      this.store.emit("overseer.designated", { address, by: actor.id });
+      return { overseer: address };
+    });
+  }
+  overseerAddress() {
+    return this.db.prepare("SELECT value FROM meta WHERE key='overseer_address'").get()?.value ?? null;
+  }
   row(session) {
     const row = this.db
       .prepare("SELECT * FROM session_views WHERE id=?")
@@ -179,7 +216,17 @@ export class SessionAwareness {
       ...(!row.private && row.parent_session ? {parentSession:JSON.parse(row.parent_session)} : {}),
       ...(!row.private && origin ? {originAddress:origin.authority+'/'+origin.session_id} : {}),
       ...(binding ? {nativeSession:{source:binding.source,externalId:binding.external_id}} : {}),
-      ...(!row.private && row.given_title ? {givenTitle:row.given_title,titledBy:`${this.store.authority}/${row.titled_by}`,titledAt:row.titled_at} : {}),
+      ...(() => {
+        if (row.private) return {};
+        const layers = {};
+        for (const t of this.db.prepare("SELECT layer,title,by,at FROM titles WHERE subject=?").all(row.id)) layers[t.layer] = t;
+        const top = layers.operator ?? layers.overseer ?? layers.peer;
+        const agent = (!row.source || row.source === "agent") ? { agent: this.agentRecord(row.id) } : {};
+        return {
+          ...(top ? { givenTitle: top.title, titledBy: top.by ? `${this.store.authority}/${top.by}` : undefined, titledAt: top.at } : {}),
+          ...agent,
+        };
+      })(),
       id: row.id,
       address: `${this.store.authority}/${row.id}`,
       source: row.source,
@@ -402,7 +449,10 @@ export class SessionAwareness {
           Number(changed),
           Number(changed),
         );
-      if(privacy) this.db.prepare('UPDATE session_views SET given_title=NULL,titled_by=NULL,titled_at=NULL WHERE id=?').run(session);
+      if(privacy) {
+        this.db.prepare('UPDATE session_views SET given_title=NULL,titled_by=NULL,titled_at=NULL WHERE id=?').run(session);
+        this.db.prepare('DELETE FROM titles WHERE subject=?').run(session);
+      }
       if(body.parentSession !== undefined || privacy) this.db.prepare('UPDATE session_views SET parent_session=? WHERE id=?').run(privacy||!body.parentSession?null:JSON.stringify({source:body.parentSession.source,externalId:body.parentSession.externalId}),session);
       if (privacy) {
         this.db
@@ -458,7 +508,7 @@ export class SessionAwareness {
     if (!r.private && !r.hidden)
       this.db.prepare("INSERT INTO session_search VALUES(?,?,?,?,?,?)").run(
         session,
-        r.given_title ? r.given_title + "\n" + r.title : r.title,
+        [r.given_title, ...this.db.prepare("SELECT title FROM titles WHERE subject=?").all(session).map(t => t.title), r.title].filter(Boolean).join("\n"),
         r.location,
         r.detail,
         r.summary,
@@ -493,6 +543,9 @@ export class SessionAwareness {
             .prepare(
               "UPDATE session_views SET private=1,title='Private session',location='',detail='',summary='',given_title=NULL,titled_by=NULL,titled_at=NULL,revision=revision+1 WHERE id=?",
             )
+            .run(row.id);
+          this.db
+            .prepare("DELETE FROM titles WHERE subject=?")
             .run(row.id);
           this.db
             .prepare("DELETE FROM session_activity WHERE session_id=?")
@@ -791,26 +844,94 @@ export class SessionAwareness {
       return { accepted: true };
     });
   }
-  // A display name for the operator and other agents. It is attributed, it is not progress,
-  // and it grants nothing: the owner's title, state and mailbox are untouched.
+  titleLayer(actor) {
+    if (actor.role === "admin") return "operator";
+    return this.overseerAddress() === `${this.store.authority}/${actor.id}` ? "overseer" : "peer";
+  }
+  // The effective display name: operator, then the designated overseer, then
+  // the agent's own non-default label, then other agents, then the observed title.
+  effectiveTitle(subject, { label, observedTitle } = {}) {
+    const layers = {};
+    for (const r of this.db.prepare("SELECT layer,title,by,at FROM titles WHERE subject=?").all(subject))
+      layers[r.layer] = { title: r.title, ...(r.by ? { by: `${this.store.authority}/${r.by}` } : {}), at: r.at };
+    if (label && !DEFAULT_LABELS.has(label)) layers.agent = { title: label };
+    let title, titleSource;
+    for (const layer of ["operator", "overseer", "agent", "peer"])
+      if (layers[layer]) { title = layers[layer].title; titleSource = layer; break; }
+    if (!title && observedTitle) { title = observedTitle; titleSource = "observed"; }
+    return { title, titleSource, titles: Object.keys(layers).length ? layers : undefined };
+  }
+  // One record per agent: tile link (binding counts as role agent), the
+  // effective layered title, the current task, previous addresses and the
+  // mailbox binding.
+  agentRecord(actorId) {
+    const participant = this.db.prepare("SELECT label,activity FROM participants WHERE actor=?").get(actorId);
+    const view = this.db.prepare("SELECT title FROM session_views WHERE id=?").get(actorId);
+    const tile = this.db.prepare("SELECT tile,role FROM agent_tiles WHERE actor=?").get(actorId)
+      ?? (this.db.prepare("SELECT external_id FROM session_bindings WHERE actor=? AND source='tessera'").get(actorId)?.external_id
+          ? { tile: this.db.prepare("SELECT external_id FROM session_bindings WHERE actor=? AND source='tessera'").get(actorId).external_id, role: "agent" }
+          : null);
+    const job = this.db.prepare("SELECT title FROM agent_jobs WHERE actor=? AND state IN('working','waiting') ORDER BY updated_at DESC LIMIT 1").get(actorId);
+    const client = this.db.prepare("SELECT client FROM sessions WHERE id=?").get(actorId)?.client ?? undefined;
+    const binding = this.db.prepare("SELECT source,external_id FROM session_bindings WHERE actor=? ORDER BY source,external_id LIMIT 1").get(actorId);
+    const previous = [];
+    for (let id = actorId, depth = 0; depth < 5; depth++) {
+      const prior = this.db.prepare("SELECT id FROM sessions WHERE successor=? ORDER BY created_at DESC LIMIT 1").get(id);
+      if (!prior) break;
+      previous.push(`${this.store.authority}/${prior.id}`);
+      id = prior.id;
+    }
+    const { title, titleSource, titles } = this.effectiveTitle(actorId, { label: participant?.label, observedTitle: view?.title });
+    return {
+      host: { authority: this.store.authority, name: this.hostName },
+      client,
+      ...(tile ? { tile: { id: tile.tile, role: tile.role } } : {}),
+      title, titleSource,
+      ...(titles ? { titles } : {}),
+      ...(job?.title ?? participant?.activity ? { task: job?.title ?? participant?.activity } : {}),
+      ...(previous.length ? { previous } : {}),
+      ...(binding ? { native: { source: binding.source, id: binding.external_id } } : {}),
+    };
+  }
+  // A display name for the operator and other agents, stored per layer: the
+  // operator's, the designated overseer's, or another agent's. It is
+  // attributed, it is not progress, and it grants nothing.
   title(actor, body) {
     const byId = body.id !== undefined;
     requireThat(byId !== (body.source !== undefined || body.externalId !== undefined), "INVALID_INPUT",
       "Name a session by id, or by source and externalId", 400);
     requireThat(typeof body.title === "string" && body.title.length <= 120, "INVALID_INPUT",
       "title must be a string of at most 120 characters; empty removes the name", 400);
-    const row = byId ? this.row(text(body.id, "id", 200))
-      : this.db.prepare("SELECT * FROM session_views WHERE source=? AND external_id=?")
-          .get(text(body.source, "source", 64), text(body.externalId, "externalId", 200));
-    requireThat(row && !row.hidden, "NOT_FOUND", "Unknown observed session", 404);
-    requireThat(!row.private, "PRIVATE_SESSION", "Session content is private", 403);
+    let subject;
+    if (byId) {
+      subject = text(body.id, "id", 200);
+      const view = this.db.prepare("SELECT * FROM session_views WHERE id=?").get(subject);
+      if (view) {
+        requireThat(!view.hidden, "NOT_FOUND", "Unknown observed session", 404);
+        requireThat(!view.private, "PRIVATE_SESSION", "Session content is private", 403);
+      } else {
+        requireThat(
+          this.db.prepare("SELECT 1 FROM sessions WHERE id=? UNION SELECT 1 FROM participants WHERE actor=? LIMIT 1").get(subject, subject),
+          "NOT_FOUND", "Unknown session", 404);
+      }
+    } else {
+      const view = this.db.prepare("SELECT * FROM session_views WHERE source=? AND external_id=?")
+        .get(text(body.source, "source", 64), text(body.externalId, "externalId", 200));
+      requireThat(view && !view.hidden, "NOT_FOUND", "Unknown observed session", 404);
+      requireThat(!view.private, "PRIVATE_SESSION", "Session content is private", 403);
+      subject = view.id;
+    }
     const given = redact(body.title).replace(/\s+/g, " ").trim() || null;
+    const layer = this.titleLayer(actor);
     return this.store.command(actor, body, "session.title", () => {
-      this.db.prepare("UPDATE session_views SET given_title=?,titled_by=?,titled_at=? WHERE id=?")
-        .run(given, given && actor.id, given && this.store.now(), row.id);
-      this.index(row.id);
-      this.store.emit("session.titled", { session: row.id, by: actor.id, named: given !== null });
-      return this.public(this.row(row.id));
+      if (given === null) this.db.prepare("DELETE FROM titles WHERE subject=? AND layer=?").run(subject, layer);
+      else this.db.prepare("INSERT INTO titles VALUES(?,?,?,?,?) ON CONFLICT(subject,layer) DO UPDATE SET title=excluded.title,by=excluded.by,at=excluded.at")
+        .run(subject, layer, given, actor.id, this.store.now());
+      const hasView = this.db.prepare("SELECT 1 FROM session_views WHERE id=?").get(subject);
+      if (hasView) this.index(subject);
+      this.store.emit("session.titled", { session: subject, by: actor.id, layer, named: given !== null });
+      const view = hasView ? this.db.prepare("SELECT * FROM session_views WHERE id=?").get(subject) : null;
+      return view ? this.public(view) : { subject, ...this.effectiveTitle(subject) };
     });
   }
   snooze(actor, body) {
@@ -901,6 +1022,8 @@ export class SessionAwareness {
           now,
           body.reservationId ?? old?.reservation_id ?? null,
         );
+      if (old?.state !== state)
+        this.store.emit("job.updated", { job: jobId, actor: actor.id, state, previous: old?.state ?? null });
       return this.db.prepare("SELECT * FROM agent_jobs WHERE id=?").get(jobId);
     });
   }

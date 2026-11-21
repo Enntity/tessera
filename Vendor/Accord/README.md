@@ -17,9 +17,10 @@ One agent is editing the checkout. Another is about to reset it. A third needs t
 GPU the first one reserved. Accord gives them a shared directory, durable messages,
 and a queue, so you can stop carrying updates between terminals.
 
-**0.7.0:** sessions retire when they end or go silent, and a reservation whose
-holder ended is released after a grace period — across linked hosts. Complete
-messages and history remain available.
+**0.8.0:** durable scheduled messages delivered from the `accord-scheduler`
+principal, workload observations on resources, and one agent record per
+participant — layered titles, tile links and client names. Complete messages
+and history remain available.
 [Release notes](CHANGELOG.md) · [Upgrading](docs/UPGRADING.md)
 
 ## Get started
@@ -28,7 +29,7 @@ You need Node.js 22.16 or newer. macOS and Linux support automatic service setup
 On Windows, run `accord up` under your own supervisor after installation.
 
 ```sh
-npm install -g https://github.com/Enntity/accord/releases/download/v0.7.0/enntity-accord-0.7.0.tgz
+npm install -g https://github.com/Enntity/accord/releases/download/v0.8.0/enntity-accord-0.8.0.tgz
 accord install
 ```
 

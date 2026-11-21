@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 import { readFileSync, writeFileSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import { spawn } from 'node:child_process';
 import { AccordClient } from './client.mjs';
 import { loopbackUrl, request, requireThat, hash } from './common.mjs';
@@ -18,11 +18,11 @@ export async function discover(profile) {
   requireThat(host.authority === profile.authority, 'AUTHORITY_MISMATCH', 'Pinned host identity changed');
   return host;
 }
-export async function enrollProfile(path, {label = 'agent', harness = 'cli', ttlMs, key, nativeIdentity} = {}) {
+export async function enrollProfile(path, {label = 'agent', harness = 'cli', client: clientName, ttlMs, key, nativeIdentity} = {}) {
   const profile = profileAt(path);
   const client = await AccordClient.enroll(profile.url, readFileSync(profile.enrollmentFile, 'utf8').trim(),
-    {authority:profile.authority, label, harness, ttlMs, key});
-  await bindNativeSession(profile,client,nativeIdentity);
+    {authority:profile.authority, label, harness, client:clientName, ttlMs, key});
+  await bindNativeSession(profile,client,nativeIdentity,{role:harness==='mcp'?'agent':'nested'});
   return client;
 }
 export function notice(host) {
@@ -34,7 +34,7 @@ export function notice(host) {
 }
 export async function runAgent(profilePath, command, args) {
   requireThat(command, 'COMMAND_REQUIRED', 'Use accord run -- COMMAND [ARGS]', 400);
-  const client = await enrollProfile(profilePath, {label:command, harness:command});
+  const client = await enrollProfile(profilePath, {label:command, harness:command, client:basename(command)});
   const profile = profileAt(profilePath);
   const root = profile.sessionDirectory || join(dirname(resolve(profilePath)), 'sessions');
   mkdirSync(root, {recursive:true, mode:0o700});
@@ -70,8 +70,8 @@ export function inheritedClient() {
 }
 
 
-// A trusted local launcher supplies native IDs from its environment, never from
-// a model tool argument or a guessed working-directory/name match.
+// A trusted local launcher supplies native IDs, never a model tool argument or
+// a guessed working-directory/name match.
 // A named client trusts only its own ID and its terminal's: an agent started inside
 // another agent's shell inherits that agent's ID and must never take its mailbox.
 export function nativeSessionIdentity(env=process.env,client){
@@ -80,10 +80,22 @@ export function nativeSessionIdentity(env=process.env,client){
     if(id)return {source,id};
 }
 export const nativeEnrollmentKey=identity=>`mcp-native:${hash(JSON.stringify([identity.source,identity.id]))}`;
-export async function bindNativeSession(profile,client,nativeIdentity){
+// Mailbox bindings come only from an explicit trusted identity: the MCP client's
+// own ID or --native SOURCE:ID. An inherited environment ID never binds; a tile
+// the session runs inside is recorded as a non-exclusive agent_tiles link.
+export async function bindNativeSession(profile,client,nativeIdentity,{role='nested'}={}){
   if(!profile.endpointFile)return;
-  const bindings=nativeIdentity?[[nativeIdentity.source,nativeIdentity.id]]:nativeIdentity===null?[]:[['codex',process.env.CODEX_THREAD_ID],['claude',process.env.CLAUDE_SESSION_ID],['tessera',process.env.TESSERA_TILE_ID]].filter(([,id])=>id);
-  if(!bindings.length)return;
   const admin=readFileSync(join(dirname(profile.endpointFile),'admin.token'),'utf8').trim();
-  for(const [source,externalId] of bindings)await request(profile.url,admin,'/v1/collaboration',{operation:'session-bind',args:{key:`bind:${client.session.sessionId}:${source}`,source,externalId,actor:client.session.sessionId}});
+  const sid=client.session.sessionId;
+  if(nativeIdentity)
+    await request(profile.url,admin,'/v1/collaboration',{operation:'session-bind',args:{key:`bind:${sid}:${nativeIdentity.source}`,source:nativeIdentity.source,externalId:nativeIdentity.id,actor:sid}});
+  const tile=process.env.TESSERA_TILE_ID;
+  // The tile link is best-effort: a pre-agent-record host has no session-link-tile
+  // and a private adapter may forbid it, but enrollment itself must not fail.
+  if(tile)
+    try {
+      await request(profile.url,admin,'/v1/collaboration',{operation:'session-link-tile',args:{key:`link-tile:${sid}`,actor:sid,tile,role}});
+    } catch (error) {
+      if (!['UNKNOWN_OPERATION','FORBIDDEN'].includes(error.code)) throw error;
+    }
 }

@@ -24,6 +24,10 @@ export const toolCatalog = [
   ['accord_announce','Set label, state, location, capabilities and activity.',schema({key,label:string,activity:string,state:{enum:['starting','working','idle','waiting','blocked','done','failed','exited','cancelled','unknown']},location:string,capabilities:{type:'array',items:string,maxItems:20}},['label','activity'])],
   ['accord_find','Find agents and resources before overlapping work.',schema({query:string})],
   ['accord_send','Message a discovered address. Queued does not mean read.',schema({key,to:string,text:string,kind:{enum:['message','notification']},delivery:{enum:['inbox','native-prompt'],description:'Native prompt requests require a compatible adapter and its approval policy; notifications alone never type.'}},['to','text'])],
+  ['accord_schedule','Schedule a message (default: to yourself) at a time, interval or event; wake types it into an idle Tessera agent. Cancel via accord_more schedule-cancel.',schema({key,to:string,text:string,wake:{type:'boolean'},at:{type:'integer'},inMs:{type:'integer'},everyMs:{type:'integer'},startAt:{type:'integer'},on:{type:'object',description:'event trigger: reservation, job, idle or topic'},expiresInMs:{type:'integer'},maxFires:{type:'integer'},host:string},['text'])],
+['accord_schedules','List your schedules; admin passes all.',schema({all:{type:'boolean'},host:string})],
+  ['accord_schedule_cancel','Cancel one of your schedules (admin: any).',schema({id:string,host:string},['id'])],
+  ['accord_publish','Publish a topic event that fires matching schedules; for CI watchers and scripts.',schema({key,topic:string,text:string})],
   ['accord_inbox','Page unread messages; pass cursor for more. Only accord_read acknowledges. Wait up to 20s.',schema({waitMs:{type:'integer',minimum:0,maximum:20000},limit:{type:'integer',minimum:1,maximum:100},cursor:string})],
   ['accord_read','Mark one message handled.',schema({deliveryId:string},['deliveryId'])],
   ['accord_sent','Check whether an outgoing message is queued or delivered to the recipient host.',schema({id:string},['id'])],
@@ -49,19 +53,19 @@ export const toolCatalog = [
   ['accord_finish','Submit a driver receipt for acceptance and confirmed release.',schema({key,claimId:string,receiptId:string},['key','claimId','receiptId'])]
 ].map(([name,description,inputSchema])=>({name,description,inputSchema}));
 // Every session pays for this list before doing anything, so it holds only the daily loop.
-const dailyTools=new Set(['accord_bootstrap','accord_announce','accord_find','accord_send','accord_inbox','accord_read','accord_reserve','accord_reservation','accord_release','accord_extend','accord_resources']);
+const dailyTools=new Set(['accord_bootstrap','accord_announce','accord_find','accord_send','accord_inbox','accord_read','accord_reserve','accord_reservation','accord_release','accord_extend','accord_resources','accord_schedule']);
 const legacyTools=new Set(['accord_claim','accord_wait','accord_claim_status','accord_checkpoint','accord_renew','accord_write','accord_finish','accord_process_start','accord_process_status']);
 const extraTools=()=>toolCatalog.filter(t=>!dailyTools.has(t.name)&&!legacyTools.has(t.name));
 const moreTool={name:'accord_more',description:'Call a less common Accord tool. Omit tool to list them: sessions, reports, jobs, questions, telemetry, workloads.',inputSchema:schema({tool:string,args:{type:'object'}})};
 const published=({name,description,inputSchema:{properties,required}})=>({name,description,inputSchema:{type:'object',properties,...(required?.length?{required}:{})}});
 export const listedTools=()=>[...toolCatalog.filter(t=>dailyTools.has(t.name)),moreTool].map(published);
 function cleanClaim(claim) { const {resourceToken,driverUrl,...publicClaim}=claim;return publicClaim; }
-export function mcpAdapter(profile,{identity=nativeSessionIdentity()}={}) {
+export function mcpAdapter(profile,{identity=nativeSessionIdentity(),clientName}={}) {
   let clientPromise;
   const enrollmentKey = identity?nativeEnrollmentKey(identity):randomUUID(), inherited = Boolean(process.env.ACCORD_SESSION_FILE);
   const client = () => {
     if (!clientPromise) {
-      clientPromise = Promise.resolve().then(() => inherited ? inheritedClient() : enrollProfile(profile,{label:'MCP agent',harness:'mcp',key:enrollmentKey,nativeIdentity:identity}));
+      clientPromise = Promise.resolve().then(() => inherited ? inheritedClient() : enrollProfile(profile,{label:'MCP agent',harness:'mcp',client:clientName,key:enrollmentKey,nativeIdentity:identity}));
       // A transient enrollment failure must not poison this bridge forever.
       // Keep the enrollment key so a lost response cannot create a second session.
       clientPromise.catch(() => { clientPromise = undefined; });
@@ -89,6 +93,9 @@ export function mcpAdapter(profile,{identity=nativeSessionIdentity()}={}) {
       if(name==='accord_recall_read'){const {host,...body}=args;return c.collaborate('memory-read',body,host);}
       if(awarenessOps[name]){
         const {host,detail,...body}=args;
+        // `detail` is a view flag only for accord_sessions; for every other op it is
+        // real payload (e.g. accord_report's progress detail) and must pass through.
+        if(name!=='accord_sessions')body.detail=detail;
         if(name==='accord_session_read')body.limit??=10;
         const result=await c.collaborate(awarenessOps[name],{...body,key:args.key??randomUUID()},host);
         return name==='accord_sessions'&&!detail?compact.sessions(result):result;
@@ -96,6 +103,10 @@ export function mcpAdapter(profile,{identity=nativeSessionIdentity()}={}) {
       if(name==='accord_announce')return c.announce(args);
       if(name==='accord_find')return compact.find(await c.find(args.query),args.query);
       if(name==='accord_send')return c.send(args.to,args.text,args);
+      if(name==='accord_schedule'){const {host,...body}=args;return compact.schedule(await c.collaborate('schedule',{...body,delivery:args.wake===true?'native-prompt':'inbox'},host));}
+      if(name==='accord_schedules')return compact.schedules(await c.collaborate('schedules',{all:args.all===true},args.host));
+      if(name==='accord_schedule_cancel')return compact.schedule(await c.collaborate('schedule-cancel',{id:args.id},args.host));
+      if(name==='accord_publish')return c.collaborate('topic-publish',{key:args.key??randomUUID(),topic:args.topic,text:args.text});
       if(name==='accord_inbox'){
         requireThat((args.waitMs??0)<=20000,'INVALID_INPUT','MCP wait is limited to 20 seconds',400);
         return c.waitInbox(args.waitMs??0,{limit:args.limit??20,...(args.cursor?{cursor:args.cursor}:{})});
@@ -150,7 +161,7 @@ export async function serveMcp(profile,input=process.stdin,output=process.stdout
   input.setEncoding?.('utf8');
   const nativeAdapters=new Map();let buffer='',initialized=false,clientName,adapter;
   // Made after initialize, so the environment ID it trusts is the connecting client's own.
-  const defaultAdapter=()=>adapter??=mcpAdapter(profile,{identity:nativeSessionIdentity(process.env,clientName??'')??null});
+  const defaultAdapter=()=>adapter??=mcpAdapter(profile,{identity:nativeSessionIdentity(process.env,clientName??'')??null,clientName});
   // Native transport metadata is supplied by the client, never by model arguments.
   // A pooled transport may carry multiple conversations: isolate their clients.
   const adapterFor=message=>{
@@ -164,7 +175,7 @@ export async function serveMcp(profile,input=process.stdin,output=process.stdout
     const key=nativeEnrollmentKey(identity);
     if(!nativeAdapters.has(key)){
       requireThat(nativeAdapters.size<256,'MCP_LIMIT','Too many native sessions on this bridge',400);
-      nativeAdapters.set(key,mcpAdapter(profile,{identity}));
+      nativeAdapters.set(key,mcpAdapter(profile,{identity,clientName}));
     }
     return nativeAdapters.get(key);
   };

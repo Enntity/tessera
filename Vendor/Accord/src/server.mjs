@@ -4,7 +4,11 @@ import { ResourceManagers } from './resource-managers.mjs';
 import { awarenessRuntime } from './awareness-runtime.mjs';
 import { SessionAwareness } from './session-awareness.mjs';
 import { Overseer } from './overseer.mjs';
+import { Schedules } from './schedules.mjs';
 import { dirname,join } from 'node:path';
+import { homedir } from 'node:os';
+import { readdirSync } from 'node:fs';
+import { createWorkloads, workloadView } from './workloads.mjs';
 import { createTelemetry } from './telemetry.mjs';
 import { createCollectors } from './telemetry-collectors.mjs';
 import { sensorPath } from './native-sensors.mjs';
@@ -20,24 +24,26 @@ import { find as compactFind } from './compact.mjs';
 import { createHttp, bearer, readBody, hash, request, integer, requireThat, loopbackUrl, text } from './common.mjs';
 import { orphanGraceDefaultMs, cooperativeAgeOutDefaultMs } from './lifecycle.mjs';
 
-export function coordinator({ db, claimSecret, driverUrl, driverToken, driverInstance, leaderMs = 5000, tickMs = 100, hostName = 'local', telemetryCollectors, driverRequest=request }) {
+export function coordinator({ db, claimSecret, driverUrl, driverToken, driverInstance, leaderMs = 5000, tickMs = 100, hostName = 'local', telemetryCollectors, driverRequest=request, hostWorkloads=createWorkloads(), linksDir=join(homedir(),'.config','accord','links') }) {
   integer(leaderMs, 'leaderMs', 500, 30000); integer(tickMs, 'tickMs', 10, 1000);
   const parsed = new URL(driverUrl);
   requireThat(parsed.protocol === 'http:' && ['127.0.0.1', 'localhost'].includes(parsed.hostname) && !parsed.username && !parsed.password,
     'BAD_DRIVER_URL', 'This release supports a loopback HTTP driver only', 400);
   const store = new Store(db, { leaderMs });
-  let collaboration,memory,managers,awareness,overseer,attention,telemetry;
+  let collaboration,memory,managers,awareness,overseer,attention,telemetry,schedules;
   try {
     // Synchronous mailbox migrations and config reads can outlast a lease. Finish
     // them before taking leadership; no timer can renew while they block startup.
     collaboration=new Collaboration(store,db);
     memory=new MemoryPanorama(store,memoryConfig());
     managers=new ResourceManagers(store,dirname(db));
-    awareness=new SessionAwareness(store);
+    awareness=new SessionAwareness(store,{hostName});
     attention=new Attention(store,collaboration,join(dirname(db),'attention'),{perHour:Number(process.env.ACCORD_WAKE_PER_HOUR||6)});
-    telemetry=createTelemetry({authority:store.authority,hostName,collectors:telemetryCollectors??createCollectors({nativeHelper:sensorPath(dirname(db))})});
+    telemetry=createTelemetry({authority:store.authority,hostName,collectors:telemetryCollectors??createCollectors({nativeHelper:sensorPath(dirname(db))}),workloads:()=>hostWorkloads.read()});
     store.takeLeadership();
     overseer=new Overseer(store,awareness,collaboration);
+    collaboration.agentRecord=actorId=>awareness.agentRecord(actorId);
+    schedules=new Schedules(store,collaboration,{resourceExists:localId=>!!store.db.prepare('SELECT 1 FROM resources WHERE id=?').get(localId)||!!store.binding(localId)||managers.owns(localId)});
   } catch (error) {
     attention?.close();
     try { collaboration?.close(); } finally {
@@ -53,6 +59,11 @@ export function coordinator({ db, claimSecret, driverUrl, driverToken, driverIns
   const instanceFor=resource=>resource==='artifact'?driverInstance:store.binding(resource)?.instance;
   const driverPath=(path,resource='artifact')=>resource==='artifact'?path:`${path}?resource=${encodeURIComponent(resource)}`;
   const grant = claim => ({ instance: instanceFor(claim.resource), authority: store.authority, epoch: store.epoch, generation: claim.generation, claimId: claim.id });
+  // Providers may use the holder to attribute work; they may ignore it.
+  const holderOf = claim => {
+    const row = store.db.prepare('SELECT coalesce(p.label,s.label,c.actor) label,o.authority oa,o.session_id os FROM claims c LEFT JOIN participants p ON p.actor=c.actor LEFT JOIN sessions s ON s.id=c.actor LEFT JOIN remote_routes o ON o.actor=c.actor WHERE c.id=?').get(claim.id);
+    return { label: row?.label ?? claim.actor, address: row?.oa ? `${row.oa}/${row.os}` : `${store.authority}/${claim.actor}` };
+  };
   let closed = false, busy = false, unhealthy = false,timer,reconcileAgain=false;
   const queueReconcile=delay=>{clearTimeout(timer);if(!closed&&!unhealthy)timer=setTimeout(reconcile,delay);};
   // Schedule after the emitting transaction commits; no work runs inside it.
@@ -124,6 +135,7 @@ export function coordinator({ db, claimSecret, driverUrl, driverToken, driverIns
       store.sweep();
       collaboration.schedule();
       try{lifecycleNotices();}catch{/* Notices retry on the next tick. */}
+      try{if(schedules.tick())void collaboration.flush().catch(()=>{});}catch{/* Schedule work retries on the next tick. */}
       void managers.reconcile().catch(()=>{});
       const pending=store.pending(),ids=new Set(pending.map(c=>c.id));
       for(const id of retryAfter.keys())if(!ids.has(id))retryAfter.delete(id);
@@ -136,7 +148,7 @@ export function coordinator({ db, claimSecret, driverUrl, driverToken, driverIns
             store.assertLeader();
             const activating = claim.state === 'preparing';
             const response = await driverRequest(driverUrl, driverToken, driverPath(activating ? '/control/activate' : '/control/revoke',claim.resource), {
-              ...grant(claim), ...(activating ? { credentialHash: hash(secretFor(claim)) } : {})
+              ...grant(claim), ...(activating ? { credentialHash: hash(secretFor(claim)), holder: holderOf(claim) } : {})
             }, 600);
             requireThat(response.instance === instanceFor(claim.resource) && response.claimId === claim.id && response.generation === claim.generation && (activating ? response.active === true : response.released === true),
               'BAD_DRIVER_RECEIPT', 'Driver did not confirm this generation', 503);
@@ -256,6 +268,62 @@ export function coordinator({ db, claimSecret, driverUrl, driverToken, driverIns
     const resources=[...(await host()).resources,...await managers.resources()],pools=collaboration.pools(resources);
     return {resources,capabilities:['reservation-windows-v1'],...(pools.length?{pools}:{})};
   });
+  // Workload observations attach to the page a local client asked for — never
+  // to /v1/federation, so a forwarded request cannot recurse the enrichment.
+  const workloadTelemetry=new Map();
+  let linkFileCache={at:0,rows:[]};
+  function linkFiles(){
+    if(store.now()-linkFileCache.at<10000)return linkFileCache.rows;
+    let rows=[];
+    try{rows=readdirSync(linksDir).filter(f=>f.endsWith('.json')).flatMap(f=>{try{const j=JSON.parse(readFileSync(join(linksDir,f),'utf8'));return typeof j.host==='string'&&typeof j.authority==='string'?[{host:j.host,authority:j.authority}]:[];}catch{return[];}});}catch{/* No link directory. */}
+    linkFileCache={at:store.now(),rows};return rows;
+  }
+  const telemetryFlights=new Map();
+  async function hostTelemetry(authority,actor){
+    const hit=workloadTelemetry.get(authority);
+    if(hit&&store.now()-hit.at<10000)return hit.value;
+    let flight=telemetryFlights.get(authority);
+    if(!flight){
+      flight=(authority===store.authority?telemetry.telemetry():collaboration.forward(authority,'telemetry',{},actor))
+        .then(value=>{workloadTelemetry.set(authority,{at:store.now(),value});return value;})
+        .finally(()=>{if(telemetryFlights.get(authority)===flight)telemetryFlights.delete(authority);});
+      telemetryFlights.set(authority,flight);
+    }
+    return flight;
+  }
+  async function observeWorkloads(resource,actor){
+    const names=(resource.hosts??[]).map(String).filter(Boolean).slice(0,32),links=linkFiles();
+    const resolve=name=>name===hostName?store.authority:links.find(l=>l.host===name)?.authority??null;
+    // Resolve names first; descriptor-name matches are learned from telemetry.
+    const wanted=new Map(names.map(n=>[n,resolve(n)]));
+    const candidates=new Set([...wanted.values()].filter(Boolean));
+    if([...wanted.values()].includes(null))for(const l of links)candidates.add(l.authority);
+    const samples=new Map();
+    await Promise.all([...candidates].map(async authority=>{
+      try{samples.set(authority,await hostTelemetry(authority,actor));}catch{samples.set(authority,null);}
+    }));
+    // Reports may live on any fetched host; a node names the resource's host.
+    const reports=[...samples.values()].filter(Boolean).flatMap(t=>(t.workloads?.reports??[]).map(r=>({...r,authority:t.authority})));
+    // The reservation prefix derives from the authority that owns the claim,
+    // which for a forwarded resource is the reporting host, not the caller.
+    const resourceAuthority=String(resource.id??'').split('/')[0]||store.authority;
+    return workloadView({wanted,samples,reports,holder:resource.holder,authority:resourceAuthority,now:store.now()});
+  }
+  async function attachWorkloads(payload,actor,operation){
+    // Only the two read answers pay the telemetry cost; mutations stay cheap.
+    if(operation!=='resources'&&operation!=='reservation')return payload;
+    try{
+      if(payload&&Array.isArray(payload.resources)){
+        await Promise.all(payload.resources.map(async r=>{if(Array.isArray(r.hosts)&&r.hosts.length)r.workloads=await observeWorkloads(r,actor);}));
+      }else if(payload&&typeof payload.resource==='string'&&!payload.workloads){
+        const remote=payload.authority&&payload.authority!==store.authority;
+        const list=remote?(await collaboration.forward(payload.authority,'resources',{},actor)).resources??[]:(await catalog()).resources;
+        const match=list.find(r=>r.id===`${payload.authority??store.authority}/${payload.resource}`||r.localId===payload.resource);
+        if(match&&Array.isArray(match.hosts)&&match.hosts.length)payload.workloads=await observeWorkloads(match,actor);
+      }
+    }catch{/* Observation failure never blocks the answer. */}
+    return payload;
+  }
   async function network() {
     const peers = store.db.prepare('SELECT * FROM peers ORDER BY authority').all();
     return Promise.all(peers.map(async peer => {
@@ -300,6 +368,8 @@ export function coordinator({ db, claimSecret, driverUrl, driverToken, driverIns
     if(operation==='manager-schedules'){requireThat(actor.role==='admin','FORBIDDEN','Operator required',403);return managers.schedules();}
     if(operation==='summary-configure')return observationRuntime.configureSummary(actor,args);
     if(operation==='session-bind')return awareness.bind(actor,args);
+    if(operation==='session-link-tile')return awareness.linkTile(actor,args);
+    if(operation==='overseer-designate')return awareness.designate(actor,args);
     if(operation==='lifecycle-retire')return awareness.retire(actor,args);
     if(operation==='lifecycle-sweep')return awareness.sweep(actor,args);
     if(['context-inbox','context-wait'].includes(operation)) {
@@ -312,6 +382,7 @@ export function coordinator({ db, claimSecret, driverUrl, driverToken, driverIns
     if(operation==='source-privacy')return awareness.privacy(actor,args);
     if(operation==='question-dismiss')return awareness.dismiss(actor,args);
     if(operation==='session-report')return awareness.report(actor,args);
+    if(operation==='workload-report')return hostWorkloads.report(actor,args);
     if(operation==='heartbeat')return awareness.heartbeat(actor);
     if(operation==='sessions')return awareness.list(args);
     if(operation==='session-read')return awareness.read(args.id,args);
@@ -324,15 +395,19 @@ export function coordinator({ db, claimSecret, driverUrl, driverToken, driverIns
     if(operation==='ask')return awareness.ask(actor,args);
     if(operation==='answer')return awareness.answer(actor,args);
     if(operation==='question')return awareness.question(actor,args.id);
-    if(operation==='overseer')return {rules:overseer.rules(),...overseer.incidents()};
+    if(operation==='overseer')return {rules:overseer.rules(),overseer:awareness.overseerAddress(),...overseer.incidents()};
     if(operation==='overseer-rule')return overseer.configure(actor,args);
     if(operation==='overseer-signal')return overseer.signal(actor,args);
     if(operation==='announce'){const result=collaboration.announce(actor,args);awareness.announce(actor,args);return result;}
     if(operation==='find'){
-      const [result,local]=await Promise.all([collaboration.find(args.query??'',true,collaboration.address(actor),{includeRetired:args.includeRetired===true}),catalog()]);
+      const [result,local]=await Promise.all([collaboration.find(args.query??'',args.local!==true,collaboration.address(actor),{includeRetired:args.includeRetired===true}),catalog()]);
       result.hosts[0].resources=local.resources;
       return args.detail===true?result:compactFind(result,args.query??'');
     }
+    if(operation==='schedule')return schedules.create(actor,args);
+    if(operation==='schedules')return schedules.list(actor,{all:args.all===true});
+    if(operation==='schedule-cancel')return schedules.cancel(actor,args);
+    if(operation==='topic-publish')return schedules.publish(actor,args);
     if(operation==='send'){const r=collaboration.send(actor,args);void collaboration.flush().catch(()=>{});return collaboration.sent(actor,r.id);}
     if(operation==='inbox'){
       integer(args.waitMs??0,'waitMs',0,3600000);
@@ -416,9 +491,10 @@ export function coordinator({ db, claimSecret, driverUrl, driverToken, driverIns
       if(body.operation==='directory')value={participants:collaboration.directory(body.args?.query??''),resources:[...(await host()).resources,...await managers.resources()]};
       else if(body.operation==='deliver'){
         requireThat(body.args?.from===`${peer.authority}/${body.actor}`,'FORBIDDEN','Sender does not match linked host',403);
+        requireThat(body.args?.scheduledBy===undefined||String(body.args.scheduledBy).split('/')[0]===peer.authority,'FORBIDDEN','scheduledBy does not match linked host',403);
         value=collaboration.deliver(body.args);
       }else{
-        requireThat(['capabilities','resources','reserve','reservation','release','renew','start','process','workload-register','workload-launch','workload-list','telemetry','metadata','sessions','session-read','jobs','job','overseer','session-snooze','memories','memory-read'].includes(body.operation),'FORBIDDEN','Operation cannot be forwarded',403);
+        requireThat(['capabilities','resources','reserve','reservation','release','renew','start','process','workload-register','workload-launch','workload-list','telemetry','metadata','sessions','session-read','jobs','job','overseer','session-snooze','memories','memory-read','schedule','schedules','schedule-cancel'].includes(body.operation),'FORBIDDEN','Operation cannot be forwarded',403);
         value=await collaborate(actor,body.operation,body.args);
       }
       store.assertLeader();return {authority:store.authority,value};
@@ -435,13 +511,13 @@ export function coordinator({ db, claimSecret, driverUrl, driverToken, driverIns
     if(url.pathname==='/v1/collaboration'&&req.method==='POST'){
       const body=await readBody(req);
       if(body.host&&body.host!==store.authority){
-        requireThat(['capabilities','resources','reserve','reservation','release','renew','start','process','workload-register','workload-launch','workload-list','telemetry','metadata','sessions','session-read','jobs','job','overseer','session-snooze','memories','memory-read'].includes(body.operation),'FORBIDDEN','Operation cannot be forwarded',403);
-        return collaboration.forward(body.host,body.operation,body.args,actor);
+        requireThat(['capabilities','resources','reserve','reservation','release','renew','start','process','workload-register','workload-launch','workload-list','telemetry','metadata','sessions','session-read','jobs','job','overseer','session-snooze','memories','memory-read','schedule','schedules','schedule-cancel'].includes(body.operation),'FORBIDDEN','Operation cannot be forwarded',403);
+        return attachWorkloads(await collaboration.forward(body.host,body.operation,body.args,actor),actor,body.operation);
       }
       if(body.operation==='sessions'&&!body.host)return sessionsAcrossHosts(actor,body.args);
       if(body.operation==='memories'&&!body.host)return memoriesAcrossHosts(actor,body.args);
       const gone=new AbortController();res.once('close',()=>gone.abort());
-      return collaborate(actor,body.operation,body.args,gone.signal);
+      return attachWorkloads(await collaborate(actor,body.operation,body.args,gone.signal),actor,body.operation);
     }
     if (url.pathname === '/v1/bootstrap' && req.method === 'GET') {
       if(!store.db.prepare('SELECT actor FROM participants WHERE actor=?').get(actor.id))collaboration.announce(actor,{key:'bootstrap-registration',label:actor.session?.label??actor.id,capabilities:[],activity:'available'});
@@ -451,7 +527,7 @@ export function coordinator({ db, claimSecret, driverUrl, driverToken, driverIns
     }
     if (url.pathname === '/v1/network' && req.method === 'GET') return {hosts:[{status:'observed',host:await host()},...await network()]};
     if(url.pathname==='/v1/plugins'&&req.method==='GET')return {plugins};
-    if(url.pathname==='/v1/resources'&&req.method==='GET')return catalog();
+    if(url.pathname==='/v1/resources'&&req.method==='GET')return attachWorkloads(await catalog(),actor,'resources');
     if(url.pathname==='/v1/workloads/adopt'&&req.method==='POST'){
       requireThat(actor.role==='admin','FORBIDDEN','Operator adoption requires administrator authority',403);
       const body=await readBody(req),claim=store.db.prepare('SELECT * FROM claims WHERE id=?').get(body.claimId);
