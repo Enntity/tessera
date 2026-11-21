@@ -13,6 +13,17 @@ second authority or copy tokens between hosts. Keep the previous package availab
 binary rollback; database rollback is a separate recovery operation and can invalidate
 fencing history. See [recovery](RECOVERY.md).
 
+## Install 0.8.1
+
+```sh
+npm install -g https://github.com/Enntity/accord/releases/download/v0.8.1/enntity-accord-0.8.1.tgz
+accord install
+```
+
+No migration; fixes reconnect `KEY_REUSED` for native MCP bridges whose
+enrollment predates 0.8.0. Restart the coordinator the way you did for 0.8.0;
+the rest of this document applies unchanged.
+
 ## Install 0.8.0
 
 ```sh

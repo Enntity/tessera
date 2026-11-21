@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.8.1 — 2026-11-20
+
+- Fixed: MCP bridges with a native identity that enrolled before 0.8.0 failed to reconnect with `KEY_REUSED`, because the enrollment now carried the client name. The client name is no longer part of the enrollment's idempotency payload; it is recorded on the session either way.
+
 ## 0.8.0 — 2026-11-20
 
 - Agent record (migration 22): `agent_tiles` non-exclusive tile links
