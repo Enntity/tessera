@@ -63,11 +63,15 @@ Native transcript presence uses the source's last activity, not rescan time.
 Completed sessions are offline and unknown or old activity remains unknown;
 authenticated agent heartbeats continue to describe live transport presence.
 
-The launcher can bind `CODEX_THREAD_ID`, `CLAUDE_SESSION_ID`, or `TESSERA_TILE_ID`
-to the authenticated Accord session using the local administrator credential.
-A host adapter must establish this binding; an agent cannot claim another native
-identity through its tools. Bound agents receive the stable native inbox, even
-when their Accord session changes. The installed Claude/Codex context hook can
+A trusted launcher can bind a native ID it actually knows — the MCP client's own
+conversation ID, or an explicit `accord session open --native SOURCE:ID` — to the
+authenticated Accord session using the local administrator credential. A host
+adapter must establish this binding; an agent cannot claim another native
+identity through its tools. Plain CLI enrollment never binds environment IDs:
+an inherited parent ID is ignored for the mailbox and recorded only as a
+non-exclusive `agent_tiles` link (role `nested`) when `TESSERA_TILE_ID` is
+present. Bound agents receive the stable native inbox, even when their Accord
+session changes. The installed Claude/Codex context hook can
 also bind the harness-supplied native ID to the authenticated bootstrap or
 announcement response. If neither mechanism establishes a binding, the
 observation remains unbound. Do not infer identity from a label or working
@@ -147,6 +151,10 @@ stays readable by id, and its `retiredAt`, `retiredReason` and optional
 `stale` (past its silence threshold but held back as a reservation holder),
 `exited` (terminal, not yet retired), or `retired`. The older `presence` field
 (`recent`/`unknown`/`offline`) is unchanged for existing clients.
+
+Retirement also cancels any active schedules the session owned: the
+`session.retired` (or `session.closed`) event ends them as
+`ended_reason:'owner-retired'` (see `docs/API.md` Scheduled messages).
 
 Retirement happens four ways:
 

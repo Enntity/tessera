@@ -67,7 +67,13 @@ try {
     const path=resolve(option('session-file',join(home,'.config','accord','shell-session.json')));
     if(argv[0]==='open'){
       requireThat(!existsSync(path),'SESSION_EXISTS','Close the existing session or select another --session-file');
-      const c=await enrollProfile(profilePath,{label:option('label','shell agent'),harness:option('harness','cli')});
+      let native;
+      if(option('native')){
+        const [source,nativeId]=option('native').split(':',2);
+        requireThat(source&&nativeId&&/^[a-z0-9-]{1,64}$/.test(source)&&nativeId.length<=200,'INVALID_INPUT','Use --native SOURCE:ID');
+        native={source,id:nativeId};
+      }
+      const c=await enrollProfile(profilePath,{label:option('label','shell agent'),harness:option('harness','cli'),client:'cli',nativeIdentity:native});
       mkdirSync(dirname(path),{recursive:true,mode:0o700});
       writeFileSync(path,JSON.stringify({schema:1,url:c.url,...c.session}),{mode:0o600,flag:'wx'});
       console.log(JSON.stringify({sessionFile:path,...await c.bootstrap()},null,2));
@@ -114,6 +120,43 @@ try {
       requireThat(actions[argv[0]],'INVALID_COMMAND','Use workload start, status, register, launch, list or adopt');
       result=await c.collaborate(actions[argv[0]],{id,key,...(argv[0]==='register'?{targets:JSON.parse(readFileSync(option('file'),'utf8')).targets}:{}),...(argv[0]==='launch'?{workload:option('workload')}:{})},host);
     }
+    console.log(JSON.stringify(result,null,2));
+  } else if(['schedule','schedules','unschedule','publish'].includes(command)){
+    process.env.ACCORD_SESSION_FILE=option('session-file',process.env.ACCORD_SESSION_FILE??join(home,'.config','accord','shell-session.json'));
+    const c=inheritedClient(),key=option('key',randomUUID()),host=option('host');let result;
+    const duration=v=>{const m=/^(\d+)(s|m|h|d)$/.exec(v);requireThat(m,'INVALID_INPUT',`Use a duration like 30m, 1h or 7d, not ${v}`);return Number(m[1])*{s:1000,m:60000,h:3600000,d:86400000}[m[2]];};
+    if(command==='schedule'){
+      const body={key,text:option('text'),wake:argv.includes('--wake')?true:undefined};
+      requireThat(body.text,'TEXT_REQUIRED','Use --text TEXT');
+      if(option('to'))body.to=option('to');
+      if(option('max'))body.maxFires=Number(option('max'));
+      if(option('expires'))body.expiresInMs=duration(option('expires'));
+      const on=option('on');
+      if(option('at')){body.at=Date.parse(option('at'));requireThat(Number.isFinite(body.at),'INVALID_INPUT','Use --at ISO timestamp');}
+      else if(option('in'))body.inMs=duration(option('in'));
+      else if(option('every'))body.everyMs=duration(option('every'));
+      else if(on){
+        const parts=on.split(':'),kind=parts[0];
+        if(kind==='reservation'){
+          const maybe=parts.at(-1);
+          if(parts.length>2&&/^(active|released)(,(active|released))*$/.test(maybe))body.on={event:'reservation',resource:parts.slice(1,-1).join(':'),states:maybe.split(',')};
+          else body.on={event:'reservation',resource:parts.slice(1).join(':')};
+        }else if(kind==='job'){
+          const maybe=parts.at(-1);
+          if(parts.length>2&&/^(working|waiting|done|failed|cancelled)(,(working|waiting|done|failed|cancelled))*$/.test(maybe))body.on={event:'job',job:parts.slice(1,-1).join(':'),states:maybe.split(',')};
+          else body.on={event:'job',job:parts.slice(1).join(':')};
+        }else if(kind==='idle'){
+          requireThat(parts.length>=3,'INVALID_INPUT','Use --on idle:SESSION:MINUTES');
+          const minutes=Number(parts.at(-1));requireThat(Number.isFinite(minutes)&&minutes>=1,'INVALID_INPUT','Idle minutes must be a positive number');
+          body.on={event:'idle',session:parts.slice(1,-1).join(':'),idleMs:Math.round(minutes*60000)};
+        }else if(kind==='topic'){body.on={event:'topic',topic:on.slice('topic:'.length)};}
+        else requireThat(false,'INVALID_INPUT','Use --on reservation:RES[:states]|job:ID[:states]|idle:SESSION:MIN|topic:NAME');
+      } else requireThat(false,'INVALID_INPUT','Use --at ISO, --in 30m, --every 1h or --on EVENT');
+      result=await c.collaborate('schedule',body,host);
+    }
+    if(command==='schedules')result=await c.collaborate('schedules',{all:argv.includes('--all')},host);
+    if(command==='unschedule'){requireThat(option('id'),'ID_REQUIRED','Use --id ID');result=await c.collaborate('schedule-cancel',{id:option('id')},host);}
+    if(command==='publish'){requireThat(option('topic'),'TOPIC_REQUIRED','Use --topic NAME');result=await c.collaborate('topic-publish',{key,topic:option('topic'),text:option('text')},host);}
     console.log(JSON.stringify(result,null,2));
   } else if(['sessions','session-read','report','jobs','job','ask','question','overseer','snooze','title'].includes(command)){
     process.env.ACCORD_SESSION_FILE=option('session-file',process.env.ACCORD_SESSION_FILE??join(home,'.config','accord','shell-session.json'));
@@ -215,7 +258,7 @@ try {
     const config = configuration(directory);
     const service = coordinator({ db: join(directory, 'coordinator.sqlite'), claimSecret: config.readToken('claim-secret'),
       driverUrl: option('driver-url', 'http://127.0.0.1:8788'), driverToken: config.readToken('driver-control'), driverInstance: config.driverInstance,
-      leaderMs: Number(option('leader-ms', 5000)), hostName:option('name',hostname()) });
+      leaderMs: Number(option('leader-ms', 5000)), hostName:option('name',hostname()), linksDir:process.env.ACCORD_LINKS_DIR });
     const url = await listen(service.server, Number(option('port', 0))), local = await listenLocal(service.server, directory);
     writeFileSync(join(directory,'endpoints.json'),JSON.stringify({coordinator:url,authority,...(local?{local:local.url}:{})}),{mode:0o600});
     ready({ url, authority, local: local?.url });
@@ -273,7 +316,7 @@ try {
     if (command === 'artifact') result = await request(endpoints.driver, config.readToken('driver-control'), `/control/artifacts/${option('receipt')}`);
     console.log(JSON.stringify(result, null, 2));
   } else {
-    console.log(`Accord ${version} — discover, message, share; Node 22.16+\n\n  accord install [--no-start] [--dry-run] [--clients codex,claude,opencode,grok,omp,hermes,zcode,dsh]\n  accord connect|disconnect SSH_HOST\n  accord share-sessions --host AUTHORITY [--off]\n  accord session open --label NAME [--session-file FILE]\n  accord session close [--session-file FILE]\n  accord announce --label NAME --activity TEXT [--capabilities a,b]\n  accord find [--query TEXT]\n  accord send --to ADDRESS --text TEXT [--notify] [--key KEY]\n  accord inbox [--wait-ms 3600000]\n  accord read --id DELIVERY_ID\n  accord sent --id MESSAGE_ID\n  accord reserve --resource ADDRESS --purpose TEXT [--duration-ms MS] [--key KEY]\n  accord reservation|release --id ID [--host AUTHORITY]\n  accord extend --id ID [--host AUTHORITY] [--duration-ms MS]\n  accord workload start|status|list --id ID [--host AUTHORITY]\n  accord workload register --id ID --file TARGETS.json [--host AUTHORITY]\n  accord workload launch --id ID --workload BINDING_ID [--host AUTHORITY]\n  accord workload policy --data DIR --file POLICY.json (operator only)\n  accord workload adopt --data DIR --file ADOPTION.json (operator only)\n  accord resource list|register --file MANIFEST\n  accord resource remove --id NAME\n  accord plugins\n  accord process-start|process-status --claim ID [--key KEY]\n  accord doctor\n  accord run -- COMMAND [ARGS]\n  accord context\n  accord claim|wait --key KEY [--task ID]\n  accord inspect --claim ID\n  accord checkpoint --claim ID --key KEY --note TEXT\n  accord renew --claim ID --key KEY --lease-ms MS\n  accord write --claim ID --key KEY --input FILE\n  accord finish --claim ID --key KEY --receipt ID\n  accord host [--notice]\n  accord mcp\n  accord service install [--enable]\n  accord join --url LOOPBACK --authority ID --discovery-file FILE\n  accord leave --authority ID\n  accord sessions [--query TEXT] [--host AUTHORITY]\n  accord session-read --id ID\n  accord retire --session ID --reason R | --source S --external-id X --reason R\n  accord lifecycle sweep [--dry-run]\n  accord report|job|ask|snooze --input JSON_FILE\n  accord jobs|overseer\n  accord policy|signal --input JSON_FILE\n  accord privacy --source SOURCE --on|--off\n  accord question --id ID\n  accord telemetry|machine [--host AUTHORITY]\n  accord network\n  accord init --data DIR\n  accord up --data DIR [--port 8787] [--driver-port 8788]\n  accord board --data DIR\n  accord submit --data DIR --input FILE --expected FILE [--title TEXT]\n  accord pause|resume --data DIR\n  accord artifact --data DIR --receipt ID\n\nOutput is JSON except help and --notice; run inherits its child's output. init creates an admin identity; agents enroll their own sessions.\nRun npm run demo for the isolated two-process recovery proof. No model or GPU is required.`);
+    console.log(`Accord ${version} — discover, message, share; Node 22.16+\n\n  accord install [--no-start] [--dry-run] [--clients codex,claude,opencode,grok,omp,hermes,zcode,dsh]\n  accord connect|disconnect SSH_HOST\n  accord share-sessions --host AUTHORITY [--off]\n  accord session open --label NAME [--session-file FILE] [--native SOURCE:ID]\n  accord session close [--session-file FILE]\n  accord announce --label NAME --activity TEXT [--capabilities a,b]\n  accord find [--query TEXT]\n  accord send --to ADDRESS --text TEXT [--notify] [--key KEY]\n  accord schedule --text TEXT [--to ADDR] (--at ISO|--in 30m|--every 1h|--on reservation:RES[:active|released]|job:ID[:states]|idle:SESSION:MIN|topic:NAME) [--wake] [--expires 7d] [--max N] [--host AUTHORITY] [--key KEY]\n  accord schedules [--all] [--host AUTHORITY]\n  accord unschedule --id ID [--host AUTHORITY]\n  accord publish --topic NAME [--text TEXT]\n  accord inbox [--wait-ms 3600000]\n  accord read --id DELIVERY_ID\n  accord sent --id MESSAGE_ID\n  accord reserve --resource ADDRESS --purpose TEXT [--duration-ms MS] [--key KEY]\n  accord reservation|release --id ID [--host AUTHORITY]\n  accord extend --id ID [--host AUTHORITY] [--duration-ms MS]\n  accord workload start|status|list --id ID [--host AUTHORITY]\n  accord workload register --id ID --file TARGETS.json [--host AUTHORITY]\n  accord workload launch --id ID --workload BINDING_ID [--host AUTHORITY]\n  accord workload policy --data DIR --file POLICY.json (operator only)\n  accord workload adopt --data DIR --file ADOPTION.json (operator only)\n  accord resource list|register --file MANIFEST\n  accord resource remove --id NAME\n  accord plugins\n  accord process-start|process-status --claim ID [--key KEY]\n  accord doctor\n  accord run -- COMMAND [ARGS]\n  accord context\n  accord claim|wait --key KEY [--task ID]\n  accord inspect --claim ID\n  accord checkpoint --claim ID --key KEY --note TEXT\n  accord renew --claim ID --key KEY --lease-ms MS\n  accord write --claim ID --key KEY --input FILE\n  accord finish --claim ID --key KEY --receipt ID\n  accord host [--notice]\n  accord mcp\n  accord service install [--enable]\n  accord join --url LOOPBACK --authority ID --discovery-file FILE\n  accord leave --authority ID\n  accord sessions [--query TEXT] [--host AUTHORITY]\n  accord session-read --id ID\n  accord retire --session ID --reason R | --source S --external-id X --reason R\n  accord lifecycle sweep [--dry-run]\n  accord report|job|ask|snooze --input JSON_FILE\n  accord jobs|overseer\n  accord policy|signal --input JSON_FILE\n  accord privacy --source SOURCE --on|--off\n  accord question --id ID\n  accord telemetry|machine [--host AUTHORITY]\n  accord network\n  accord init --data DIR\n  accord up --data DIR [--port 8787] [--driver-port 8788]\n  accord board --data DIR\n  accord submit --data DIR --input FILE --expected FILE [--title TEXT]\n  accord pause|resume --data DIR\n  accord artifact --data DIR --receipt ID\n\nOutput is JSON except help and --notice; run inherits its child's output. init creates an admin identity; agents enroll their own sessions.\nRun npm run demo for the isolated two-process recovery proof. No model or GPU is required.`);
   }
 } catch (error) {
   console.error(JSON.stringify({ error: { code: error.code || 'STARTUP_FAILED', message: error.message }, ...(error.inboxPending?{inboxPending:error.inboxPending}:{}) })); process.exit(1);

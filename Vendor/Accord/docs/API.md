@@ -96,7 +96,7 @@ The coordinator separately holds the driver's control credential. Control routes
 | Route | Contract |
 | --- | --- |
 | GET `/control/status` | Driver instance, bound authority, highest epoch/generation, active claim |
-| POST `/control/activate` | `{instance,authority,epoch,generation,claimId,credentialHash}` |
+| POST `/control/activate` | `{instance,authority,epoch,generation,claimId,credentialHash,holder?}` |
 | POST `/control/revoke` | `{instance,authority,epoch,generation,claimId}` |
 | GET `/control/receipts/{id}` | Receipt metadata for acceptance validation |
 | GET `/control/artifacts/{id}` | Stored artifact content |
@@ -195,3 +195,91 @@ from now, including conversion of a live heartbeat lease. It never shortens a
 previous deadline; same-key retries never move it again. Ownership limits,
 owner authentication, session revocation and confirmed recovery still apply.
 Compatibility resource managers reject windows with `WINDOW_UNSUPPORTED`.
+
+## Workload observations (0.7.x)
+
+A host administrator posts `workload-report` to `/v1/collaboration` with
+`{key,source,ttlMs?,items}`; each report replaces the source's previous report
+and lives in memory until `ttlMs` (10 s–1 h, default 3 min) — nothing is
+persisted, so senders re-report periodically. Items are bounded (`id` ≤120,
+`state` ∈ running/starting/stopping/stopped/suspended/failed/unknown, plus
+optional `node`, `container`, `model`, `since`, `by`, `operationId`, `note`).
+Reports surface under `workloads.reports` in host telemetry.
+
+Local `resources` and `reservation` answers gain a `workloads` object on each
+resource with a non-empty `hosts` list: `{observedAt, note:'Observed on the
+host; not ownership', hosts, items}`. Only these two read operations are
+enriched — reserve, release and other mutations return unmodified. These are
+observations only — they grant no ownership and never gate admission. See
+`docs/telemetry.md` for collection, host-name resolution and the owner-label
+precedence.
+
+Managed `prepare` bodies now include `holder:{label,address}` of the claim's
+actor. Providers may ignore unknown fields; LLooM does.
+## Scheduled messages (migration 21)
+
+`schedule` (worker/admin, idempotent by `key`) creates a durable schedule that
+delivers a message as the `accord-scheduler` principal: `{key, to?, text,
+wake?, at?, inMs?, everyMs?, startAt?, on?, expiresInMs?, maxFires?}`. `to`
+defaults to the caller's own address and is validated the way `send` validates
+its recipient; `wake` requests `native-prompt` delivery. Exactly one trigger:
+
+- `{at}` or `{inMs}`: one-shot; after downtime it fires once with a late note.
+- `{everyMs >= 60000, startAt?}`: repeats until expiry or `maxFires` (1-10000).
+- `{on:{event:'reservation',resource,states?}}`: `claim.active` maps to
+  `active`; `claim.released`, `claim.expired`, `claim.orphan_expired` and
+  `reservation.reclaimed` map to `released` (default both). Local resources
+  only; use `host` to create it on the owning host.
+- `{on:{event:'job',job,states?}}`: `job.updated` fires only on state change.
+- `{on:{event:'idle',session,idleMs>=60000}}`: fires once when a local
+  session's last activity exceeds `idleMs`, and re-arms on new activity.
+- `{on:{event:'topic',topic}}`: `topic-publish` `{topic,text?<=500}` —
+  rate-limited to 60 per actor per hour — fires matching schedules.
+
+Event triggers scan the durable `events` log in bounded batches, so nothing is
+lost while the coordinator is down. Events within 60 seconds coalesce into one
+message (`pending_events` keeps the last five summaries). One owner is limited
+to 50 active schedules (admin exempt), 60 firings per hour (later fires defer
+to the next minute) and 30-day expiry (default 7 days). A retired, expired or
+closed owner cancels its active schedules; a target that no longer exists at
+fire time marks the schedule `failed`. Each delivered message carries
+`scheduledBy` (the owner's address) and `scheduleId` in its envelope data, and
+its id is deterministic (`hash(scheduleId:firedCount)`), so a retry cannot
+double-send.
+
+`schedules` lists the caller's own schedules (`{all:true}` for admin);
+`schedule-cancel {id}` ends an owned or admin schedule. All three are
+forwardable, so agents on linked hosts schedule on the resource's own
+authority.
+
+## The agent record (migration 22)
+
+Participants in `find`/`sessions` carry an `agent` object: `{host:{authority,
+name}, client, tile?, title, titleSource, titles?, task?, previous?, native?}`.
+`client` is the name recorded at enrollment (`accord session open` passes `cli`,
+the MCP bridge passes the client's `clientInfo.name`, `accord run` the command
+basename). `tile` is a non-exclusive `agent_tiles` link `{id,role}` — `agent`
+for the tile's own bridge, `nested` for sessions opened inside it; a legacy
+`tessera` mailbox binding reads as an `agent` link. `native` is the mailbox
+binding, `task` the latest working/waiting job title (else the announced
+activity), and `previous` up to five earlier session addresses walked backwards
+through the supersession chain.
+
+Titles are layered. `title` writes the caller's layer: an admin writes
+`operator`, the host's designated overseer writes `overseer`, anyone else
+writes `peer`; an empty title clears only the caller's layer. The effective
+`title` is operator, else overseer, else the agent's own non-default label,
+else peer, else the observed title; `titleSource` says which. `givenTitle`
+still reports the highest non-own layer for older clients. `session.titled`
+carries the layer. `overseer-designate {address|null}` (admin) names the
+host's overseer; the current designation appears in the `overseer` answer.
+
+Native mailbox bindings are created only from an explicit trusted identity —
+the MCP client's own ID or `accord session open --native SOURCE:ID`. CLI
+enrollment never binds environment IDs (an inherited parent ID is ignored);
+when `TESSERA_TILE_ID` is present it records a `nested` tile link through the
+admin-only `session-link-tile {actor, tile, role}` operation.
+
+`find {local:true}` returns only this host's entry: no forwarding to linked
+hosts, even for admin. Adapters polling every few seconds for local tiles
+should pass it.

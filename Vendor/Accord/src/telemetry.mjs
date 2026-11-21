@@ -5,7 +5,7 @@ import { createCollectors } from './telemetry-collectors.mjs';
 
 // Read-through, memory-only caches. No timers run while idle; a hung collector
 // keeps its single flight so timeout cannot create an unbounded probe backlog.
-export function createTelemetry({authority,hostName,collectors=createCollectors(),now=Date.now,clock=()=>performance.now(),timeoutMs=2200,liveTtlMs=2000,metadataTtlMs=300000}={}) {
+export function createTelemetry({authority,hostName,collectors=createCollectors(),workloads=null,now=Date.now,clock=()=>performance.now(),timeoutMs=2200,liveTtlMs=2000,metadataTtlMs=300000}={}) {
   function cache(collect,field,ttlMs) {
     let value=null,sampledAt=null,sampleClock=0,retryAt=0,flight=null,lastError=null;
     async function read() {
@@ -29,7 +29,9 @@ export function createTelemetry({authority,hostName,collectors=createCollectors(
     }
     return read;
   }
-  return {telemetry:cache(collectors.snapshot,'host',liveTtlMs),metadata:cache(collectors.metadata,'machine',metadataTtlMs),memory:cache(()=>readHostMemory({strict:true}),'memory',100)};
+  const host=cache(collectors.snapshot,'host',liveTtlMs);
+  const telemetry=workloads?async()=>({...await host(),workloads:await Promise.resolve(workloads()).catch(()=>({gpu:'unavailable',docker:'unavailable',reason:'collector-failed',containers:[],processes:[]}))}):host;
+  return {telemetry,metadata:cache(collectors.metadata,'machine',metadataTtlMs),memory:cache(()=>readHostMemory({strict:true}),'memory',100)};
 }
 
 // Tessera's MachineVitals uses fractions; LLooM's host metrics use percentages.

@@ -78,6 +78,44 @@ counter. Apple GPU memory, power, clocks, and ANE utilization remain null/unavai
 AMD is fixture-tested through standard DRM/sysfs, not hardware-qualified. Network
 counters on macOS/Windows and vendor-specific topology are not implemented here.
 
+## Workloads
+
+On Linux, telemetry also carries `workloads`: GPU compute processes
+(`nvidia-smi --query-compute-apps`, `[N/A]` memory becomes null) and running
+containers (`docker ps`), with each process attributed to its container through
+`/proc/<pid>/cgroup`. Command names are basenames only — no args, env or
+cmdlines — and only `io.lloom.*`/`io.enntity.*` labels are kept. Docker or
+nvidia-smi missing or failing marks that collector `unavailable`; telemetry
+never fails on it. Non-Linux hosts return both as `unavailable` with
+`reason: 'platform'`. Lists cap at 64 entries and readings cache for 10 s.
+
+`workloads.reports` merges trusted provider reports. A host administrator posts
+`workload-report` to `/v1/collaboration` with `{source, ttlMs, items}`; each
+report replaces the previous one from the same source and is held in memory
+until its TTL (10 s–1 h, default 3 min). LLooM reports each configured runtime
+this way. Reports are not persisted — senders re-report periodically.
+
+Local `resources` and `reservation` results (MCP, CLI and `/v1/collaboration`,
+including forwarded answers) attach a `workloads` object to each resource whose
+`hosts` list is non-empty: `{observedAt, note: 'Observed on the host; not
+ownership', hosts, items}`. Host names resolve to authorities through the local
+host name, `~/.config/accord/links/*.json` (`host` → `authority`), then a linked
+host's advertised name; an unmatched name is `unavailable` with reason `host
+not linked`. Report items join by `node`, `container` or reporting host.
+Only `resources` and `reservation` answers are enriched; mutations and other
+operations return unmodified. Per (host, runtime id) one report item wins — the
+host's own report over a head's duplicate. Containers get an `owner` label
+where one is known, in precedence order: `reservation` (an
+`accord_workload`-registered binding of the current claim), `lloom` (a matched
+runtime report — the owner reads `LLooM runtime <id>`; `by` is who suspended
+it, kept as its own field), `declared` (`io.enntity.owner` or `io.enntity.job`
+labels — what the container claims, not proof), `unknown`. Report items with no
+matching container appear as `runtime` items only when `suspended` or `failed`
+— on-demand `stopped` lanes would bury the view. GPU processes fold into their
+container's `gpuMemoryMiB`; only host-level GPU processes appear as `process`
+items. The MCP compact view renders up to eight one-line items per resource
+plus `+N more`.
+
 ## Adapters
 
 `src/telemetry.mjs` includes optional helpers that shape a response for two related
