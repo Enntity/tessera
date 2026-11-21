@@ -129,21 +129,26 @@ export class Store {
     requireThat(row?.purpose === purpose, 'FORBIDDEN', `A ${purpose} credential is required`, 403);
     return row;
   }
-  openSession(enroller, body, secretFor) {
-    return this.command({id: `enroll:${enroller.id}`}, body, 'session.open', () => {
+  openSession(enroller, request, secretFor) {
+    // The client name is metadata, not part of the enrollment's identity: a
+    // native bridge re-enrolls with the key it used before client names existed.
+    const {client, ...body} = request;
+    if(client!==undefined){
+      text(client, 'client', 40);
+      requireThat(/^[A-Za-z0-9._ -]+$/.test(client), 'INVALID_INPUT', 'Invalid client name', 400);
+    }
+    const opened = this.command({id: `enroll:${enroller.id}`}, body, 'session.open', () => {
       text(body.label, 'label', 120); text(body.harness, 'harness', 80);
-      if(body.client!==undefined){
-        text(body.client, 'client', 40);
-        requireThat(/^[A-Za-z0-9._ -]+$/.test(body.client), 'INVALID_INPUT', 'Invalid client name', 400);
-      }
       const persistent=body.ttlMs===undefined;
       if(!persistent)integer(body.ttlMs, 'ttlMs', 1000, 86400000);
       const sessionId = id(), createdAt = this.now(), expiresAt = persistent ? persistentDeadline : createdAt + body.ttlMs;
       this.provision(sessionId, secretFor(sessionId), 'worker');
-      this.db.prepare('INSERT INTO sessions(id,label,harness,client,created_at,expires_at,closed_at,persistent) VALUES(?,?,?,?,?,?,NULL,?)').run(sessionId, body.label, body.harness, body.client ?? null, createdAt, expiresAt,Number(persistent));
+      this.db.prepare('INSERT INTO sessions(id,label,harness,client,created_at,expires_at,closed_at,persistent) VALUES(?,?,?,?,?,?,NULL,?)').run(sessionId, body.label, body.harness, client ?? null, createdAt, expiresAt,Number(persistent));
       this.emit('session.opened', {session: sessionId, label: body.label, harness: body.harness, expiresAt:persistent?null:expiresAt,persistent});
       return {sessionId, expiresAt:persistent?null:expiresAt, persistent, authority: this.authority};
-    });
+    }, client===undefined ? [] : [request]);
+    if(client!==undefined)this.mutate(()=>this.db.prepare('UPDATE sessions SET client=? WHERE id=? AND client IS NOT ?').run(client, opened.sessionId, client));
+    return opened;
   }
   endSession(actor, sessionId, body) {
     requireThat(actor.id === sessionId || actor.role === 'admin', 'NOT_OWNER', 'Session belongs to another actor', 403);
@@ -291,7 +296,7 @@ export class Store {
     this.db.prepare('UPDATE leader SET until_ms=0 WHERE token=?').run(this.leaderToken);
   }
   emit(kind, data) { this.db.prepare('INSERT INTO events(at,kind,data) VALUES(?,?,?)').run(this.now(), kind, JSON.stringify(data)); this.onEvent?.(); }
-  command(actor, body, operation, fn) {
+  command(actor, body, operation, fn, accepted = []) {
     text(body.key, 'key', 128);
     const fingerprint = hash(JSON.stringify({ operation, body }));
     return this.mutate(() => {
@@ -299,7 +304,7 @@ export class Store {
       requireThat(!session || (session.closed_at === null && session.expires_at > this.now()), 'SESSION_EXPIRED', 'Session ended', 401);
       const prior = this.db.prepare('SELECT * FROM commands WHERE actor=? AND key=?').get(actor.id, body.key);
       if (prior) {
-        requireThat(prior.payload_hash === fingerprint, 'KEY_REUSED', 'Idempotency key has a different payload');
+        requireThat(prior.payload_hash === fingerprint || accepted.some(alt => prior.payload_hash === hash(JSON.stringify({ operation, body: alt }))), 'KEY_REUSED', 'Idempotency key has a different payload');
         return JSON.parse(prior.response);
       }
       const response = fn();
