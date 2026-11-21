@@ -24,6 +24,13 @@ public final class AccordBridge {
         public var address: String
         public var givenTitle: String?
         public var changedAt: Date?
+        /// The agent record merged in from find: the participant's own address, its effective
+        /// title and where that title came from, its client and its current task.
+        public var agentAddress: String?
+        public var title: String?
+        public var titleSource: String?
+        public var task: String?
+        public var client: String?
     }
     public internal(set) var tileRecords: [String: TileRecord] = [:]
     /// Where a message sender lives on this board, by Accord address: a tile id for sessions bound
@@ -41,6 +48,13 @@ public final class AccordBridge {
     /// closed-observation sweep never reports one of these exited.
     @ObservationIgnored public var presentTiles: (() -> Set<String>)?
     @ObservationIgnored public var paused: (() -> Bool)?
+    /// The board's overseer tile: the bridge designates its Accord agent address once known.
+    @ObservationIgnored public var overseerTile: (() -> String?)?
+    /// One line per unsupported or failed operator call, so an old Accord is noted, not retried loudly.
+    @ObservationIgnored public var logFailure: ((String) -> Void)?
+    /// Test seams for the two operator writes; production leaves both nil.
+    @ObservationIgnored var designateOperation: ((String) async throws -> Void)?
+    @ObservationIgnored var titleOperation: (([String: Any]) async throws -> Void)?
     @ObservationIgnored public var deliver: ((String, String, String, String, Bool) -> Bool)?
     @ObservationIgnored public var questions: (([[String: Any]]) -> Void)?
     @ObservationIgnored public var notes: (([[String: Any]]) -> Void)?
@@ -59,6 +73,8 @@ public final class AccordBridge {
     @ObservationIgnored private var timer: Timer?
     @ObservationIgnored private var busy = false
     @ObservationIgnored private var wasPrivate: Bool?
+    @ObservationIgnored private var designatedOverseer: String?
+    @ObservationIgnored private var designationDenied = false
     @ObservationIgnored private let profile: URL
     @ObservationIgnored private let session: URLSession
 
@@ -244,6 +260,25 @@ public final class AccordBridge {
             if held != tileRecords { tileRecords = held }
             let senders = Self.senderTiles((board["sessions"] as? [[String: Any]] ?? []) + own, authority: c.2)
             if senders != senderTiles { senderTiles = senders }
+            // The agent record comes from find, one participant per agent; an older Accord has
+            // no `agent` object and simply yields nothing here.
+            if let found = try? await operation(c, "find", ["detail": true, "local": true]),
+               let participants = (found["hosts"] as? [[String: Any]])?.first?["participants"] as? [[String: Any]] {
+                let agents = Self.agentByTile(participants, authority: c.2)
+                var merged = tileRecords
+                for (tile, record) in merged {
+                    guard let match = agents[tile] else { continue }
+                    var next = record, agent = match.agent
+                    next.agentAddress = match.address
+                    next.title = agent["title"] as? String
+                    next.titleSource = agent["titleSource"] as? String
+                    next.task = (agent["task"] as? String).map { String($0.prefix(80)) }
+                    next.client = agent["client"] as? String
+                    merged[tile] = next
+                }
+                if merged != tileRecords { tileRecords = merged }
+                await designateOverseer(c, agents: agents)
+            }
             // A tile closed while Tessera was away was never reported; its observation is still
             // live on Accord. Sweep the first pass after connecting, then every ten minutes —
             // but never on a board that looks emptied or mostly gone: that is a broken restore,
@@ -280,7 +315,8 @@ public final class AccordBridge {
             for message in (inbox["deliveries"] as? [[String: Any]]) ?? [] {
                 guard let delivery = message["deliveryId"] as? String, let tile = message["externalId"] as? String,
                       let text = message["text"] as? String, let sender = message["from"] as? String,
-                      let record = message["session"] as? String, deliver?(delivery, tile, sender, text, message["delivery"] as? String == "native-prompt") == true else { continue }
+                      let record = message["session"] as? String,
+                      deliver?(delivery, tile, Self.scheduledSender(from: sender, scheduledBy: message["scheduledBy"], authority: c.2), text, message["delivery"] as? String == "native-prompt") == true else { continue }
                 // Display is not read acknowledgement. The recipient acknowledges through Accord.
                 _ = record
             }
@@ -364,6 +400,7 @@ public final class AccordBridge {
         connected = false
         lastClosedCheck = nil
         sweepRefusedLogged = false
+        designationDenied = false
     }
     /// Accord's record of each tile Tessera reported to it, by tile id. Only this host's sessions
     /// count: a linked host's Tessera reports tiles of its own under the same source.
@@ -388,6 +425,71 @@ public final class AccordBridge {
                   let source = binding["source"] as? String, let external = binding["externalId"] as? String else { return nil }
             return (address, source == "tessera" ? external : source + ":" + external)
         }, uniquingKeysWith: { _, latest in latest })
+    }
+
+    /// Each tile's agent record, by tile id: the participant Accord links to the tile with role
+    /// agent (preferred), or whose mailbox binding is the tile itself. A nested CLI session only
+    /// stands in for the tile when no agent does.
+    static func agentByTile(_ participants: [[String: Any]], authority: String) -> [String: (address: String, agent: [String: Any])] {
+        var found: [String: (address: String, agent: [String: Any])] = [:]
+        for p in participants {
+            guard let address = p["address"] as? String, address.hasPrefix(authority + "/"),
+                  let agent = p["agent"] as? [String: Any] else { continue }
+            let tile = (agent["tile"] as? [String: Any])?["id"] as? String
+            let native = agent["native"] as? [String: Any]
+            let linked = tile ?? ((native?["source"] as? String) == "tessera" ? native?["id"] as? String : nil)
+            guard let linked else { continue }
+            let role = (agent["tile"] as? [String: Any])?["role"] as? String ?? "agent"
+            let existingRole = ((found[linked]?.agent["tile"] as? [String: Any])?["role"] as? String) ?? "agent"
+            if existingRole == "agent", role != "agent" { continue }
+            found[linked] = (address, agent)
+        }
+        return found
+    }
+
+    /// Whose wake policy a message answers to: a native-prompt from this host's scheduler is
+    /// judged as its owner (`scheduledBy`). A scheduler from anywhere else, or a `scheduledBy`
+    /// on any other sender, is never trusted — it is just the sender.
+    static func scheduledSender(from: String, scheduledBy: Any?, authority: String) -> String {
+        guard from == authority + "/accord-scheduler",
+              let owner = scheduledBy as? String, owner.contains("/") else { return from }
+        return owner
+    }
+
+    /// Once the overseer tile's agent address is known, name it Accord's designated overseer so
+    /// its titles land in the overseer layer. An Accord that predates the operation answers with
+    /// a failure; that is noted once and left alone.
+    func designateOverseer(_ c: (URL, String, String), agents: [String: (address: String, agent: [String: Any])]) async {
+        guard !designationDenied, let tile = overseerTile?(), let match = agents[tile] else { return }
+        let address = match.address
+        // The designated agent must be the tile's agent, not a nested session inside it.
+        let role = (match.agent["tile"] as? [String: Any])?["role"] as? String ?? "agent"
+        guard role == "agent" || (match.agent["tile"] == nil && (match.agent["native"] as? [String: Any])?["source"] as? String == "tessera"),
+              designatedOverseer != address else { return }
+        do {
+            if let designateOperation { try await designateOperation(address) }
+            else { _ = try await operation(c, "overseer-designate", ["key": "designate:" + address, "address": address]) }
+            designatedOverseer = address
+        } catch {
+            designationDenied = true
+            logFailure?("overseer-designate rejected; layered titles keep working without a designated overseer")
+        }
+    }
+
+    /// The user's rename, sent to Accord as the operator layer of that tile's agent record, so
+    /// every agent sees it on the next poll. An older Accord still accepts the name on the
+    /// tile's observation, which is the fallback target.
+    public func setTileTitle(_ tile: String, _ name: String) async {
+        var args: [String: Any] = ["key": UUID().uuidString, "title": String(name.prefix(120))]
+        if let address = tileRecords[tile]?.agentAddress?.split(separator: "/").last { args["id"] = String(address) }
+        else { args["source"] = "tessera"; args["externalId"] = tile }
+        if let titleOperation {
+            do { try await titleOperation(args) } catch { logFailure?("session-title rejected for \(tile)") }
+            return
+        }
+        guard let c = try? connection() else { return }
+        do { _ = try await operation(c, "session-title", args) }
+        catch { logFailure?("session-title rejected for \(tile)") }
     }
 
     func acceptSnapshot(_ board: [String:Any], nativeIDs: Set<String>, now: Date = Date()) {
