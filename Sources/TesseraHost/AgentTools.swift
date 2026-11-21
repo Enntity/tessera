@@ -141,6 +141,8 @@ public final class AgentTools {
         let age = asOf.shortAge(now: now)
         return "- \(t.id)\(isCaller ? " (you)" : "") | \(t.title) | \(t.flavor.displayName) | \(t.activity.label.lowercased())"
             + "\(t.needsUser ? ", waiting on the developer" : "") | \(t.subtitle)\(record.map { " | accord \($0.address)" } ?? "")"
+            + (record?.agentAddress.map { $0 != record?.address ? " | agent \($0)" : "" } ?? "")
+            + (record?.task.map { " | task \(Redactor.redact($0).preview(80))" } ?? "")
             + (summary.isEmpty ? "" : " | \(Redactor.redact(summary).preview(140)) (\(age == "now" ? age : age + " ago"))")
             + (t.wake.map { " | wake: \($0.state.rawValue) from \($0.from)" } ?? "")
     }

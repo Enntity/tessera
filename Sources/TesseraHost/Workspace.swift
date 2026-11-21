@@ -183,6 +183,11 @@ public final class Workspace {
         overseerChat.start()
         accord.digests = { [weak self] in self?.stewardDigests().filter { !$0.id.hasPrefix("accord:") && ![AgentFlavor.lloom.rawValue, AgentFlavor.agentDesk.rawValue, AgentFlavor.accord.rawValue].contains($0.flavor) } ?? [] }
         accord.presentTiles = { [weak self] in self?.presentTileIDs ?? [] }
+        accord.overseerTile = { [weak self] in self?.overseerId }
+        accord.logFailure = { [weak self] text in
+            self.map { TileLog.append(in: $0.directory, file: "accord.log",
+                                      fields: ["at": ISO8601DateFormatter().string(from: Date()), "event": "accord-call-failed", "detail": text]) }
+        }
         accord.sweepRefused = { [weak self] text in
             self.map { TileLog.append(in: $0.directory, file: "accord.log",
                                       fields: ["at": ISO8601DateFormatter().string(from: Date()), "event": "closed-sweep-skipped", "detail": text]) }
@@ -239,9 +244,15 @@ public final class Workspace {
         } else {
             return nil
         }
-        // A name given through Accord shows unless the user named the tile themselves.
-        if let given = accord.tileRecords[id]?.givenTitle,
-           terminals[id]?.customTitle == nil, browsers[id]?.customTitle == nil, agentTitles[id] == nil { info.title = given }
+        // A name given through Accord shows unless the user named the tile themselves. On a new
+        // Accord the agent record's layered title wins when an overseer, the agent or a peer set
+        // it (the operator layer is this user's rename, already covered above); an older Accord
+        // only has givenTitle, which is the same path it always took.
+        if terminals[id]?.customTitle == nil, browsers[id]?.customTitle == nil, agentTitles[id] == nil,
+           let record = accord.tileRecords[id] {
+            if let title = record.title, ["overseer", "agent", "peer"].contains(record.titleSource ?? "") { info.title = title }
+            else if let given = record.givenTitle { info.title = given }
+        }
         info.summary = accord.summaries[id] ?? steward.summaries[id]?.summary
         info.needs = steward.summaries[id]?.needs ?? steward.brief?.attention.first { $0.id == id }?.why
         let children = relatedSessions(id)
@@ -550,6 +561,8 @@ public final class Workspace {
         browsers[id]?.rename(name)
         if agents.sessions[id] != nil { agentTitles[id] = name.isEmpty ? nil : name }
         save()
+        // The rename is this user's operator title on Accord: other agents see it on their next poll.
+        Task { await accord.setTileTitle(id, name) }
     }
 
     // MARK: Selection and the open tile

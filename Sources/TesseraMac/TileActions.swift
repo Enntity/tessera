@@ -76,6 +76,17 @@ struct TileMenu: View {
                                  set: { workspace.desk.setNoWake(info.id, !$0) }))
         }
         Button("Rename…", action: rename)
+        if let record = workspace.accord.tileRecords[info.id], record.agentAddress != nil || record.task != nil || record.client != nil {
+            // What Accord knows this tile as: where agents reach it, which client enrolled it,
+            // whose name it shows, and what it says it is doing.
+            Menu("Accord") {
+                if let agent = record.agentAddress { Button("Agent: \(agent)") {}.disabled(true) }
+                if let client = record.client { Button("Client: \(client)") {}.disabled(true) }
+                if let source = record.titleSource { Button("Named by: \(source)") {}.disabled(true) }
+                if let task = record.task { Button("Task: \(task)") {}.disabled(true) }
+                Button("Session: \(record.address)") {}.disabled(true)
+            }
+        }
         ForEach(model.actions(for: info)) { action in Button(action.title, action: action.run) }
         if info.needsUser { Button(info.dismissLabel) { workspace.dismiss(info.id) } }
         Menu("Move to Tab") {
