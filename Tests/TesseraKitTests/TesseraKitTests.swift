@@ -1244,8 +1244,9 @@ final class AgentAppTests: XCTestCase {
     func testConversationLinksAndNames() {
         XCTAssertEqual(AgentApp.claude.conversationURL("local_1")?.absoluteString, "claude://code/continue?session=local_1")
         XCTAssertEqual(AgentApp.codex.conversationURL("abc-1")?.absoluteString, "codex://threads/abc-1")
-        XCTAssertEqual(AgentApp.allCases.map(\.name), ["Claude app", "Codex app", "DeepSeek app", "Enntity ZCode app"])
-        for app in [AgentApp.deepseekHarness, .zcode] {
+        XCTAssertEqual(AgentApp.allCases.map(\.name),
+                       ["Claude app", "Codex app", "DeepSeek app", "Enntity ZCode app", "Antigravity app"])
+        for app in [AgentApp.deepseekHarness, .zcode, .antigravity] {
             XCTAssertNil(app.conversationURL("session-1"))
             XCTAssertNil(app.newConversationURL(folder: "/w", prompt: "draft"))
         }

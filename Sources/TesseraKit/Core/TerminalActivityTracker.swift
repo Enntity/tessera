@@ -154,7 +154,9 @@ public struct TerminalActivityTracker: Sendable {
         // "esc twice to interrupt" line up while its approval chooser waits).
         let spinnerVisible = prompt == nil && tail.contains { line in
             let l = line.lowercased()
+            // Devin's "esc to interrupt"; agy's "Generating./esc to cancel" while a turn runs.
             return l.contains("esc to interrupt") || l.contains("esc twice to interrupt")
+                || l.contains("esc to cancel") || l.contains("generating.")
         }
         // Interactive choosers animate while they wait (measured: Devin emits ~350–800 B per 0.5 s
         // with its approval chooser up), so "quiet for a while" never comes for them. Once the
@@ -237,7 +239,9 @@ public struct TerminalActivityTracker: Sendable {
     static let chooserMarkers = [
         "❯ 1. yes", "› 1. yes", "allow once", "yes, and don't ask again",
         // Devin's workspace-trust prompt and command-approval chooser.
-        "❭ allow", "yes, trust"
+        "❭ allow", "yes, trust",
+        // agy's trust/permission chooser ("‣ Yes, I trust this folder").
+        "i trust this folder"
     ]
 
     static func matchesPrompt(_ lowered: String) -> Bool {

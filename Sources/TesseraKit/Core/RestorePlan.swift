@@ -56,6 +56,6 @@ public enum RestorePlan {
 
     /// Tools whose conversations Tessera matches to tiles from their own session files.
     public static func bindable(_ tool: SessionResume.Tool) -> Bool {
-        tool == .claude || tool == .codex || tool == .devin
+        tool == .claude || tool == .codex || tool == .devin || tool == .agy
     }
 }

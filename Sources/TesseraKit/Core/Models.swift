@@ -20,6 +20,8 @@ public enum AgentFlavor: String, Codable, Sendable, CaseIterable {
     case claudeDesktop, codexDesktop, zcodeDesktop
     /// Antigravity's `agy` CLI.
     case antigravity
+    /// Conversations inside `Antigravity.app` (the desktop IDE shell, `com.google.antigravity`).
+    case antigravityDesktop
     /// DeepSeek Harness (`dsh`) sessions.
     case dsh
     case web
@@ -44,7 +46,7 @@ public enum AgentFlavor: String, Codable, Sendable, CaseIterable {
         case .claudeDesktop: "Claude"
         case .codexDesktop: "Codex"
         case .zcodeDesktop: "Enntity ZCode"
-        case .antigravity: "Antigravity"
+        case .antigravity, .antigravityDesktop: "Antigravity"
         case .dsh: "DeepSeek"
         case .web: "Web"
         case .lloom: "LLooM"
@@ -66,7 +68,7 @@ public enum AgentFlavor: String, Codable, Sendable, CaseIterable {
         case .opencode: "curlybraces"
         case .aider: "wand.and.stars"
         case .custom: "gearshape.2"
-        case .antigravity: "arrow.triangle.2.circlepath"
+        case .antigravity, .antigravityDesktop: "arrow.triangle.2.circlepath"
         case .dsh: "water.waves"
         case .web: "globe"
         case .lloom: "square.stack.3d.up"

@@ -177,6 +177,7 @@ final class TranscriptScanner: @unchecked Sendable {
         for s in scanCodexDesktop(lookback: lookback, now: now) { sessions[s.id] = s }
         for s in scanDsh(lookback: lookback, now: now) { sessions[s.id] = s }
         for s in zcode.scan(lookback: lookback, now: now) { sessions[s.id] = s }
+        for s in scanAntigravityDesktop(lookback: lookback, now: now) { sessions[s.id] = s }
         // Drop what belongs to transcripts and folders that aged out or went away.
         for path in tails.keys where !touched.contains(path) { tails[path] = nil }
         for path in claudeMeta.keys where !touched.contains(path) { claudeMeta[path] = nil }
@@ -385,6 +386,36 @@ final class TranscriptScanner: @unchecked Sendable {
                 lastActivityAt: parser.lastEventAt ?? tail.modified))
         }
         return out
+    }
+
+    // MARK: Antigravity desktop
+
+    /// `agyhub_summaries_proto.pb` entries, parsed once per file mtime.
+    private var agyIndex: (modified: Date, entries: [AntigravityAppSessions.Entry])?
+
+    /// Antigravity.app conversations recent enough to show, from its protobuf index. Their
+    /// transcripts stay in the app — the index is the only surface, so activity is just "idle".
+    private func scanAntigravityDesktop(lookback: TimeInterval, now: Date) -> [AgentAppSession] {
+        let root = home.appendingPathComponent(".gemini/antigravity")
+        let index = root.appendingPathComponent("agyhub_summaries_proto.pb")
+        guard let modified = FileStat(index.path)?.modified else { return [] }
+        if agyIndex?.modified != modified {
+            let entries = (try? Data(contentsOf: index)).map(AntigravityAppSessions.entries) ?? []
+            agyIndex = (modified, entries)
+        }
+        return (agyIndex?.entries ?? []).compactMap { entry in
+            let updated = entry.updatedAt
+                ?? FileStat(root.appendingPathComponent("conversations/\(entry.id).pb").path)?.modified
+            guard let last = updated, now.timeIntervalSince(last) < lookback else { return nil }
+            return AgentAppSession(
+                id: "antigravity:" + entry.id, flavor: .antigravityDesktop, title: entry.title,
+                cwd: entry.workspaceURI.map(AntigravityAppSessions.folder) ?? "",
+                openURL: nil, resumeCommand: nil,
+                snapshot: ConversationSnapshot(items: [], activity: .idle,
+                                               detail: "This conversation lives in the Antigravity app",
+                                               lastEventAt: last),
+                summary: nil, lastActivityAt: last)
+        }
     }
 
     private func refreshCodexTitles() {

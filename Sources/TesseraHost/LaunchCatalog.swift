@@ -11,6 +11,7 @@ public enum LaunchCatalog {
         LaunchPreset(name: "Grok", command: "grok", flavor: .grok),
         LaunchPreset(name: "Gemini", command: "gemini", flavor: .gemini),
         LaunchPreset(name: "omp", command: "omp", flavor: .omp),
+        LaunchPreset(name: "Antigravity", command: "agy", flavor: .antigravity),
         LaunchPreset(name: "opencode", command: "opencode", flavor: .opencode),
         LaunchPreset(name: "aider", command: "aider", flavor: .aider)
     ]
