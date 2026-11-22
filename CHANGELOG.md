@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Fixed: tile titles flickered every five seconds. Each Accord pass published the tile records
+  once without the agent record and again with it, so a tile named by Accord's operator, overseer,
+  agent or peer layers flashed its other title between the two writes — and lost it for a whole
+  pass whenever `find` failed. The merge now happens in memory and publishes once; a missed `find`
+  keeps the agent fields the tile already had.
 - Closing a tile whose agent holds a shared reservation now asks first, naming the resource and
   its deadline, since Accord releases it 15 minutes after the agent ends; `close_tile` refuses
   such a tile unless forced. Tessera re-reports live tiles at least hourly so idle tiles stay
