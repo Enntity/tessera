@@ -255,7 +255,7 @@ authority.
 ## The agent record (migration 22)
 
 Participants in `find`/`sessions` carry an `agent` object: `{host:{authority,
-name}, client, tile?, title, titleSource, titles?, task?, previous?, native?}`.
+name}, client, tile?, title, titleSource, task?, previous?, native?}`.
 `client` is the name recorded at enrollment (`accord session open` passes `cli`,
 the MCP bridge passes the client's `clientInfo.name`, `accord run` the command
 basename). `tile` is a non-exclusive `agent_tiles` link `{id,role}` — `agent`
@@ -265,13 +265,20 @@ binding, `task` the latest working/waiting job title (else the announced
 activity), and `previous` up to five earlier session addresses walked backwards
 through the supersession chain.
 
-Titles are layered. `title` writes the caller's layer: an admin writes
-`operator`, the host's designated overseer writes `overseer`, anyone else
-writes `peer`; an empty title clears only the caller's layer. The effective
-`title` is operator, else overseer, else the agent's own non-default label,
-else peer, else the observed title; `titleSource` says which. `givenTitle`
-still reports the highest non-own layer for older clients. `session.titled`
-carries the layer. `overseer-designate {address|null}` (admin) names the
+Titles come from their origin. `title` is the linked Tessera tile view's
+title when the agent has a tile, else the agent's own session view title,
+else its label; `titleSource` is always `origin`. `session-title` renames at
+the source: it finds the subject's Tessera tile and enqueues a `kind:"rename"`
+bridge delivery to it, returning `{rename:"requested",tile,title,session}`
+and emitting `session.rename-requested`. It refuses with `RENAME_UNSUPPORTED`
+when the subject has no tile, when the tile view reports `rename:"unsupported"`
+(the tile's `renameReason` becomes the message), or when an older Tessera
+reports no rename field ("Tessera on this host can't rename sources yet.");
+an empty title is `INVALID_INPUT` — a name can't be removed at the source.
+`kind:"rename"` is only ever created by `session-title`; `send` still coerces
+caller kinds to `message`/`notification`. Tile views report their rename
+support through `session-report` fields `rename` (`supported`|`unsupported`)
+and `renameReason`. `overseer-designate {address|null}` (admin) names the
 host's overseer; the current designation appears in the `overseer` answer.
 
 Native mailbox bindings are created only from an explicit trusted identity —

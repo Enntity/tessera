@@ -56,7 +56,7 @@ extension AppModel {
             case "brief": workspace.steward.debugBrief(arg)
             case "ask": openOverseer(asking: arg.isEmpty ? nil : arg)
             case "shutdown": if let id = workspace.selectedId { workspace.shutDown(id) }
-            case "rename": if let id = workspace.selectedId { workspace.rename(id, to: arg) }
+            case "rename": if let id = workspace.selectedId { (try? workspace.rename(id, to: arg)) }
             case "machine": workspace.machines.add(host: arg, name: nil)
             case "vitals": debugRead([MachineVitals].self, arg).map(workspace.machines.pin)
             case "accounts": debugRead([UsageReading].self, arg).map(workspace.usage.pin)

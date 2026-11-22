@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+- Tile titles come from their origin, and renames write through to it. Shells, custom terminals
+  and pages keep Tessera's name (an empty one goes back to the program's own title); agent
+  terminals show the bound session's own name — Claude's transcript `customTitle`, Codex's
+  `thread_name`, Devin's `sessions.title` — or its terminal title until the session is bound;
+  app conversations keep the app's name. Accord records no longer overlay a tile's title, and
+  the old saved custom-title and agent-title layers are dropped on load.
+- Rename… and `rename_tile` (`tessera rename <tile> <name…>`) act at the source: Tessera-owned
+  tiles rename at once; Claude, Devin, omp and Antigravity (`agy`, new flavor) get `/rename` typed
+  at the idle prompt through the usual wake rules (yours queues, another agent asks first unless
+  the overseer policy allows); Codex terminals and app threads go through `codex app-server`
+  `thread/name/set`; every other source refuses with a "This source can't be renamed: …" reason.
+  A queued rename can fail later — an expired wait or a tile that went away — and an Accord
+  requester hears `Couldn't rename <tile>: <reason>` back.
+- Each tile reports `rename`/`renameReason` in its Accord session-report. Accord rename requests
+  are a dedicated queue Tessera drains each pass (`bridge-renames` → `bridge-rename-result`), each
+  under its stable request id so a re-served row can't queue twice; a refusal reports the reason and
+  the requester hears "Couldn't rename …" exactly once. Typed renames wait for the agent itself in
+  the tile's foreground — a shell back at its prompt refuses. `accord.setTileTitle` and the operator
+  title layer are gone, as is the menu's "Named by:" row; the rename field explains why a source
+  can't be renamed instead of pretending to work.
 - Fixed: tile titles flickered every five seconds. Each Accord pass published the tile records
   once without the agent record and again with it, so a tile named by Accord's operator, overseer,
   agent or peer layers flashed its other title between the two writes — and lost it for a whole
@@ -66,7 +86,7 @@
 - New tiles can start in any folder: type a path or a recent folder's name in the launcher, or pick
   one from the folder shown there. A selected conversation's folder is used the way a terminal's is.
 - Fixed: reading Claude Code's `/usage` in the background could leave a finished Claude Code process behind each time, one every ten minutes or so, until Tessera quit. Tessera now waits for every process it starts in a terminal, including one it had to stop.
-- Bundle the published Accord 0.8.1 package, adding to 0.8.0 the fix for native bridges whose enrollment predates 0.8.0 failing to reconnect with KEY_REUSED. The 0.8.0 features remain: durable scheduled messages, workload observations on resources, and the agent record with tile links, client names and layered titles. The dependency lock records the release archive and every bundled file's SHA-256 digest.
+- Bundle the published Accord 0.9.0 package: titles now come from their origin and `accord_title` renames at the source through the tile's reported capability; operator/overseer/peer title layers are no longer shown. The dependency lock records the release archive and every bundled file's SHA-256 digest.
 
 ## 0.2.0 — source release
 

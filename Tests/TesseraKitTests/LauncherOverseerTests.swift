@@ -156,18 +156,16 @@ final class OverseerTests: XCTestCase {
         XCTAssertEqual(ShellWords.split(ShellWords.join(["echo", "How's the port; any blockers?"])), ["echo", "How's the port; any blockers?"])
     }
 
-    func testANameGivenThroughAccordShowsOnTheTileUnlessTheUserNamedIt() throws {
+    func testATilesTitleIsItsOwnRegardlessOfAccord() throws {
         let (workspace, dir) = try board()
         let id = workspace.launch(command: "cat", cwd: dir.path)
         let own = try XCTUnwrap(workspace.info(id)?.title)
         workspace.accord.tileRecords = [id: .init(address: "mac/observed-1", givenTitle: "GLM port", changedAt: nil)]
-        XCTAssertEqual(workspace.info(id)?.title, "GLM port")
-        // A name of the user's own wins, and taking it away shows the given one again.
-        workspace.rename(id, to: "Mine")
+        XCTAssertEqual(workspace.info(id)?.title, own)
+        // A name of the user's own is the tile's origin; taking it away shows its own title again.
+        try workspace.rename(id, to: "Mine")
         XCTAssertEqual(workspace.info(id)?.title, "Mine")
-        workspace.rename(id, to: "")
-        XCTAssertEqual(workspace.info(id)?.title, "GLM port")
-        workspace.accord.tileRecords = [id: .init(address: "mac/observed-1", givenTitle: nil, changedAt: nil)]
+        try workspace.rename(id, to: "")
         XCTAssertEqual(workspace.info(id)?.title, own)
     }
 

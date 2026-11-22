@@ -85,20 +85,19 @@ final class AgentRecordTests: XCTestCase {
         XCTAssertEqual(logged.count, 1)
     }
 
-    func testRenameTargetsTheAgentAddressOrTheObservationOnAnOlderAccord() async throws {
-        let bridge = AccordBridge(profile: URL(fileURLWithPath: "/nonexistent/connection.json"))
-        var sent: [[String: Any]] = []
-        bridge.titleOperation = { sent.append($0) }
-        // With an agent record the operator title goes to the participant by id.
-        bridge.tileRecords = ["tile-1": .init(address: "mac/observed-1", agentAddress: "mac/mcp-1")]
-        await bridge.setTileTitle("tile-1", "Harbor")
-        XCTAssertEqual(sent.last?["id"] as? String, "mcp-1")
-        XCTAssertNil(sent.last?["source"])
-        // Without one it lands on the tile's observation, which every Accord accepts.
-        await bridge.setTileTitle("tile-9", "")
-        XCTAssertEqual(sent.last?["source"] as? String, "tessera")
-        XCTAssertEqual(sent.last?["externalId"] as? String, "tile-9")
-        XCTAssertEqual(sent.last?["title"] as? String, "")
+    /// A tile's report to Accord carries its rename support, so a session-title request can be
+    /// answered or refused with a reason instead of guessing.
+    func testSessionReportCarriesRenameSupportAndReason() {
+        let digest = Steward.Digest(id: "tile-1", title: "Build", kind: "terminal", flavor: "shell",
+                                    subtitle: "/tmp", state: "idle", waiting: false, unseen: false,
+                                    idleMinutes: 0, detail: nil, text: "")
+        var args = AccordBridge.reportArgs(digest, key: "k", nowMs: 0, rename: ("supported", nil))
+        XCTAssertEqual(args["rename"] as? String, "supported")
+        XCTAssertNil(args["renameReason"])
+        args = AccordBridge.reportArgs(digest, key: "k", nowMs: 0,
+                                       rename: ("unsupported", "This source can't be renamed: x."))
+        XCTAssertEqual(args["rename"] as? String, "unsupported")
+        XCTAssertEqual(args["renameReason"] as? String, "This source can't be renamed: x.")
     }
 
     private func board() throws -> (Workspace, URL) {
@@ -115,33 +114,23 @@ final class AgentRecordTests: XCTestCase {
         return (workspace, dir)
     }
 
-    func testLayeredTitlesOutrankGivenTitleButNotTheUsersOwnName() throws {
+    /// A tile's title is its origin's own: Accord records never overlay it — the coordinator's
+    /// agent record reads this same tile title back as the agent's name.
+    func testAccordRecordsNeverOverlayATilesTitle() throws {
         let (workspace, dir) = try board()
         let id = workspace.launch(command: "cat", cwd: dir.path)
-        // The agent record's title wins when the overseer, the agent or a peer set it.
-        workspace.accord.tileRecords = [id: .init(address: "mac/observed-1", givenTitle: "Old name",
-                                                  title: "Overseer name", titleSource: "overseer")]
-        XCTAssertEqual(workspace.info(id)?.title, "Overseer name")
-        workspace.accord.tileRecords = [id: .init(address: "mac/observed-1", givenTitle: "Old name",
-                                                  title: "Agent name", titleSource: "agent")]
-        XCTAssertEqual(workspace.info(id)?.title, "Agent name")
-        // An operator source is this user's own rename; without one the given title shows.
-        workspace.accord.tileRecords = [id: .init(address: "mac/observed-1", givenTitle: "Old name",
-                                                  title: "Operator name", titleSource: "operator")]
-        XCTAssertEqual(workspace.info(id)?.title, "Old name")
-        // The user's own rename still comes first.
-        workspace.rename(id, to: "Mine")
+        let own = try XCTUnwrap(workspace.info(id)?.title)
+        for source in ["overseer", "agent", "peer", "operator"] {
+            workspace.accord.tileRecords = [id: .init(address: "mac/observed-1", givenTitle: "Old name",
+                                                      title: "\(source) name", titleSource: source)]
+            XCTAssertEqual(workspace.info(id)?.title, own)
+        }
+        // The user's own rename is the tile's origin (a custom shell title), and clearing it
+        // goes back to the tile's own.
+        try workspace.rename(id, to: "Mine")
         XCTAssertEqual(workspace.info(id)?.title, "Mine")
-        workspace.rename(id, to: "")
-        XCTAssertEqual(workspace.info(id)?.title, "Old name")
-    }
-
-    func testAnOlderAccordsGivenTitleStillShows() throws {
-        let (workspace, dir) = try board()
-        let id = workspace.launch(command: "cat", cwd: dir.path)
-        // No title/titleSource fields at all: the old givenTitle path is unchanged.
-        workspace.accord.tileRecords = [id: .init(address: "mac/observed-1", givenTitle: "Given name")]
-        XCTAssertEqual(workspace.info(id)?.title, "Given name")
+        try workspace.rename(id, to: "")
+        XCTAssertEqual(workspace.info(id)?.title, own)
     }
 
     func testTheListingCarriesTheAgentAddressAndItsTask() {
@@ -202,12 +191,31 @@ extension AgentRecordTests {
         let designated = try await bridge.request("overseer-designate", args: ["key": "designate:" + address, "address": address])
         XCTAssertEqual(designated["overseer"] as? String, address)
 
-        // session-title lands in the operator layer; the same key replays instead of duplicating.
+        // session-title renames at the source: a tile that reports rename support gets a
+        // kind "rename" bridge delivery; the same key replays instead of duplicating.
+        _ = try await bridge.request("session-report", args: ["key": "fixture-report-1", "source": "tessera",
+            "externalId": "tile-1", "title": "The Overseer", "state": "idle", "rename": "supported"])
         let id = try XCTUnwrap(address.split(separator: "/").last.map(String.init))
-        let titled = try await bridge.request("session-title", args: ["key": "fixture-title-1", "id": id, "title": "The Overseer"])
-        XCTAssertEqual(titled["titleSource"] as? String ?? (titled["agent"] as? [String: Any])?["titleSource"] as? String, "operator")
-        let replayed = try await bridge.request("session-title", args: ["key": "fixture-title-1", "id": id, "title": "The Overseer"])
-        XCTAssertEqual(replayed["titleSource"] as? String ?? (replayed["agent"] as? [String: Any])?["titleSource"] as? String, "operator")
+        let titled = try await bridge.request("session-title", args: ["key": "fixture-title-1", "source": "tessera",
+                                                                     "externalId": "tile-1", "title": "The Overseer"])
+        XCTAssertEqual(titled["rename"] as? String, "requested")
+        let replayed = try await bridge.request("session-title", args: ["key": "fixture-title-1", "source": "tessera",
+                                                                       "externalId": "tile-1", "title": "The Overseer"])
+        XCTAssertEqual(replayed["rename"] as? String, "requested")
+        // bridge-renames serves the pending request to the tile's host adapter; settling it
+        // with bridge-rename-result takes it off the queue for good.
+        var renames = ((try await bridge.request("bridge-renames", args: ["source": "tessera"]))["renames"] as? [[String: Any]]) ?? []
+        let row = try XCTUnwrap(renames.first { $0["id"] as? String == titled["id"] as? String })
+        XCTAssertEqual(row["tile"] as? String, "tile-1")
+        XCTAssertEqual(row["title"] as? String, "The Overseer")
+        _ = try await bridge.request("bridge-rename-result", args: ["id": titled["id"] as? String ?? "", "outcome": "accepted"])
+        renames = ((try await bridge.request("bridge-renames", args: ["source": "tessera"]))["renames"] as? [[String: Any]]) ?? []
+        XCTAssertTrue(renames.isEmpty)
+        // An agent session with no tile refuses instead of layering on a name.
+        do {
+            _ = try await bridge.request("session-title", args: ["key": "fixture-title-2", "id": id, "title": "x"])
+            XCTFail("a tileless session must refuse session-title")
+        } catch { }
     }
 
     private func heldRecord(_ tile: String, title: String? = nil) -> AccordBridge.TileRecord {

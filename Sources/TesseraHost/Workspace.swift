@@ -99,11 +99,19 @@ public final class Workspace {
     /// Routes a close asked for by an agent through the app's UI path (toast, Undo); tests leave
     /// it nil and the workspace closes directly.
     @ObservationIgnored public var onAgentClose: ((String, String) -> Void)?
+    /// A one-line note for the user (a rename that failed without an Accord requester to tell).
+    @ObservationIgnored public var onNote: ((String) -> Void)?
 
     /// Observed: acknowledging an agent session changes how its tile looks.
     private var agentAcknowledged: [String: Date] = [:]
-    /// Names the user gave app sessions (terminals and pages carry their own).
-    private var agentTitles: [String: String] = [:]
+    /// The latest name each bound agent session's own store reports (Claude transcript
+    /// `customTitle`, Codex `thread_name`, Devin `sessions.title`): the origin's title.
+    /// A failed read keeps the last value, so a locked store doesn't flicker a tile.
+    private var storeTitles: [String: String] = [:]
+    /// The Codex app-server rename; tests substitute their own.
+    @ObservationIgnored var codexRenameThread: (String, String) async throws -> Void = { thread, name in
+        try await CodexAppServer.renameThread(thread, to: name)
+    }
     /// Conversations whose question the user set aside, and when: until it moves on, it isn't asking.
     private var agentDismissed: [String: Date] = [:]
     /// Observed: the tab strip offers them back.
@@ -196,6 +204,14 @@ public final class Workspace {
         accord.lookback = { [weak self] in self?.agents.lookback ?? 36 * 3600 }
         accord.sessions = { [weak self] values in self?.agents.setExternal(values, source: "accord") }
         accord.paused = { [weak self] in self?.agentTools.privacy() ?? true }
+        desk.onRenameFailed = { [weak self] message, reason in
+            Task { await self?.renameFailed(message.to, to: "", notify: message.fromAddress, reason: reason) }
+        }
+        accord.renameInfo = { [weak self] id in self?.renameReport(id) }
+        accord.renameTile = { [weak self] tile, title, sender, request in
+            self?.renameDelivery(tile: tile, title: title, sender: sender, requestId: request)
+                ?? (accepted: false, reason: "Tessera can't rename sources yet")
+        }
         accord.deliver = { [weak self] delivery, tile, sender, text, wantsTyping in
             guard let self, let info = self.info(tile) else { return false }
             let senderTile = self.tileForSender(sender)
@@ -228,6 +244,7 @@ public final class Workspace {
                 guard let self else { return }
                 for t in self.terminals.values { t.noteForegroundAgent() }
                 self.bindAgentSessions()
+                self.refreshOriginTitles()
             }
         }
         binder.tolerance = 1
@@ -244,14 +261,11 @@ public final class Workspace {
         } else {
             return nil
         }
-        // A name given through Accord shows unless the user named the tile themselves. On a new
-        // Accord the agent record's layered title wins when an overseer, the agent or a peer set
-        // it (the operator layer is this user's rename, already covered above); an older Accord
-        // only has givenTitle, which is the same path it always took.
-        if terminals[id]?.customTitle == nil, browsers[id]?.customTitle == nil, agentTitles[id] == nil,
-           let record = accord.tileRecords[id] {
-            if let title = record.title, ["overseer", "agent", "peer"].contains(record.titleSource ?? "") { info.title = title }
-            else if let given = record.givenTitle { info.title = given }
+        // Agent terminals take their title from the origin: the bound session's own store when
+        // one is known, else what the program itself last set (OSC). Tessera names (customTitle)
+        // apply only to shell and custom flavors, and Accord records never title them.
+        if let t = terminals[id], ![AgentFlavor.shell, .custom, .web].contains(t.flavor) {
+            info.title = storeTitles[id] ?? t.title
         }
         info.summary = accord.summaries[id] ?? steward.summaries[id]?.summary
         info.needs = steward.summaries[id]?.needs ?? steward.brief?.attention.first { $0.id == id }?.why
@@ -554,15 +568,107 @@ public final class Workspace {
 
     public func isSuspended(_ id: String) -> Bool { terminals[id]?.isSuspended == true }
 
-    /// Gives any tile a name of the user's own; an empty one goes back to the tile's own title.
-    public func rename(_ id: String, to title: String) {
+    /// How this tile can be renamed at its origin, or why not.
+    public func renameSupport(for id: String) -> RenameSupport {
+        if let t = terminals[id] {
+            // The agent itself must hold the tile's foreground, the same check the wake
+            // pipeline makes before typing: a shell back at its prompt can't take /rename.
+            return RenameSupport.support(kind: .terminal, flavor: t.flavor,
+                                         agentRunning: t.runsForegroundProgram, sessionId: t.sessionId)
+        }
+        if browsers[id] != nil { return .supported(.tessera) }
+        if let a = agents.session(id) {
+            return RenameSupport.support(kind: .agentSession, flavor: a.flavor, agentRunning: true,
+                                         sessionId: a.id.hasPrefix("codex:") ? String(a.id.dropFirst(6)) : nil)
+        }
+        return .unsupported("This source can't be renamed: no such tile.")
+    }
+
+    /// What this tile reports to Accord as its rename support (`nil`: an older Accord ignores it).
+    func renameReport(_ id: String) -> (String, String?) {
+        switch renameSupport(for: id) {
+        case .supported: return ("supported", nil)
+        case .unsupported(let reason): return ("unsupported", reason)
+        }
+    }
+
+    /// Rename — any tile — at its origin. `by` is the Accord address of the requester; nil is the
+    /// user at the keyboard. `request` is the Accord request id: it makes the queued rename's desk
+    /// id stable, so a repeated request can't double-queue. Tessera-owned names apply at once (an
+    /// empty name clears back to the origin's own); agent sources are typed at the idle prompt
+    /// through the wake pipeline or asked of `codex app-server`; unsupported sources refuse.
+    /// Returns what happened, for toasts.
+    @discardableResult
+    public func rename(_ id: String, to title: String, by sender: String? = nil, request: String? = nil) throws -> String {
         let name = title.trimmingCharacters(in: .whitespacesAndNewlines)
-        terminals[id]?.rename(name)
-        browsers[id]?.rename(name)
-        if agents.sessions[id] != nil { agentTitles[id] = name.isEmpty ? nil : name }
-        save()
-        // The rename is this user's operator title on Accord: other agents see it on their next poll.
-        Task { await accord.setTileTitle(id, name) }
+        let label = info(id)?.title ?? id
+        switch renameSupport(for: id) {
+        case .unsupported(let reason):
+            throw AgentTools.Refusal(reason)
+        case .supported(.tessera):
+            // Empty clears Tessera's name so the origin's own shows again.
+            terminals[id]?.rename(name)
+            browsers[id]?.rename(name)
+            save()
+            return name.isEmpty ? "Reverted to its own title." : "Renamed \(label) to \(name)."
+        case .supported(.typed):
+            guard let typed = RenameSupport.sanitizedName(name) else {
+                throw AgentTools.Refusal("A name can't be removed at the source; give a new name.")
+            }
+            let senderTile = sender.flatMap(tileForSender)
+            let route = sender == nil ? AgentDesk.Route.queued
+                : wakeRoute(for: id, kind: wakeKind(forTile: senderTile), wantsTyping: true)
+            guard route != .inbox else { throw AgentTools.Refusal("This sender can't reach that tile.") }
+            desk.importMessage(id: request.map { "rename:\($0)" } ?? "rename:local:\(UUID().uuidString)", text: "/rename \(typed)",
+                               from: sender ?? "you", address: sender, tile: senderTile,
+                               to: id, title: label, route: route)
+            return "Will rename \(label) when \(terminals[id]?.flavor.displayName ?? "it") is idle."
+        case .supported(.codexAppServer):
+            guard let typed = RenameSupport.sanitizedName(name) else {
+                throw AgentTools.Refusal("A name can't be removed at the source; give a new name.")
+            }
+            guard let session = terminals[id]?.sessionId ?? (agents.session(id)?.id.hasPrefix("codex:") == true ? String(id.dropFirst(6)) : nil) else {
+                throw AgentTools.Refusal("This source can't be renamed: Codex has no bound conversation in this tile yet.")
+            }
+            let codexRenameThread = self.codexRenameThread
+            Task {
+                do {
+                    try await codexRenameThread(session, typed)
+                    await MainActor.run { self.storeTitles[id] = typed }
+                } catch {
+                    await self.renameFailed(id, to: typed, notify: sender,
+                                            reason: "codex app-server didn't rename it: \(error.localizedDescription)")
+                }
+            }
+            return "Renaming \(label) in Codex."
+        }
+    }
+
+    /// Accord rename requests already answered, so a row Accord re-serves can't act twice.
+    @ObservationIgnored private var renameSettled: [String: (accepted: Bool, reason: String?)] = [:]
+
+    /// An Accord rename request: never typed as a prompt; routed through the same rename path
+    /// under its stable request id. `accepted` means applied or queued; `failed` carries the
+    /// refusal reason. The requester also hears a refusal or a later failure back, once.
+    func renameDelivery(tile: String, title: String, sender: String, requestId: String) -> (accepted: Bool, reason: String?) {
+        if let settled = renameSettled[requestId] { return settled }
+        do {
+            _ = try rename(tile, to: title, by: sender, request: requestId)
+            renameSettled[requestId] = (accepted: true, reason: nil)
+        } catch {
+            renameSettled[requestId] = (accepted: false, reason: error.localizedDescription)
+            Task { await self.renameFailed(tile, to: title, notify: sender, reason: error.localizedDescription) }
+        }
+        return renameSettled[requestId] ?? (accepted: false, reason: "Couldn't apply the rename.")
+    }
+
+    /// Tell a rename requester a rename didn't land (refusal, expiry, a failed mechanism): the
+    /// Accord requester gets a notification; the user at the keyboard gets the note toast.
+    private func renameFailed(_ tile: String, to name: String, notify sender: String?, reason: String) async {
+        let title = info(tile)?.title ?? tile
+        guard let sender else { onNote?("Couldn't rename \(title): \(reason)"); return }
+        _ = try? await accord.request("send", args: ["key": UUID().uuidString, "to": sender,
+                                                     "text": "Couldn't rename \(title): \(reason)", "kind": "notification"])
     }
 
     // MARK: Selection and the open tile
@@ -892,7 +998,7 @@ public final class Workspace {
         let dismissed = agentDismissed[a.id].map { $0 >= last } ?? false
         let activity: TileActivity = (a.snapshot.activity == .done && !unseen) || (a.snapshot.activity == .needsInput && dismissed)
             ? .idle : a.snapshot.activity
-        return TileInfo(id: a.id, kind: .agentSession, flavor: a.flavor, title: agentTitles[a.id] ?? a.title,
+        return TileInfo(id: a.id, kind: .agentSession, flavor: a.flavor, title: a.title,
                         subtitle: a.cwd.abbreviatingHome, activity: activity,
                         attention: unseen,
                         lastActivityAt: a.lastActivityAt, detail: detail, progress: a.progress)
@@ -1428,7 +1534,7 @@ public final class Workspace {
         if usage.codexRateLimits != agents.codexRateLimits { usage.codexRateLimits = agents.codexRateLimits }
     }
 
-    private func adopt(_ session: TerminalSession) {
+    func adopt(_ session: TerminalSession) {
         session.onResumableChange = { [weak self] in self?.save() }
         session.onOpenLink = { [weak self] url in self?.onLink?(url) }
         terminals[session.id] = session
@@ -1496,6 +1602,42 @@ public final class Workspace {
         }
     }
 
+    @ObservationIgnored private var titlesLoading = false
+
+    /// Every bound agent terminal's origin title, read off the main thread on the binder's cadence.
+    /// A failed read keeps the last good title; titles of tiles that went away are dropped.
+    private func refreshOriginTitles() {
+        guard !titlesLoading else { return }
+        let bound = terminals.values.compactMap { t -> (String, SessionResume.Tool, String)? in
+            guard let id = t.sessionId, let tool = t.command.flatMap(SessionResume.conversationTool(for:)),
+                  [.claude, .codex, .devin].contains(tool) else { return nil }
+            return (t.id, tool, id)
+        }
+        guard !bound.isEmpty else {
+            let live = Set(terminals.keys)
+            storeTitles = storeTitles.filter { live.contains($0.key) }
+            return
+        }
+        titlesLoading = true
+        DispatchQueue.global(qos: .utility).async {
+            let titles: [String: String] = bound.reduce(into: [:]) { out, entry in
+                let (tile, tool, session) = entry
+                switch tool {
+                case .claude: out[tile] = OriginTitles.claude(session)
+                case .codex: out[tile] = OriginTitles.codex(session)
+                case .devin: out[tile] = OriginTitles.devin(session)
+                default: break
+                }
+            }
+            DispatchQueue.main.async { MainActor.assumeIsolated {
+                self.titlesLoading = false
+                for (tile, name) in titles where self.storeTitles[tile] != name { self.storeTitles[tile] = name }
+                let live = Set(self.terminals.keys)
+                self.storeTitles = self.storeTitles.filter { live.contains($0.key) }
+            } }
+        }
+    }
+
     // MARK: Persistence
 
     private var saveURL: URL { directory.appendingPathComponent("workspace.json") }
@@ -1513,11 +1655,9 @@ public final class Workspace {
         let now = Date()
         let remembered = hiddenAgents.filter { now.timeIntervalSince($0.value) < agents.lookback }
         if remembered.count != hiddenAgents.count { hiddenAgents = remembered }
-        // A name lasts as long as its session is remembered at all.
-        for id in agentTitles.keys where !savedOrder.contains(id) { agentTitles[id] = nil }
         StateFile.save(Saved(tiles: tiles.map(Lossy.init), defaultDirectory: defaultDirectory, placeNativeWindows: placeNativeWindows,
                              groups: groups.list, resumeOnLaunch: resumeOnLaunch, order: savedOrder, hidden: hiddenAgents,
-                             agentLookbackHours: agents.lookback / 3600, titles: agentTitles,
+                             agentLookbackHours: agents.lookback / 3600, titles: [:],
                              closed: recentlyClosed.tiles.map(Lossy.init), dock: dock.ids,
                              dockWidth: dockWidth.map(Double.init), overseer: overseerId), to: saveURL)
     }
@@ -1555,7 +1695,8 @@ public final class Workspace {
         case .terminal:
             let cwd = tile.cwd.flatMap { FileManager.default.fileExists(atPath: $0) ? $0 : nil } ?? defaultDirectory
             let decision = decision ?? RestorePlan.Decision(sessionId: nil, mayContinueLatest: false)
-            adopt(TerminalSession(id: tile.id, command: tile.command, cwd: cwd, title: tile.title, label: tile.command,
+            adopt(TerminalSession(id: tile.id, command: tile.command, cwd: cwd,
+                                  title: tile.command.flatMap(SessionResume.conversationTool(for:)) == nil ? tile.title : nil, label: tile.command,
                                   sessionId: decision.sessionId, resuming: true, mayContinueLatest: decision.mayContinueLatest,
                                   startSuspended: suspended, resumingWork: tile.wasWorking == true))
         case .browser:
@@ -1578,7 +1719,6 @@ public final class Workspace {
         resumeOnLaunch = saved.resumeOnLaunch ?? true
         savedOrder = saved.order ?? []
         hiddenAgents = saved.hidden ?? [:]
-        agentTitles = saved.titles ?? [:]
         if let hours = saved.agentLookbackHours, AgentAppWatcher.lookbackHours.contains(hours) { agents.lookback = hours * 3600 }
         recentlyClosed = RecentlyClosed(saved.closed?.compactMap(\.value) ?? [])
         let plan = restorePlan(tiles)

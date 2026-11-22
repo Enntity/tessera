@@ -60,8 +60,12 @@ public final class AccordBridge {
     @ObservationIgnored public var logFailure: ((String) -> Void)?
     /// Test seams for the two operator writes; production leaves both nil.
     @ObservationIgnored var designateOperation: ((String) async throws -> Void)?
-    @ObservationIgnored var titleOperation: (([String: Any]) async throws -> Void)?
     @ObservationIgnored public var deliver: ((String, String, String, String, Bool) -> Bool)?
+    /// What each tile reports as its rename support: ("supported", nil) or ("unsupported", reason).
+    @ObservationIgnored public var renameInfo: ((String) -> (String, String?)?)?
+    /// A queued rename request — handled by the workspace, never typed as a prompt.
+    /// (tile, title, sender, requestId) → (accepted, refusal reason).
+    @ObservationIgnored public var renameTile: ((String, String, String, String) -> (accepted: Bool, reason: String?))?
     @ObservationIgnored public var questions: (([[String: Any]]) -> Void)?
     @ObservationIgnored public var notes: (([[String: Any]]) -> Void)?
     @ObservationIgnored public var noteReads: (() -> [String])?
@@ -162,13 +166,18 @@ public final class AccordBridge {
     /// The `session-report` arguments for a digest. `sourceProgressAt` goes out only once the tile
     /// has been idle: for an active tile Accord's own now is the right progress time, and ours may
     /// be a fraction of a second ahead of the coordinator's clock, which it rejects.
-    static func reportArgs(_ digest: Steward.Digest, key: String, nowMs: Int) -> [String: Any] {
+    static func reportArgs(_ digest: Steward.Digest, key: String, nowMs: Int,
+                           rename: (String, String?)? = nil) -> [String: Any] {
         let state = digest.state == "needsInput" ? "waiting" : digest.state
         var args: [String: Any] = ["key": key, "source": "tessera", "externalId": digest.id,
             "title": String(digest.title.prefix(180)), "state": ["starting", "working", "idle", "waiting", "done", "failed", "exited"].contains(state) ? state : "unknown",
             "location": digest.subtitle, "detail": digest.detail ?? "", "private": false,
             "events": digest.text.isEmpty ? [] : [["key": fingerprint(digest), "kind": "observation", "text": String(digest.text.suffix(12000))]]]
         if digest.idleMinutes > 0 { args["sourceProgressAt"] = max(0, nowMs - digest.idleMinutes * 60000) }
+        if let rename {
+            args["rename"] = rename.0
+            if let reason = rename.1 { args["renameReason"] = reason }
+        }
         return args
     }
 
@@ -232,7 +241,8 @@ public final class AccordBridge {
             if privacy { summaries.removeAll(); tileSummaries.removeAll(); tileRecords.removeAll(); senderTiles.removeAll(); incidents.removeAll(); projectedSessions = []; sessions?([]); connected = true; return }
             let values = digests?() ?? []
             for digest in Self.digestsToReport(values, seen: seen, published: published, now: Date()) {
-                var args = Self.reportArgs(digest, key: UUID().uuidString, nowMs: Int(Date().timeIntervalSince1970 * 1000))
+                var args = Self.reportArgs(digest, key: UUID().uuidString, nowMs: Int(Date().timeIntervalSince1970 * 1000),
+                                           rename: renameInfo?(digest.id) ?? nil)
                 var result: [String: Any]?
                 do {
                     result = try await operation(c, "session-report", args)
@@ -325,6 +335,17 @@ public final class AccordBridge {
                       deliver?(delivery, tile, Self.scheduledSender(from: sender, scheduledBy: message["scheduledBy"], authority: c.2), text, message["delivery"] as? String == "native-prompt") == true else { continue }
                 // Display is not read acknowledgement. The recipient acknowledges through Accord.
                 _ = record
+            }
+            // Rename requests are a dedicated queue, not mail: each is settled with
+            // bridge-rename-result so it never comes back.
+            let renames = ((try? await operation(c, "bridge-renames", ["source": "tessera"]))?["renames"] as? [[String: Any]]) ?? []
+            for request in renames {
+                guard let requestId = request["id"] as? String, let tile = request["tile"] as? String,
+                      let title = request["title"] as? String, let sender = request["by"] as? String else { continue }
+                let result = renameTile?(tile, title, sender, requestId) ?? (accepted: false, reason: "Tessera can't rename sources yet")
+                var args: [String: Any] = ["id": requestId, "outcome": result.accepted ? "accepted" : "failed"]
+                if let reason = result.reason { args["reason"] = reason }
+                _ = try? await operation(c, "bridge-rename-result", args)
             }
             for id in noteReads?() ?? [] {
                 _ = try await operation(c, "read", ["deliveryId":id])
@@ -509,22 +530,6 @@ public final class AccordBridge {
             designationDenied = true
             logFailure?("overseer-designate rejected; layered titles keep working without a designated overseer")
         }
-    }
-
-    /// The user's rename, sent to Accord as the operator layer of that tile's agent record, so
-    /// every agent sees it on the next poll. An older Accord still accepts the name on the
-    /// tile's observation, which is the fallback target.
-    public func setTileTitle(_ tile: String, _ name: String) async {
-        var args: [String: Any] = ["key": UUID().uuidString, "title": String(name.prefix(120))]
-        if let address = tileRecords[tile]?.agentAddress?.split(separator: "/").last { args["id"] = String(address) }
-        else { args["source"] = "tessera"; args["externalId"] = tile }
-        if let titleOperation {
-            do { try await titleOperation(args) } catch { logFailure?("session-title rejected for \(tile)") }
-            return
-        }
-        guard let c = try? connection() else { return }
-        do { _ = try await operation(c, "session-title", args) }
-        catch { logFailure?("session-title rejected for \(tile)") }
     }
 
     func acceptSnapshot(_ board: [String:Any], nativeIDs: Set<String>, now: Date = Date()) {

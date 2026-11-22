@@ -97,6 +97,10 @@ public final class AgentTools {
         case "send_to_tile":
             let tile = try workspace.resolveTile(args["tile"] as? String ?? "")
             return try workspace.sendToTile(tile, text: args["text"] as? String ?? "", from: me.tile, label: me.label)
+        case "rename_tile":
+            let tile = try workspace.resolveTile(args["tile"] as? String ?? "")
+            let sender = me.tile.flatMap { tile in workspace.accord.senderTiles.first(where: { $0.value == tile })?.key }
+            return try workspace.rename(tile, to: args["name"] as? String ?? "", by: sender ?? me.label)
         case "whoami":
             guard let tile = me.tile, let info = workspace.info(tile) else {
                 return Redactor.redact("Tessera can't tell which tile you are (\(me.reason)). You are \"\(me.label)\". "

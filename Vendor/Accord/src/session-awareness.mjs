@@ -57,7 +57,6 @@ export function redact(value) {
     );
 }
 const terminal = new Set(["done", "failed", "exited", "cancelled"]);
-const DEFAULT_LABELS = new Set(['MCP agent', 'shell agent', 'agent']);
 // A live MCP session heartbeats every 30 s and observers stop reading transcripts this
 // old, so a session silent this long has nobody left to report for it.
 export const staleSessionMs = 36 * 3600000;
@@ -218,14 +217,7 @@ export class SessionAwareness {
       ...(binding ? {nativeSession:{source:binding.source,externalId:binding.external_id}} : {}),
       ...(() => {
         if (row.private) return {};
-        const layers = {};
-        for (const t of this.db.prepare("SELECT layer,title,by,at FROM titles WHERE subject=?").all(row.id)) layers[t.layer] = t;
-        const top = layers.operator ?? layers.overseer ?? layers.peer;
-        const agent = (!row.source || row.source === "agent") ? { agent: this.agentRecord(row.id) } : {};
-        return {
-          ...(top ? { givenTitle: top.title, titledBy: top.by ? `${this.store.authority}/${top.by}` : undefined, titledAt: top.at } : {}),
-          ...agent,
-        };
+        return (!row.source || row.source === "agent") ? { agent: this.agentRecord(row.id) } : {};
       })(),
       id: row.id,
       address: `${this.store.authority}/${row.id}`,
@@ -300,6 +292,9 @@ export class SessionAwareness {
         this.store.now(),
         this.store.now() + 7 * 86400000,
       );
+    if (body.rename !== undefined)
+      requireThat(["supported", "unsupported"].includes(body.rename), "INVALID_INPUT", "rename is supported or unsupported", 400);
+    if (body.renameReason !== undefined) text(body.renameReason, "renameReason", 200);
     if(body.parentSession !== undefined) {
       requireThat(actor.role === 'admin' && source !== 'agent','FORBIDDEN','Only host observers may report parent relationships',403);
       if(body.parentSession !== null) {
@@ -449,8 +444,13 @@ export class SessionAwareness {
           Number(changed),
           Number(changed),
         );
+      if (body.rename !== undefined)
+        this.db.prepare('UPDATE session_views SET rename=?,rename_reason=? WHERE id=?')
+          .run(body.rename, body.renameReason ?? null, session);
       if(privacy) {
         this.db.prepare('UPDATE session_views SET given_title=NULL,titled_by=NULL,titled_at=NULL WHERE id=?').run(session);
+        // Stale layered names of a session that went private are deleted even
+        // though nothing reads them any more.
         this.db.prepare('DELETE FROM titles WHERE subject=?').run(session);
       }
       if(body.parentSession !== undefined || privacy) this.db.prepare('UPDATE session_views SET parent_session=? WHERE id=?').run(privacy||!body.parentSession?null:JSON.stringify({source:body.parentSession.source,externalId:body.parentSession.externalId}),session);
@@ -508,7 +508,7 @@ export class SessionAwareness {
     if (!r.private && !r.hidden)
       this.db.prepare("INSERT INTO session_search VALUES(?,?,?,?,?,?)").run(
         session,
-        [r.given_title, ...this.db.prepare("SELECT title FROM titles WHERE subject=?").all(session).map(t => t.title), r.title].filter(Boolean).join("\n"),
+        [r.given_title, r.title].filter(Boolean).join("\n"),
         r.location,
         r.detail,
         r.summary,
@@ -545,9 +545,6 @@ export class SessionAwareness {
             )
             .run(row.id);
           this.db
-            .prepare("DELETE FROM titles WHERE subject=?")
-            .run(row.id);
-          this.db
             .prepare("DELETE FROM session_activity WHERE session_id=?")
             .run(row.id);
           this.db
@@ -560,6 +557,7 @@ export class SessionAwareness {
               "UPDATE overseer_incidents SET state='resolved',evidence='{}' WHERE session_id=?",
             )
             .run(row.id);
+          this.db.prepare("DELETE FROM titles WHERE subject=?").run(row.id);
           this.index(row.id);
         }
       }
@@ -844,33 +842,25 @@ export class SessionAwareness {
       return { accepted: true };
     });
   }
-  titleLayer(actor) {
-    if (actor.role === "admin") return "operator";
-    return this.overseerAddress() === `${this.store.authority}/${actor.id}` ? "overseer" : "peer";
+  // The tile an agent runs in, whichever link path reported it: an explicit
+  // agent_tiles link, or a native binding on the tile's observation.
+  tileFor(actorId) {
+    return this.db.prepare("SELECT tile,role FROM agent_tiles WHERE actor=?").get(actorId)
+      ?? (this.db.prepare("SELECT external_id FROM session_bindings WHERE actor=? AND source='tessera'").get(actorId)?.external_id
+          ? { tile: this.db.prepare("SELECT external_id FROM session_bindings WHERE actor=? AND source='tessera'").get(actorId).external_id, role: "agent" }
+          : null);
   }
-  // The effective display name: operator, then the designated overseer, then
-  // the agent's own non-default label, then other agents, then the observed title.
-  effectiveTitle(subject, { label, observedTitle } = {}) {
-    const layers = {};
-    for (const r of this.db.prepare("SELECT layer,title,by,at FROM titles WHERE subject=?").all(subject))
-      layers[r.layer] = { title: r.title, ...(r.by ? { by: `${this.store.authority}/${r.by}` } : {}), at: r.at };
-    if (label && !DEFAULT_LABELS.has(label)) layers.agent = { title: label };
-    let title, titleSource;
-    for (const layer of ["operator", "overseer", "agent", "peer"])
-      if (layers[layer]) { title = layers[layer].title; titleSource = layer; break; }
-    if (!title && observedTitle) { title = observedTitle; titleSource = "observed"; }
-    return { title, titleSource, titles: Object.keys(layers).length ? layers : undefined };
+  tileView(tileId) {
+    return this.db.prepare("SELECT * FROM session_views WHERE source='tessera' AND external_id=?").get(tileId);
   }
-  // One record per agent: tile link (binding counts as role agent), the
-  // effective layered title, the current task, previous addresses and the
+  // One record per agent: tile link (binding counts as role agent), the title
+  // the origin reports — the tile's own name when it has one, the agent's own
+  // session title otherwise — the current task, previous addresses and the
   // mailbox binding.
   agentRecord(actorId) {
     const participant = this.db.prepare("SELECT label,activity FROM participants WHERE actor=?").get(actorId);
     const view = this.db.prepare("SELECT title FROM session_views WHERE id=?").get(actorId);
-    const tile = this.db.prepare("SELECT tile,role FROM agent_tiles WHERE actor=?").get(actorId)
-      ?? (this.db.prepare("SELECT external_id FROM session_bindings WHERE actor=? AND source='tessera'").get(actorId)?.external_id
-          ? { tile: this.db.prepare("SELECT external_id FROM session_bindings WHERE actor=? AND source='tessera'").get(actorId).external_id, role: "agent" }
-          : null);
+    const tile = this.tileFor(actorId);
     const job = this.db.prepare("SELECT title FROM agent_jobs WHERE actor=? AND state IN('working','waiting') ORDER BY updated_at DESC LIMIT 1").get(actorId);
     const client = this.db.prepare("SELECT client FROM sessions WHERE id=?").get(actorId)?.client ?? undefined;
     const binding = this.db.prepare("SELECT source,external_id FROM session_bindings WHERE actor=? ORDER BY source,external_id LIMIT 1").get(actorId);
@@ -881,31 +871,31 @@ export class SessionAwareness {
       previous.push(`${this.store.authority}/${prior.id}`);
       id = prior.id;
     }
-    const { title, titleSource, titles } = this.effectiveTitle(actorId, { label: participant?.label, observedTitle: view?.title });
+    const title = (tile ? this.tileView(tile.tile)?.title : undefined) ?? view?.title ?? participant?.label;
     return {
       host: { authority: this.store.authority, name: this.hostName },
       client,
       ...(tile ? { tile: { id: tile.tile, role: tile.role } } : {}),
-      title, titleSource,
-      ...(titles ? { titles } : {}),
+      title, titleSource: "origin",
       ...(job?.title ?? participant?.activity ? { task: job?.title ?? participant?.activity } : {}),
       ...(previous.length ? { previous } : {}),
       ...(binding ? { native: { source: binding.source, id: binding.external_id } } : {}),
     };
   }
-  // A display name for the operator and other agents, stored per layer: the
-  // operator's, the designated overseer's, or another agent's. It is
-  // attributed, it is not progress, and it grants nothing.
+  // A rename request writes through to the origin: the subject's Tessera tile
+  // gets a rename delivery on its bridge inbox, and the tile's adapter renames
+  // the real source. When no supported source exists the request is refused;
+  // Accord keeps no title of its own to show instead.
   title(actor, body) {
     const byId = body.id !== undefined;
     requireThat(byId !== (body.source !== undefined || body.externalId !== undefined), "INVALID_INPUT",
       "Name a session by id, or by source and externalId", 400);
     requireThat(typeof body.title === "string" && body.title.length <= 120, "INVALID_INPUT",
-      "title must be a string of at most 120 characters; empty removes the name", 400);
-    let subject;
+      "title must be a string of at most 120 characters", 400);
+    let subject, view;
     if (byId) {
       subject = text(body.id, "id", 200);
-      const view = this.db.prepare("SELECT * FROM session_views WHERE id=?").get(subject);
+      view = this.db.prepare("SELECT * FROM session_views WHERE id=?").get(subject);
       if (view) {
         requireThat(!view.hidden, "NOT_FOUND", "Unknown observed session", 404);
         requireThat(!view.private, "PRIVATE_SESSION", "Session content is private", 403);
@@ -915,23 +905,35 @@ export class SessionAwareness {
           "NOT_FOUND", "Unknown session", 404);
       }
     } else {
-      const view = this.db.prepare("SELECT * FROM session_views WHERE source=? AND external_id=?")
+      view = this.db.prepare("SELECT * FROM session_views WHERE source=? AND external_id=?")
         .get(text(body.source, "source", 64), text(body.externalId, "externalId", 200));
       requireThat(view && !view.hidden, "NOT_FOUND", "Unknown observed session", 404);
       requireThat(!view.private, "PRIVATE_SESSION", "Session content is private", 403);
       subject = view.id;
     }
-    const given = redact(body.title).replace(/\s+/g, " ").trim() || null;
-    const layer = this.titleLayer(actor);
+    const given = redact(body.title).replace(/\s+/g, " ").trim();
+    requireThat(given !== "", "INVALID_INPUT", "A name can't be removed at the source; give a new name.", 400);
+    // A tessera view is its own tile; otherwise the link paths find it.
+    const tile = view?.source === "tessera" ? view.external_id : this.tileFor(subject)?.tile;
+    const tileView = view?.source === "tessera" ? view : tile ? this.tileView(tile) : undefined;
+    requireThat(tileView, "RENAME_UNSUPPORTED",
+      `This source can't be renamed: ${view?.source ?? "agent"} sessions have no supported rename through Accord.`, 409);
+    requireThat(tileView.rename !== null && tileView.rename !== undefined, "RENAME_UNSUPPORTED",
+      "Tessera on this host can't rename sources yet.", 409);
+    const reason = tileView.rename_reason ?? "";
+    requireThat(tileView.rename === "supported", "RENAME_UNSUPPORTED",
+      reason.startsWith("This source") ? reason : `This source can't be renamed: ${reason || "the origin has no supported rename."}`, 409);
     return this.store.command(actor, body, "session.title", () => {
-      if (given === null) this.db.prepare("DELETE FROM titles WHERE subject=? AND layer=?").run(subject, layer);
-      else this.db.prepare("INSERT INTO titles VALUES(?,?,?,?,?) ON CONFLICT(subject,layer) DO UPDATE SET title=excluded.title,by=excluded.by,at=excluded.at")
-        .run(subject, layer, given, actor.id, this.store.now());
-      const hasView = this.db.prepare("SELECT 1 FROM session_views WHERE id=?").get(subject);
-      if (hasView) this.index(subject);
-      this.store.emit("session.titled", { session: subject, by: actor.id, layer, named: given !== null });
-      const view = hasView ? this.db.prepare("SELECT * FROM session_views WHERE id=?").get(subject) : null;
-      return view ? this.public(view) : { subject, ...this.effectiveTitle(subject) };
+      // A rename request is not mail a caller could compose: only this
+      // operation enqueues one, inside the same transaction. The tile's
+      // adapter drains it through bridge-renames and settles it through
+      // bridge-rename-result.
+      const requestId = id();
+      this.db
+        .prepare("INSERT INTO rename_requests(id,session,tile,source,title,by,state,created_at,updated_at) VALUES(?,?,?,?,?,?,'pending',?,?)")
+        .run(requestId, subject, tileView.external_id, tileView.source, given, `${this.store.authority}/${actor.id}`, this.store.now(), this.store.now());
+      this.store.emit("session.rename-requested", { request: requestId, session: subject, tile: tileView.external_id, title: given, by: actor.id });
+      return { rename: "requested", id: requestId, tile: tileView.external_id, title: given, session: subject };
     });
   }
   snooze(actor, body) {

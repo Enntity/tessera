@@ -11,6 +11,7 @@ let usage = """
       tessera whoami                            Which tile you are
       tessera read <tile> [--lines N]           What a tile shows now
       tessera send <tile> <text…>               Send a message into a tile's prompt when it's idle
+      tessera rename <tile> <name…>             Rename a tile at its origin
       tessera close <tile> [--force]            Close an idle tile; --force asks the developer if busy
       tessera open <agent> <cwd> [--title T] [--prompt TEXT] [--resume ID]
                                                 Open a shell or agent tile in a directory
@@ -176,6 +177,9 @@ do {
     case "send":
         guard words.count >= 3 else { throw Failure("tessera send <tile> <text…>") }
         print(try callTool("send_to_tile", ["tile": words[1], "text": words.dropFirst(2).joined(separator: " ")]))
+    case "rename":
+        guard words.count >= 3 else { throw Failure("tessera rename <tile> <name…>") }
+        print(try callTool("rename_tile", ["tile": words[1], "name": words.dropFirst(2).joined(separator: " ")]))
     case "close":
         guard words.count >= 2 else { throw Failure("tessera close <tile> [--force]") }
         print(try callTool("close_tile", ["tile": words[1], "force": has("--force")]))

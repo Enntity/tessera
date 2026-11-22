@@ -34,6 +34,15 @@ struct DashboardView: View {
                                 UndoToast(toast: toast)
                                     .transition(.move(edge: .bottom).combined(with: .opacity))
                             }
+                            if let note = model.note {
+                                Text(note).font(Style.ui(.label, .medium)).foregroundStyle(Style.dim).lineLimit(1)
+                                    .padding(.horizontal, Style.Space.l)
+                                    .frame(height: Style.Metrics.control)
+                                    .task(id: note) {
+                                        try? await Task.sleep(nanoseconds: 4_000_000_000)
+                                        if !Task.isCancelled, model.note == note { model.note = nil }
+                                    }
+                            }
                         }
                         if let dock = columns.dock {
                             WatchDockColumn(width: dock, widest: columns.dockMax)

@@ -241,6 +241,7 @@ public final class AgentDesk {
         var touched = false
         for i in messages.indices where messages[i].delivery == "queued" && now.timeIntervalSince(messages[i].sentAt) > Self.keep {
             messages[i].delivery = "failed"
+            if messages[i].id.hasPrefix("rename:") { onRenameFailed?(messages[i], "the rename waited too long") }
             touched = true
         }
         if touched { changed() }
@@ -251,10 +252,14 @@ public final class AgentDesk {
         var touched = false
         for i in messages.indices where messages[i].delivery == "queued" && messages[i].to == tile {
             messages[i].delivery = "failed"
+            if messages[i].id.hasPrefix("rename:") { onRenameFailed?(messages[i], "the tile is gone") }
             touched = true
         }
         if touched { changed() }
     }
+
+    /// Told when a queued rename never ran, so its Accord requester can hear about it.
+    public var onRenameFailed: ((Message, String) -> Void)?
 
     /// What the tile's card shows of the latest message headed for it: pending ones while they
     /// last; a delivered, opened or failed one for an hour after.
