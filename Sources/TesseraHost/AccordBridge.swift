@@ -5,6 +5,12 @@ import Observation
 import TesseraKit
 import TesseraAPI
 
+enum AccordRequestError: LocalizedError {
+    case activityNotShared
+
+    var errorDescription: String? { "This host does not share session activity with this link." }
+}
+
 /// Native observations and delivery remain here; shared state/search/monitoring live in Accord.
 /// Accord is the shared-state authority; Tessera never creates an offline coordination fork.
 @Observable @MainActor
@@ -133,7 +139,15 @@ public final class AccordBridge {
             request.httpBody = try JSONSerialization.data(withJSONObject: body)
         }
         let (data, response) = try await session.data(for: request)
-        guard (response as? HTTPURLResponse)?.statusCode == 200, data.count < 2 * 1024 * 1024,
+        let status = (response as? HTTPURLResponse)?.statusCode
+        guard data.count < 2 * 1024 * 1024 else { throw URLError(.badServerResponse) }
+        if status == 403,
+           let envelope = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let error = envelope["error"] as? [String: Any],
+           error["code"] as? String == "NOT_SHARED" {
+            throw AccordRequestError.activityNotShared
+        }
+        guard status == 200,
               let value = try JSONSerialization.jsonObject(with: data) as? [String: Any] else { throw URLError(.badServerResponse) }
         return value
     }

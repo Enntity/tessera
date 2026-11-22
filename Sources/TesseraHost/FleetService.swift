@@ -158,8 +158,14 @@ public final class FleetService {
         for host in hosts {
             guard let authority = host["authority"] as? String, seen.insert(authority).inserted else { continue }
             let r = try await fetch("resources", authority)
-            let j = try await fetch("jobs", authority)
             resources += (r["resources"] as? [[String:Any]] ?? []).filter { $0["manager"] == nil }
+            let j: [String: Any]
+            do {
+                j = try await fetch("jobs", authority)
+            } catch AccordRequestError.activityNotShared {
+                // Machine telemetry and lease visibility are independent of shared job activity.
+                continue
+            }
             jobs += (j["jobs"] as? [[String:Any]] ?? []).map { job in
                 var item = job
                 if let id = job["id"] as? String { item["id"] = authority + "/" + id }
