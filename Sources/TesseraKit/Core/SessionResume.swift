@@ -74,12 +74,23 @@ public enum SessionResume {
         .grok: ["auth", "login", "logout", "config", "update", "mcp"],
         .devin: ["auth", "mcp", "models", "doctor", "rules", "skills", "plugins", "cloud", "desktop", "list", "ls",
                  "rm", "ssh", "forward", "update", "version", "migrate", "sandbox", "setup", "uninstall", "acp", "help"],
+        .agy: ["acp", "agent", "agents", "changelog", "help", "install", "mcp", "mic-serve", "models",
+               "plugin", "plugins", "remote-control", "update"],
     ]
 
     static func isConversation(_ tool: Tool, _ inv: Invocation) -> Bool {
         if tool == .devin { return isDevinConversation(inv) }
+        if tool == .agy { return isAgyConversation(inv) }
         guard let first = inv.words.dropFirst().first(where: { !$0.hasPrefix("-") }) else { return true }
         return !(subcommands[tool]?.contains(first) ?? false)
+    }
+
+    /// `agy` is a conversation unless it's a subcommand or a one-shot print (`-p`/`--print`/`--prompt`).
+    private static func isAgyConversation(_ inv: Invocation) -> Bool {
+        let args = inv.words.dropFirst()
+        if args.contains("-p") || args.contains("--print") || args.contains("--prompt") { return false }
+        guard let first = args.first(where: { !$0.hasPrefix("-") }) else { return true }
+        return !(subcommands[.agy]?.contains(first) ?? false)
     }
 
     /// `devin` is a conversation unless it's one of its subcommands, a one-shot print, or names a
@@ -140,8 +151,12 @@ public enum SessionResume {
                   !before[i + 1].hasPrefix("-") else { return nil }
             return isSafeId(before[i + 1]) ? before[i + 1] : nil
         case .agy:
-            // agy conversations are never bound to a stored id Tessera can address.
-            return nil
+            // `--conversation X` or `--conversation=X`.
+            if let eq = words.first(where: { $0.hasPrefix("--conversation=") }) {
+                let id = String(eq.dropFirst("--conversation=".count))
+                return isSafeId(id) ? id : nil
+            }
+            return value(after: ["--conversation"])
         }
     }
 
@@ -160,7 +175,7 @@ public enum SessionResume {
         case .opencode: return inv.joined([inv.exe] + words + (id.map { ["-s", $0] } ?? ["-c"]))
         case .omp: return inv.joined([inv.exe] + words + (id.map { ["-r", $0] } ?? ["-c"]))
         case .devin: return inv.joined([inv.exe] + words + (id.map { ["-r", $0] } ?? ["-c"]))
-        case .agy: return nil
+        case .agy: return inv.joined([inv.exe] + words + (id.map { ["--conversation", $0] } ?? ["-c"]))
         }
     }
 
@@ -183,7 +198,7 @@ public enum SessionResume {
         case .devin:
             let before = words.prefix { $0 != "--" }
             return before.contains("-c") || before.contains("--continue")
-        case .agy: return false
+        case .agy: return words.contains("-c") || words.contains("--continue")
         }
     }
 
@@ -206,7 +221,11 @@ public enum SessionResume {
             // Resuming must not send its first prompt again: `--` and everything after it go too.
             return Array(strip(words, flags: ["-r", "--resume", "--prompt-file"], switches: ["-c", "--continue"])
                 .prefix { $0 != "--" })
-        case .agy: return words
+        case .agy:
+            // Resuming must not send its first prompt again: `--prompt-interactive <text>` goes
+            // with the conversation selection.
+            return strip(words, flags: ["--conversation", "-i", "--prompt-interactive"],
+                         switches: ["-c", "--continue"]).filter { !$0.hasPrefix("--conversation=") }
         }
     }
 

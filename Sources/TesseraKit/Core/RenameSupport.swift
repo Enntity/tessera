@@ -51,7 +51,7 @@ public enum RenameSupport: Equatable, Sendable {
                     : refuse("Antigravity isn't running in this tile")
             case .grok, .gemini, .opencode, .aider, .dsh:
                 return refuse("\(flavor.displayName) sessions have no supported rename")
-            case .claudeDesktop, .codexDesktop, .zcodeDesktop:
+            case .claudeDesktop, .codexDesktop, .zcodeDesktop, .antigravityDesktop:
                 return refuse("\(flavor.displayName) sessions have no supported rename")
             case .lloom, .agentDesk, .accord:
                 return refuse("\(flavor.displayName) tiles have no supported rename")
@@ -65,6 +65,8 @@ public enum RenameSupport: Equatable, Sendable {
                 return refuse("Claude app conversations have no supported way to rename them")
             case .zcodeDesktop:
                 return refuse("Enntity ZCode sessions can't be renamed yet")
+            case .antigravityDesktop:
+                return refuse("Antigravity app conversations have no supported way to rename them")
             default:
                 return refuse("\(flavor.displayName) sessions have no supported rename")
             }

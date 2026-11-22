@@ -197,7 +197,7 @@ struct GeneralSettings: View {
             Section("Terminals") {
                 Toggle("Resume terminal sessions when Tessera opens", isOn: $workspace.resumeOnLaunch)
                     .onChange(of: workspace.resumeOnLaunch) { _, _ in workspace.save() }
-                Text("Claude Code, Codex, Devin, Grok, opencode and omp tiles reopen in the same conversation; shells reopen in their last folder. Off: tiles wait, shut down, until you resume them.").note()
+                Text("Claude Code, Codex, Devin, Grok, opencode, omp and Antigravity tiles reopen in the same conversation; shells reopen in their last folder. Off: tiles wait, shut down, until you resume them.").note()
             }
             Section("New tiles") {
                 HStack {

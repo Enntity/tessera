@@ -84,6 +84,22 @@ struct Installer {
         } else {
             say("skip Devin: `devin` not found")
         }
+
+        if let agy = Self.which("agy") {
+            // agy has no `mcp get`: `mcp list` is the read, so the plan under --dry-run is real.
+            let (_, list) = Self.run(agy, ["mcp", "list"])
+            if list.contains("tessera") {
+                say("leave Antigravity's tessera MCP server as it is")
+            } else {
+                say("register MCP server \"tessera\" with Antigravity (agy)")
+                if !dryRun {
+                    let (status, output) = Self.run(agy, ["mcp", "add", "tessera", bin.path, "mcp"])
+                    if status != 0 { throw Failure("agy mcp add failed: \(output.trimmingCharacters(in: .whitespacesAndNewlines))") }
+                }
+            }
+        } else {
+            say("skip Antigravity: `agy` not found")
+        }
         if !(ProcessInfo.processInfo.environment["PATH"] ?? "").split(separator: ":").contains(Substring(bin.deletingLastPathComponent().path)) {
             print("For shell use, add ~/.local/bin to PATH in your shell configuration. MCP uses the absolute path and needs no PATH change.")
         }

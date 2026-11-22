@@ -1316,7 +1316,7 @@ public final class Workspace {
 
     /// Which agents `open_tile` may start, to their preset commands.
     private static let openable: [String: String?] = ["shell": nil, "claude": "claude", "codex": "codex",
-                                                    "devin": "devin", "omp": "omp"]
+                                                    "devin": "devin", "omp": "omp", "agy": "agy"]
 
     /// `open_tile` and `tessera open`: starts a tile like the developer's New (or brings back a
     /// closed one like Reopen), without disturbing the board the developer is looking at. The
@@ -1357,7 +1357,7 @@ public final class Workspace {
 
         let agentName = (agent ?? "").lowercased()
         guard let preset = Self.openable[agentName] else {
-            try refuse("Only shell, claude, codex, devin or omp can be opened.", title: title, agent: agent)
+            try refuse("Only shell, claude, codex, devin, omp or agy can be opened.", title: title, agent: agent)
         }
         guard agentName == "shell" || installedAgents.contains(agentName) else {
             try refuse("\(agentName) isn't installed on this Mac's PATH.", title: title, agent: agentName)
@@ -1569,7 +1569,13 @@ public final class Workspace {
                   let pgid = t.foregroundProcessGroup else { return nil }
             return (t.id, pgid)
         }
-        guard !codex.isEmpty || !claude.isEmpty || !devin.isEmpty else { return }
+        // Antigravity names its conversation through the presence lock the running REPL holds.
+        let agy = terminals.values.compactMap { t -> (tileId: String, pgid: pid_t)? in
+            guard t.isRunning, !t.isSuspended, t.command.flatMap(SessionResume.conversationTool(for:)) == .agy,
+                  let pgid = t.foregroundProcessGroup else { return nil }
+            return (t.id, pgid)
+        }
+        guard !codex.isEmpty || !claude.isEmpty || !devin.isEmpty || !agy.isEmpty else { return }
         let claimed = Set(terminals.values.compactMap(\.sessionId))
         binding = true
         DispatchQueue.global(qos: .utility).async {
@@ -1580,6 +1586,12 @@ public final class Workspace {
             for (tileId, pgid) in devin {
                 guard let id = DevinSessions.session(forProcessGroup: pgid), !held.contains(id) else { continue }
                 devinFound[tileId] = id
+                held.insert(id)
+            }
+            var agyFound: [String: String] = [:]
+            for (tileId, pgid) in agy {
+                guard let id = AntigravitySessions.session(forProcessGroup: pgid), !held.contains(id) else { continue }
+                agyFound[tileId] = id
                 held.insert(id)
             }
             DispatchQueue.main.async {
@@ -1593,6 +1605,11 @@ public final class Workspace {
                     // The lock says which session this tile's Devin is in now, even replacing one
                     // the command line had named (the REPL may have moved between sessions).
                     for (tile, session) in devinFound where self.terminals[tile]?.sessionId != session {
+                        self.terminals[tile]?.bind(sessionId: session, replacing: true)
+                        changed = true
+                    }
+                    // Same for agy: /resume moves a REPL, so the lock's answer replaces.
+                    for (tile, session) in agyFound where self.terminals[tile]?.sessionId != session {
                         self.terminals[tile]?.bind(sessionId: session, replacing: true)
                         changed = true
                     }
@@ -1610,7 +1627,7 @@ public final class Workspace {
         guard !titlesLoading else { return }
         let bound = terminals.values.compactMap { t -> (String, SessionResume.Tool, String)? in
             guard let id = t.sessionId, let tool = t.command.flatMap(SessionResume.conversationTool(for:)),
-                  [.claude, .codex, .devin].contains(tool) else { return nil }
+                  [.claude, .codex, .devin, .agy].contains(tool) else { return nil }
             return (t.id, tool, id)
         }
         guard !bound.isEmpty else {
@@ -1626,6 +1643,7 @@ public final class Workspace {
                 case .claude: out[tile] = OriginTitles.claude(session)
                 case .codex: out[tile] = OriginTitles.codex(session)
                 case .devin: out[tile] = OriginTitles.devin(session)
+                case .agy: out[tile] = OriginTitles.agy(session)
                 default: break
                 }
             }

@@ -2,7 +2,7 @@ import Foundation
 
 /// Desktop agent apps Tessera can open, with conversation links where the app supports them.
 public enum AgentApp: String, Codable, CaseIterable, Sendable {
-    case claude, codex, deepseekHarness, zcode
+    case claude, codex, deepseekHarness, zcode, antigravity
 
     public var bundleID: String {
         switch self {
@@ -10,6 +10,7 @@ public enum AgentApp: String, Codable, CaseIterable, Sendable {
         case .codex: "com.openai.codex"
         case .deepseekHarness: "com.deepseek.dsh"
         case .zcode: "com.enntity.zcode"
+        case .antigravity: "com.google.antigravity"
         }
     }
 
@@ -19,6 +20,7 @@ public enum AgentApp: String, Codable, CaseIterable, Sendable {
         case .codex: .codexDesktop
         case .deepseekHarness: .dsh
         case .zcode: .zcodeDesktop
+        case .antigravity: .antigravityDesktop
         }
     }
 
@@ -36,7 +38,7 @@ public enum AgentApp: String, Codable, CaseIterable, Sendable {
         return app
     }
 
-    public var routesExistingSessions: Bool { self == .claude || self == .codex || self == .zcode }
+    public var routesExistingSessions: Bool { self == .claude || self == .codex || self == .zcode || self == .antigravity }
 
     public var name: String { flavor.displayName + " app" }
 
@@ -47,6 +49,7 @@ public enum AgentApp: String, Codable, CaseIterable, Sendable {
         case .codex: "New Codex thread (app)"
         case .deepseekHarness: "Open DeepSeek Harness"
         case .zcode: "Open Enntity ZCode"
+        case .antigravity: "Open Antigravity"
         }
     }
 
@@ -58,7 +61,7 @@ public enum AgentApp: String, Codable, CaseIterable, Sendable {
             c?.queryItems = [URLQueryItem(name: "session", value: id)]
             return c?.url
         case .codex: return URL(string: "codex://threads/\(id)")
-        case .deepseekHarness, .zcode: return nil
+        case .deepseekHarness, .zcode, .antigravity: return nil
         }
     }
 
@@ -81,7 +84,7 @@ public enum AgentApp: String, Codable, CaseIterable, Sendable {
             c.path = "/new"
             if let folder, !folder.isEmpty { items.append(.init(name: "path", value: folder)) }
             if let text, !text.isEmpty { items.append(.init(name: "prompt", value: text)) }
-        case .deepseekHarness, .zcode:
+        case .deepseekHarness, .zcode, .antigravity:
             return nil
         }
         // The apps parse these like web URLs (`+` means space), so encode values strictly.
