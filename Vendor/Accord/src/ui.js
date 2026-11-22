@@ -141,7 +141,7 @@
             (filter === "done" && terminal.has(s.state)) ||
             (filter === "pinned" && pins.has(s.address))) &&
           (!text ||
-            [s.givenTitle, s.title, s.summary, s.detail, s.location, s.source].some((v) =>
+            [s.title, s.summary, s.detail, s.location, s.source].some((v) =>
               String(v ?? "")
                 .toLowerCase()
                 .includes(text),
@@ -879,7 +879,7 @@
           class: "card-title clamp",
           onClick: () => openSession(s.address),
         },
-        s.private ? "Private session" : s.givenTitle || s.title || "Untitled session",
+        s.private ? "Private session" : s.title || "Untitled session",
       ),
       h(
         "p",
@@ -2242,7 +2242,7 @@
       h(
         "h2",
         { id: "detail-title" },
-        s.private ? "Private session" : s.givenTitle || s.title || "Session",
+        s.private ? "Private session" : s.title || "Session",
       ),
       h(
         "p",
@@ -2295,7 +2295,7 @@
           h("span", { class: "source" }, sourceName(current.source)),
           badge(current.state),
         ),
-        h("h2", { id: "detail-title" }, current.givenTitle || current.title || "Session"),
+        h("h2", { id: "detail-title" }, current.title || "Session"),
         h(
           "p",
           { class: "detail-summary" },

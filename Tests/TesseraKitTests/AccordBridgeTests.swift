@@ -355,15 +355,28 @@ extension AccordBridgeTests {
         }
         let bridge = AccordBridge(profile: profile)
         bridge.digests = { [self] in [digest("bad-tile", title: ""), digest("good-tile", title: "Good tile")] }
+        bridge.renameInfo = { _ in ("supported", nil) }
         await bridge.refresh()
         XCTAssertTrue(bridge.connected)
         // The good tile was reported and read back even though the first digest was refused.
         let record = try XCTUnwrap(bridge.tileRecords["good-tile"])
         XCTAssertNil(record.givenTitle)
-        try await agentOperation(dir, "session-title", ["key": "title-1", "source": "tessera", "externalId": "good-tile", "title": "Fixture given name"])
+        // Rename flows through the request queue the tile drains itself: ask for the rename, and
+        // the next pass hands it to the tile's renamer under the request id.
+        let requested = try await agentOperation(dir, "session-title",
+                                                 ["key": "title-1", "source": "tessera",
+                                                  "externalId": "good-tile", "title": "Fixture given name"])
+        XCTAssertEqual(requested["rename"] as? String, "requested")
+        let id = try XCTUnwrap(requested["id"] as? String)
+        var renamed: (tile: String, title: String, sender: String, requestId: String)?
+        bridge.renameTile = { tile, title, sender, requestId in
+            renamed = (tile, title, sender, requestId)
+            return (true, nil)
+        }
         await bridge.refresh()
-        XCTAssertTrue(bridge.connected)
-        XCTAssertEqual(bridge.tileRecords["good-tile"]?.givenTitle, "Fixture given name")
+        XCTAssertEqual(renamed?.tile, "good-tile")
+        XCTAssertEqual(renamed?.title, "Fixture given name")
+        XCTAssertEqual(renamed?.requestId, id)
     }
 
     private func agentOperation(_ dir: URL, _ operation: String, _ args: [String: Any]) async throws -> [String: Any] {

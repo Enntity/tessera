@@ -86,7 +86,7 @@
 - New tiles can start in any folder: type a path or a recent folder's name in the launcher, or pick
   one from the folder shown there. A selected conversation's folder is used the way a terminal's is.
 - Fixed: reading Claude Code's `/usage` in the background could leave a finished Claude Code process behind each time, one every ten minutes or so, until Tessera quit. Tessera now waits for every process it starts in a terminal, including one it had to stop.
-- Bundle the published Accord 0.8.1 package, adding to 0.8.0 the fix for native bridges whose enrollment predates 0.8.0 failing to reconnect with KEY_REUSED. The 0.8.0 features remain: durable scheduled messages, workload observations on resources, and the agent record with tile links, client names and layered titles. The dependency lock records the release archive and every bundled file's SHA-256 digest.
+- Bundle the published Accord 0.9.0 package: titles now come from their origin and `accord_title` renames at the source through the tile's reported capability; operator/overseer/peer title layers are no longer shown. The dependency lock records the release archive and every bundled file's SHA-256 digest.
 
 ## 0.2.0 — source release
 

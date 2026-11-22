@@ -94,7 +94,7 @@ export function board(result){
 }
 
 export function sessions(result){
-  const view={...result,sessions:result.sessions.map(s=>clean({id:s.id,address:s.address,title:clip(s.givenTitle??s.title,120),titledBy:s.givenTitle?s.titledBy:undefined,state:s.state,
+  const view={...result,sessions:result.sessions.map(s=>clean({id:s.id,address:s.address,title:clip(s.title,120),state:s.state,
     summary:clip(s.summary,200),location:clip(s.location,80),private:s.private||undefined,presence:s.presence,source:s.source,progressAt:s.progressAt})),
     next:'Use session_read for activity (previous becomes before for older events), or sessions detail:true for full metadata.'};
   return bound(view,8192,[['sessions','moreSessions']]);

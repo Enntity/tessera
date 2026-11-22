@@ -13,6 +13,30 @@ second authority or copy tokens between hosts. Keep the previous package availab
 binary rollback; database rollback is a separate recovery operation and can invalidate
 fencing history. See [recovery](RECOVERY.md).
 
+## Install 0.9.0
+
+```sh
+npm install -g https://github.com/Enntity/accord/releases/download/v0.9.0/enntity-accord-0.9.0.tgz
+accord install
+```
+
+Migration 23 adds `rename`/`rename_reason` to session views and the
+`rename_requests` queue. Restart the coordinator the way you did for 0.8.x;
+the rest of this document applies unchanged.
+
+**Behavior change:** `accord_title` (the `session-title` operation) no longer
+layers a display name over the session. It asks the subject's Tessera tile to
+rename at the source and returns `{rename:"requested", id, ...}` once queued;
+callers that want the outcome watch `session.rename-accepted` /
+`session.rename-failed`. It refuses with `RENAME_UNSUPPORTED` when the
+subject has no tile, the tile's `session-report` says `rename:"unsupported"`
+(`renameReason` explains), or the tile is an older Tessera that reports no
+rename capability. The operator/overseer/peer `titles` layers are no longer
+read or shown anywhere — agent records report `titleSource:"origin"` — so
+anything that wrote layered titles must move to `session-title`, and anything
+that read them sees the origin title instead. Privacy cleanup still deletes
+the stale rows.
+
 ## Install 0.8.1
 
 ```sh
