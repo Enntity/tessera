@@ -27,26 +27,43 @@ public enum CodexAppServer {
         return params ?? ""
     }
 
+    /// The codex binary on the user's PATH, searching the same fallback directories the
+    /// installer does (`which` there can't be shared: it lives in the CLI module). nil when
+    /// nothing executable is found.
+    public static func codexBinary() -> URL? {
+        let path = (ProcessInfo.processInfo.environment["PATH"] ?? "")
+            + ":\(NSHomeDirectory())/.local/bin:/opt/homebrew/bin:/usr/local/bin"
+        return path.split(separator: ":").map { URL(fileURLWithPath: String($0)).appendingPathComponent("codex") }
+            .first { FileManager.default.isExecutableFile(atPath: $0.path) }
+    }
+
     /// Rename a Codex thread through `codex app-server`. Throws `Failure` on any step that doesn't
     /// answer within `timeout` seconds or answers with an error; the child is always terminated.
-    public static func renameThread(_ threadId: String, to name: String, executable: String = "codex",
+    /// `executable` lets tests substitute a script; nil resolves `codex` on PATH.
+    public static func renameThread(_ threadId: String, to name: String, executable: URL? = nil,
                                     timeout: TimeInterval = 15) async throws {
+        guard let url = executable ?? codexBinary() else {
+            throw Failure("no codex binary on PATH, so Codex threads can't be renamed")
+        }
         let process = Process()
-        process.executableURL = URL(fileURLWithPath: executable)
+        process.executableURL = url
         process.arguments = ["app-server"]
         let stdin = Pipe(), stdout = Pipe(), stderr = Pipe()
         process.standardInput = stdin
         process.standardOutput = stdout
         process.standardError = stderr
         do { try process.run() } catch { throw Failure("codex app-server didn't start: \(error.localizedDescription)") }
-        defer { if process.isRunning { process.terminate() } }
+        defer {
+            try? stdin.fileHandleForWriting.close()
+            if process.isRunning { process.terminate() }
+        }
 
         let lines = LineBuffer()
         stdout.fileHandleForReading.readabilityHandler = { handle in lines.append(handle.availableData) }
         stdin.fileHandleForWriting.write(Data((initializeRequest() + "\n").utf8))
         stdin.fileHandleForWriting.write(Data((initializedNotification + "\n").utf8))
         stdin.fileHandleForWriting.write(Data((renameRequest(threadId: threadId, name: name) + "\n").utf8))
-        try stdin.fileHandleForWriting.close()
+        // stdin stays open until the answer lands: some app-server builds exit on EOF.
 
         let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline {

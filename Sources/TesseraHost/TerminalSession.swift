@@ -366,9 +366,13 @@ public final class TerminalSession: NSObject {
     /// A program holds the terminal's foreground other than its shell — what the user is
     /// interacting with, and what a close would interrupt.
     public var runsForegroundProgram: Bool {
+        if let foregroundOverride { return foregroundOverride }
         guard let pgid = foregroundProcessGroup, let pid = process?.shellPid else { return false }
         return pgid != pid
     }
+    /// Test seam: terminals adopted into a test workspace run no real process, so tests set what
+    /// the foreground would be.
+    @ObservationIgnored internal var foregroundOverride: Bool?
 
     /// The shell's working directory right now (follows `cd`), read from the kernel.
     public func liveDirectory() -> String? {

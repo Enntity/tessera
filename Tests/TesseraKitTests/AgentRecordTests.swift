@@ -202,16 +202,15 @@ extension AgentRecordTests {
         let replayed = try await bridge.request("session-title", args: ["key": "fixture-title-1", "source": "tessera",
                                                                        "externalId": "tile-1", "title": "The Overseer"])
         XCTAssertEqual(replayed["rename"] as? String, "requested")
-        // bridge-inbox surfaces the rename delivery to the tile's host adapter, kind intact
-        // (the outbox flushes asynchronously — poll until it lands).
-        var rename: [String: Any]?
-        for _ in 0..<100 where rename == nil {
-            let inbox = try await bridge.request("bridge-inbox", args: ["source": "tessera"])
-            rename = ((inbox["deliveries"] as? [[String: Any]]) ?? []).first { $0["externalId"] as? String == "tile-1" }
-            if rename == nil { try await Task.sleep(nanoseconds: 100_000_000) }
-        }
-        XCTAssertEqual(rename?["kind"] as? String, "rename")
-        XCTAssertEqual(rename?["title"] as? String, "The Overseer")
+        // bridge-renames serves the pending request to the tile's host adapter; settling it
+        // with bridge-rename-result takes it off the queue for good.
+        var renames = ((try await bridge.request("bridge-renames", args: ["source": "tessera"]))["renames"] as? [[String: Any]]) ?? []
+        let row = try XCTUnwrap(renames.first { $0["id"] as? String == titled["id"] as? String })
+        XCTAssertEqual(row["tile"] as? String, "tile-1")
+        XCTAssertEqual(row["title"] as? String, "The Overseer")
+        _ = try await bridge.request("bridge-rename-result", args: ["id": titled["id"] as? String ?? "", "outcome": "accepted"])
+        renames = ((try await bridge.request("bridge-renames", args: ["source": "tessera"]))["renames"] as? [[String: Any]]) ?? []
+        XCTAssertTrue(renames.isEmpty)
         // An agent session with no tile refuses instead of layering on a name.
         do {
             _ = try await bridge.request("session-title", args: ["key": "fixture-title-2", "id": id, "title": "x"])

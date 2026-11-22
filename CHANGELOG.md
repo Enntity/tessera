@@ -15,10 +15,13 @@
   `thread/name/set`; every other source refuses with a "This source can't be renamed: …" reason.
   A queued rename can fail later — an expired wait or a tile that went away — and an Accord
   requester hears `Couldn't rename <tile>: <reason>` back.
-- Each tile reports `rename`/`renameReason` in its Accord session-report, and a `kind:"rename"`
-  bridge delivery is routed to the rename path rather than typed as a prompt. `accord.setTileTitle`
-  and the operator title layer are gone, as is the menu's "Named by:" row; the rename field
-  explains why a source can't be renamed instead of pretending to work.
+- Each tile reports `rename`/`renameReason` in its Accord session-report. Accord rename requests
+  are a dedicated queue Tessera drains each pass (`bridge-renames` → `bridge-rename-result`), each
+  under its stable request id so a re-served row can't queue twice; a refusal reports the reason and
+  the requester hears "Couldn't rename …" exactly once. Typed renames wait for the agent itself in
+  the tile's foreground — a shell back at its prompt refuses. `accord.setTileTitle` and the operator
+  title layer are gone, as is the menu's "Named by:" row; the rename field explains why a source
+  can't be renamed instead of pretending to work.
 - Fixed: tile titles flickered every five seconds. Each Accord pass published the tile records
   once without the agent record and again with it, so a tile named by Accord's operator, overseer,
   agent or peer layers flashed its other title between the two writes — and lost it for a whole

@@ -103,12 +103,13 @@ final class WorkspaceRenameTests: XCTestCase {
 
     /// A claude tile adopted into the workspace without launching a real agent.
     private func adopt(_ workspace: Workspace, command: String, sessionId: String? = nil,
-                       running: Bool = true, title: String? = nil) -> String {
+                       running: Bool = true, foreground: Bool? = nil, title: String? = nil) -> String {
         let t = TerminalSession(id: "t-\(UUID().uuidString.prefix(6))", command: command,
                                 cwd: NSTemporaryDirectory(), title: title, label: command,
                                 sessionId: sessionId, startSuspended: true)
         t.isSuspended = false
         t.isRunning = running
+        t.foregroundOverride = foreground ?? running
         workspace.adopt(t)
         return t.id
     }
@@ -177,17 +178,64 @@ final class WorkspaceRenameTests: XCTestCase {
             $0.localizedDescription.contains("no bound conversation")) }
     }
 
-    /// A kind:"rename" delivery runs the same path — queued for the agent — and is never a prompt.
-    /// A refusal reports back instead of typing anything.
+    /// An Accord rename request runs the same path — queued for the agent under its stable
+    /// request id — and is never a prompt. A request Accord re-serves changes nothing and
+    /// re-answers the same way; a refusal reports the reason.
     func testRenameDeliveryRoutesAndRefuses() throws {
         let (workspace, _) = try board()
         let id = adopt(workspace, command: "omp", sessionId: nil)
-        XCTAssertTrue(workspace.renameDelivery(tile: id, title: "Worker", sender: "mac/agent-1", deliveryId: "d-1"))
+        XCTAssertTrue(workspace.renameDelivery(tile: id, title: "Worker", sender: "mac/agent-1", requestId: "req-1").accepted)
         let queued = workspace.desk.messages.filter { $0.to == id }
         XCTAssertEqual(queued.last?.text, "/rename Worker")
+        XCTAssertEqual(queued.last?.id, "rename:req-1")
+        // The same request re-served queues nothing and answers the same.
+        XCTAssertTrue(workspace.renameDelivery(tile: id, title: "Worker", sender: "mac/agent-1", requestId: "req-1").accepted)
+        XCTAssertEqual(workspace.desk.messages.filter { $0.to == id }.count, 1)
         let dsh = adopt(workspace, command: "dsh")
-        XCTAssertFalse(workspace.renameDelivery(tile: dsh, title: "x", sender: "mac/agent-1", deliveryId: "d-2"))
+        let refused = workspace.renameDelivery(tile: dsh, title: "x", sender: "mac/agent-1", requestId: "req-2")
+        XCTAssertFalse(refused.accepted)
+        XCTAssertTrue(refused.reason?.contains("can't be renamed") == true)
         XCTAssertTrue(workspace.desk.messages.filter { $0.to == dsh }.isEmpty)
+        // A re-served refusal repeats the same answer instead of acting again.
+        XCTAssertFalse(workspace.renameDelivery(tile: dsh, title: "x", sender: "mac/agent-1", requestId: "req-2").accepted)
+    }
+
+    /// A shell back at its prompt after the agent left can't take /rename, even while the tile
+    /// itself still runs.
+    func testShellAtPromptRefusesAgentRename() throws {
+        let (workspace, _) = try board()
+        let id = adopt(workspace, command: "claude", running: true, foreground: false)
+        XCTAssertThrowsError(try workspace.rename(id, to: "x")) { XCTAssertTrue(
+            $0.localizedDescription.contains("This source can't be renamed: Claude Code isn't running in this tile")) }
+    }
+
+    /// An agent running inside a shell tile — adopted by its flavor, not a resumable command —
+    /// still takes its title from the origin, never a custom title.
+    func testAgentByFlavorIgnoresCustomTitle() throws {
+        let (workspace, _) = try board()
+        // `claude doctor` is an agent command no conversation parser claims.
+        let id = adopt(workspace, command: "claude doctor")
+        XCTAssertEqual(workspace.terminals[id]?.flavor, .claude)
+        workspace.terminals[id]?.rename("Stale name")
+        XCTAssertEqual(workspace.info(id)?.title, "claude doctor")
+    }
+
+    /// A Codex app conversation (id `codex:<thread>` from AgentAppWatcher) renames through the
+    /// app-server seam with the thread id, exactly like a bound Codex terminal.
+    func testCodexAppSessionRenamesThroughAppServer() async throws {
+        let (workspace, _) = try board()
+        workspace.agents.hasScanned = true
+        workspace.agents.setExternal([AgentAppSession(id: "codex:thread-77", flavor: .codexDesktop,
+            title: "Codex thread", cwd: "test", openURL: nil, resumeCommand: "codex resume thread-77",
+            snapshot: ConversationSnapshot(items: [], activity: .working, detail: nil, lastEventAt: Date()),
+            summary: nil, lastActivityAt: Date())], source: "test")
+        workspace.agentsChanged()
+        var calls: [(String, String)] = []
+        workspace.codexRenameThread = { calls.append(($0, $1)) }
+        XCTAssertEqual(try workspace.rename("codex:thread-77", to: "Harbor"), "Renaming Codex thread in Codex.")
+        try await Task.sleep(nanoseconds: 200_000_000)
+        XCTAssertEqual(calls.map(\.0), ["thread-77"])
+        XCTAssertEqual(calls.map(\.1), ["Harbor"])
     }
 
     /// Each tile's session-report answer is its real rename support.
@@ -199,5 +247,17 @@ final class WorkspaceRenameTests: XCTestCase {
         let report = workspace.renameReport(dsh)
         XCTAssertEqual(report.0, "unsupported")
         XCTAssertTrue((report.1 ?? "").contains("can't be renamed"))
+    }
+}
+
+extension RenameSupportTests {
+    /// Gated live check: `TESSERA_LIVE_CODEX_THREAD=<throwaway threadId>` exercises the real
+    /// codex binary's app-server — PATH resolution, handshake and answer — against a real thread.
+    func testLiveCodexRename() async throws {
+        guard let thread = ProcessInfo.processInfo.environment["TESSERA_LIVE_CODEX_THREAD"] else {
+            throw XCTSkip("set TESSERA_LIVE_CODEX_THREAD to a throwaway thread id")
+        }
+        try await CodexAppServer.renameThread(thread, to: "Tessera rename probe")
+        XCTAssertNotNil(CodexAppServer.codexBinary())
     }
 }

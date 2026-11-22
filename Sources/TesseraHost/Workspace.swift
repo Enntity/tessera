@@ -99,6 +99,8 @@ public final class Workspace {
     /// Routes a close asked for by an agent through the app's UI path (toast, Undo); tests leave
     /// it nil and the workspace closes directly.
     @ObservationIgnored public var onAgentClose: ((String, String) -> Void)?
+    /// A one-line note for the user (a rename that failed without an Accord requester to tell).
+    @ObservationIgnored public var onNote: ((String) -> Void)?
 
     /// Observed: acknowledging an agent session changes how its tile looks.
     private var agentAcknowledged: [String: Date] = [:]
@@ -206,8 +208,9 @@ public final class Workspace {
             Task { await self?.renameFailed(message.to, to: "", notify: message.fromAddress, reason: reason) }
         }
         accord.renameInfo = { [weak self] id in self?.renameReport(id) }
-        accord.renameTile = { [weak self] tile, title, sender, delivery in
-            self?.renameDelivery(tile: tile, title: title, sender: sender, deliveryId: delivery) ?? false
+        accord.renameTile = { [weak self] tile, title, sender, request in
+            self?.renameDelivery(tile: tile, title: title, sender: sender, requestId: request)
+                ?? (accepted: false, reason: "Tessera can't rename sources yet")
         }
         accord.deliver = { [weak self] delivery, tile, sender, text, wantsTyping in
             guard let self, let info = self.info(tile) else { return false }
@@ -259,9 +262,9 @@ public final class Workspace {
             return nil
         }
         // Agent terminals take their title from the origin: the bound session's own store when
-        // one is known, else what the program itself last set (OSC). Tessera names and Accord
-        // records never title them.
-        if let t = terminals[id], t.command.flatMap(SessionResume.conversationTool(for:)) != nil {
+        // one is known, else what the program itself last set (OSC). Tessera names (customTitle)
+        // apply only to shell and custom flavors, and Accord records never title them.
+        if let t = terminals[id], ![AgentFlavor.shell, .custom, .web].contains(t.flavor) {
             info.title = storeTitles[id] ?? t.title
         }
         info.summary = accord.summaries[id] ?? steward.summaries[id]?.summary
@@ -568,8 +571,10 @@ public final class Workspace {
     /// How this tile can be renamed at its origin, or why not.
     public func renameSupport(for id: String) -> RenameSupport {
         if let t = terminals[id] {
+            // The agent itself must hold the tile's foreground, the same check the wake
+            // pipeline makes before typing: a shell back at its prompt can't take /rename.
             return RenameSupport.support(kind: .terminal, flavor: t.flavor,
-                                         agentRunning: t.isRunning, sessionId: t.sessionId)
+                                         agentRunning: t.runsForegroundProgram, sessionId: t.sessionId)
         }
         if browsers[id] != nil { return .supported(.tessera) }
         if let a = agents.session(id) {
@@ -588,11 +593,13 @@ public final class Workspace {
     }
 
     /// Rename — any tile — at its origin. `by` is the Accord address of the requester; nil is the
-    /// user at the keyboard. Tessera-owned names apply at once (an empty name clears back to the
-    /// origin's own); agent sources are typed at the idle prompt through the wake pipeline or
-    /// asked of `codex app-server`; unsupported sources refuse. Returns what happened, for toasts.
+    /// user at the keyboard. `request` is the Accord request id: it makes the queued rename's desk
+    /// id stable, so a repeated request can't double-queue. Tessera-owned names apply at once (an
+    /// empty name clears back to the origin's own); agent sources are typed at the idle prompt
+    /// through the wake pipeline or asked of `codex app-server`; unsupported sources refuse.
+    /// Returns what happened, for toasts.
     @discardableResult
-    public func rename(_ id: String, to title: String, by sender: String? = nil) throws -> String {
+    public func rename(_ id: String, to title: String, by sender: String? = nil, request: String? = nil) throws -> String {
         let name = title.trimmingCharacters(in: .whitespacesAndNewlines)
         let label = info(id)?.title ?? id
         switch renameSupport(for: id) {
@@ -612,7 +619,7 @@ public final class Workspace {
             let route = sender == nil ? AgentDesk.Route.queued
                 : wakeRoute(for: id, kind: wakeKind(forTile: senderTile), wantsTyping: true)
             guard route != .inbox else { throw AgentTools.Refusal("This sender can't reach that tile.") }
-            desk.importMessage(id: "rename:local:\(UUID().uuidString)", text: "/rename \(typed)",
+            desk.importMessage(id: request.map { "rename:\($0)" } ?? "rename:local:\(UUID().uuidString)", text: "/rename \(typed)",
                                from: sender ?? "you", address: sender, tile: senderTile,
                                to: id, title: label, route: route)
             return "Will rename \(label) when \(terminals[id]?.flavor.displayName ?? "it") is idle."
@@ -637,20 +644,29 @@ public final class Workspace {
         }
     }
 
-    /// An Accord `kind:"rename"` delivery: never typed as a prompt; routed through the same
-    /// rename path, and the requester hears a refusal or a later failure back.
-    func renameDelivery(tile: String, title: String, sender: String, deliveryId: String) -> Bool {
-        do { _ = try rename(tile, to: title, by: sender); return true }
-        catch {
+    /// Accord rename requests already answered, so a row Accord re-serves can't act twice.
+    @ObservationIgnored private var renameSettled: [String: (accepted: Bool, reason: String?)] = [:]
+
+    /// An Accord rename request: never typed as a prompt; routed through the same rename path
+    /// under its stable request id. `accepted` means applied or queued; `failed` carries the
+    /// refusal reason. The requester also hears a refusal or a later failure back, once.
+    func renameDelivery(tile: String, title: String, sender: String, requestId: String) -> (accepted: Bool, reason: String?) {
+        if let settled = renameSettled[requestId] { return settled }
+        do {
+            _ = try rename(tile, to: title, by: sender, request: requestId)
+            renameSettled[requestId] = (accepted: true, reason: nil)
+        } catch {
+            renameSettled[requestId] = (accepted: false, reason: error.localizedDescription)
             Task { await self.renameFailed(tile, to: title, notify: sender, reason: error.localizedDescription) }
-            return false
         }
+        return renameSettled[requestId] ?? (accepted: false, reason: "Couldn't apply the rename.")
     }
 
-    /// Tell the Accord requester a rename didn't land (refusal, expiry, a failed mechanism).
+    /// Tell a rename requester a rename didn't land (refusal, expiry, a failed mechanism): the
+    /// Accord requester gets a notification; the user at the keyboard gets the note toast.
     private func renameFailed(_ tile: String, to name: String, notify sender: String?, reason: String) async {
-        guard let sender else { return }
         let title = info(tile)?.title ?? tile
+        guard let sender else { onNote?("Couldn't rename \(title): \(reason)"); return }
         _ = try? await accord.request("send", args: ["key": UUID().uuidString, "to": sender,
                                                      "text": "Couldn't rename \(title): \(reason)", "kind": "notification"])
     }
@@ -1569,7 +1585,6 @@ public final class Workspace {
             DispatchQueue.main.async {
                 MainActor.assumeIsolated {
                     self.binding = false
-                    self.readOriginTitles()
                     var changed = false
                     for (tile, session) in found {
                         self.terminals[tile]?.bind(sessionId: session)
@@ -1587,17 +1602,23 @@ public final class Workspace {
         }
     }
 
+    @ObservationIgnored private var titlesLoading = false
+
     /// Every bound agent terminal's origin title, read off the main thread on the binder's cadence.
-    /// A failed read keeps the last good title.
+    /// A failed read keeps the last good title; titles of tiles that went away are dropped.
     private func refreshOriginTitles() {
-        guard !binding else { return }
+        guard !titlesLoading else { return }
         let bound = terminals.values.compactMap { t -> (String, SessionResume.Tool, String)? in
             guard let id = t.sessionId, let tool = t.command.flatMap(SessionResume.conversationTool(for:)),
                   [.claude, .codex, .devin].contains(tool) else { return nil }
             return (t.id, tool, id)
         }
-        guard !bound.isEmpty else { return }
-        binding = true
+        guard !bound.isEmpty else {
+            let live = Set(terminals.keys)
+            storeTitles = storeTitles.filter { live.contains($0.key) }
+            return
+        }
+        titlesLoading = true
         DispatchQueue.global(qos: .utility).async {
             let titles: [String: String] = bound.reduce(into: [:]) { out, entry in
                 let (tile, tool, session) = entry
@@ -1609,23 +1630,11 @@ public final class Workspace {
                 }
             }
             DispatchQueue.main.async { MainActor.assumeIsolated {
-                self.binding = false
+                self.titlesLoading = false
                 for (tile, name) in titles where self.storeTitles[tile] != name { self.storeTitles[tile] = name }
+                let live = Set(self.terminals.keys)
+                self.storeTitles = self.storeTitles.filter { live.contains($0.key) }
             } }
-        }
-    }
-
-    /// The Codex thread whose name was just set may not have flushed to the index yet.
-    private func readOriginTitles() {
-        let bound = terminals.values.compactMap { t -> (String, SessionResume.Tool, String)? in
-            guard let id = t.sessionId, let tool = t.command.flatMap(SessionResume.conversationTool(for:)) else { return nil }
-            return (t.id, tool, id)
-        }
-        for (tile, tool, session) in bound {
-            let name = tool == .claude ? OriginTitles.claude(session)
-                : tool == .codex ? OriginTitles.codex(session)
-                : tool == .devin ? OriginTitles.devin(session) : nil
-            if let name, storeTitles[tile] != name { storeTitles[tile] = name }
         }
     }
 

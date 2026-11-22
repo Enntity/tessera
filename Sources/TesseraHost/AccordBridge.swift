@@ -63,9 +63,9 @@ public final class AccordBridge {
     @ObservationIgnored public var deliver: ((String, String, String, String, Bool) -> Bool)?
     /// What each tile reports as its rename support: ("supported", nil) or ("unsupported", reason).
     @ObservationIgnored public var renameInfo: ((String) -> (String, String?)?)?
-    /// A `kind:"rename"` bridge delivery — handled by the workspace, never typed as a prompt.
-    /// (tile, title, sender, deliveryId) → whether it was accepted for handling.
-    @ObservationIgnored public var renameTile: ((String, String, String, String) -> Bool)?
+    /// A queued rename request — handled by the workspace, never typed as a prompt.
+    /// (tile, title, sender, requestId) → (accepted, refusal reason).
+    @ObservationIgnored public var renameTile: ((String, String, String, String) -> (accepted: Bool, reason: String?))?
     @ObservationIgnored public var questions: (([[String: Any]]) -> Void)?
     @ObservationIgnored public var notes: (([[String: Any]]) -> Void)?
     @ObservationIgnored public var noteReads: (() -> [String])?
@@ -329,19 +329,23 @@ public final class AccordBridge {
             }
             let inbox = try await operation(c, "bridge-inbox", ["source": "tessera"])
             for message in (inbox["deliveries"] as? [[String: Any]]) ?? [] {
-                // A rename is a control delivery, never text for the tile's prompt.
-                if message["kind"] as? String == "rename", let delivery = message["deliveryId"] as? String,
-                   let tile = message["externalId"] as? String, let title = message["title"] as? String,
-                   let sender = message["from"] as? String {
-                    _ = renameTile?(tile, title, Self.scheduledSender(from: sender, scheduledBy: message["scheduledBy"], authority: c.2), delivery)
-                    continue
-                }
                 guard let delivery = message["deliveryId"] as? String, let tile = message["externalId"] as? String,
                       let text = message["text"] as? String, let sender = message["from"] as? String,
                       let record = message["session"] as? String,
                       deliver?(delivery, tile, Self.scheduledSender(from: sender, scheduledBy: message["scheduledBy"], authority: c.2), text, message["delivery"] as? String == "native-prompt") == true else { continue }
                 // Display is not read acknowledgement. The recipient acknowledges through Accord.
                 _ = record
+            }
+            // Rename requests are a dedicated queue, not mail: each is settled with
+            // bridge-rename-result so it never comes back.
+            let renames = ((try? await operation(c, "bridge-renames", ["source": "tessera"]))?["renames"] as? [[String: Any]]) ?? []
+            for request in renames {
+                guard let requestId = request["id"] as? String, let tile = request["tile"] as? String,
+                      let title = request["title"] as? String, let sender = request["by"] as? String else { continue }
+                let result = renameTile?(tile, title, sender, requestId) ?? (accepted: false, reason: "Tessera can't rename sources yet")
+                var args: [String: Any] = ["id": requestId, "outcome": result.accepted ? "accepted" : "failed"]
+                if let reason = result.reason { args["reason"] = reason }
+                _ = try? await operation(c, "bridge-rename-result", args)
             }
             for id in noteReads?() ?? [] {
                 _ = try await operation(c, "read", ["deliveryId":id])

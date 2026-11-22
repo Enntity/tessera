@@ -137,6 +137,7 @@ final class AppModel {
         if handOffToRunningCopy() { return }
         workspace.onLink = { [weak self] url in self?.create { $0.openBrowser(url.absoluteString) } }
         workspace.onAgentClose = { [weak self] id, by in self?.close([id], by: by) }
+        workspace.onNote = { [weak self] text in self?.note = text }
         // In privacy mode the steward reads nothing and agents can't read tiles.
         workspace.steward.paused = { [weak self] in self?.privacyMode ?? true }
         workspace.agentTools.privacy = { [weak self] in self?.privacyMode ?? true }
