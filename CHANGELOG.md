@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+- Tile titles come from their origin, and renames write through to it. Shells, custom terminals
+  and pages keep Tessera's name (an empty one goes back to the program's own title); agent
+  terminals show the bound session's own name — Claude's transcript `customTitle`, Codex's
+  `thread_name`, Devin's `sessions.title` — or its terminal title until the session is bound;
+  app conversations keep the app's name. Accord records no longer overlay a tile's title, and
+  the old saved custom-title and agent-title layers are dropped on load.
+- Rename… and `rename_tile` (`tessera rename <tile> <name…>`) act at the source: Tessera-owned
+  tiles rename at once; Claude, Devin, omp and Antigravity (`agy`, new flavor) get `/rename` typed
+  at the idle prompt through the usual wake rules (yours queues, another agent asks first unless
+  the overseer policy allows); Codex terminals and app threads go through `codex app-server`
+  `thread/name/set`; every other source refuses with a "This source can't be renamed: …" reason.
+  A queued rename can fail later — an expired wait or a tile that went away — and an Accord
+  requester hears `Couldn't rename <tile>: <reason>` back.
+- Each tile reports `rename`/`renameReason` in its Accord session-report, and a `kind:"rename"`
+  bridge delivery is routed to the rename path rather than typed as a prompt. `accord.setTileTitle`
+  and the operator title layer are gone, as is the menu's "Named by:" row; the rename field
+  explains why a source can't be renamed instead of pretending to work.
 - Fixed: tile titles flickered every five seconds. Each Accord pass published the tile records
   once without the agent record and again with it, so a tile named by Accord's operator, overseer,
   agent or peer layers flashed its other title between the two writes — and lost it for a whole

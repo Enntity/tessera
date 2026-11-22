@@ -18,6 +18,8 @@ public enum TileKind: String, Codable, Sendable {
 public enum AgentFlavor: String, Codable, Sendable, CaseIterable {
     case shell, claude, codex, devin, grok, gemini, omp, opencode, aider, custom
     case claudeDesktop, codexDesktop, zcodeDesktop
+    /// Antigravity's `agy` CLI.
+    case antigravity
     /// DeepSeek Harness (`dsh`) sessions.
     case dsh
     case web
@@ -42,6 +44,7 @@ public enum AgentFlavor: String, Codable, Sendable, CaseIterable {
         case .claudeDesktop: "Claude"
         case .codexDesktop: "Codex"
         case .zcodeDesktop: "Enntity ZCode"
+        case .antigravity: "Antigravity"
         case .dsh: "DeepSeek"
         case .web: "Web"
         case .lloom: "LLooM"
@@ -63,6 +66,7 @@ public enum AgentFlavor: String, Codable, Sendable, CaseIterable {
         case .opencode: "curlybraces"
         case .aider: "wand.and.stars"
         case .custom: "gearshape.2"
+        case .antigravity: "arrow.triangle.2.circlepath"
         case .dsh: "water.waves"
         case .web: "globe"
         case .lloom: "square.stack.3d.up"
@@ -82,6 +86,7 @@ public enum AgentFlavor: String, Codable, Sendable, CaseIterable {
         case .grok: return .grok
         case .opencode: return .opencode
         case .omp: return .omp
+        case .agy: return .antigravity
         case nil: break
         }
         let exe = (first as NSString).lastPathComponent.lowercased()
@@ -94,6 +99,7 @@ public enum AgentFlavor: String, Codable, Sendable, CaseIterable {
         case "omp": return .omp
         case "opencode": return .opencode
         case "aider": return .aider
+        case "agy": return .antigravity
         case "dsh": return .dsh
         case "zsh", "bash", "fish", "sh": return .shell
         default: return .custom

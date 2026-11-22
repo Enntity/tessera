@@ -82,7 +82,6 @@ struct TileMenu: View {
             Menu("Accord") {
                 if let agent = record.agentAddress { Button("Agent: \(agent)") {}.disabled(true) }
                 if let client = record.client { Button("Client: \(client)") {}.disabled(true) }
-                if let source = record.titleSource { Button("Named by: \(source)") {}.disabled(true) }
                 if let task = record.task { Button("Task: \(task)") {}.disabled(true) }
                 Button("Session: \(record.address)") {}.disabled(true)
             }
@@ -114,8 +113,9 @@ struct TileMenu: View {
     }
 }
 
-/// Rename…, for any tile: a name of the user's own, kept with the board. An empty name goes back
-/// to the tile's own title.
+/// Rename…, for any tile: a new name at the tile's origin. Sources Tessera can name itself take it
+/// at once (an empty name goes back to the origin's own); agents get it through their own rename
+/// when next idle; what can't be renamed says why instead of offering a field.
 struct RenamePopover: ViewModifier {
     @Environment(AppModel.self) private var model
     let info: TileInfo
@@ -125,15 +125,24 @@ struct RenamePopover: ViewModifier {
     func body(content: Content) -> some View {
         content
             .popover(isPresented: $isPresented) {
-                TextField("Title", text: $draft)
-                    .textFieldStyle(.roundedBorder)
-                    .frame(width: Style.Metrics.nameField)
-                    .padding(Style.Space.gutter)
-                    .onAppear { draft = info.title }
-                    .onSubmit {
-                        model.workspace.rename(info.id, to: draft)
-                        isPresented = false
+                let support = model.workspace.renameSupport(for: info.id)
+                VStack(alignment: .leading, spacing: Style.Space.xs) {
+                    TextField("Title", text: $draft)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: Style.Metrics.nameField)
+                        .disabled(support.mechanism == nil)
+                        .onSubmit {
+                            do { model.note = try model.workspace.rename(info.id, to: draft) }
+                            catch { model.note = error.localizedDescription }
+                            isPresented = false
+                        }
+                    if case .unsupported(let reason) = support {
+                        Text(reason).font(Style.ui(.label)).foregroundStyle(Style.dim)
+                            .frame(width: Style.Metrics.nameField, alignment: .leading)
                     }
+                }
+                .padding(Style.Space.gutter)
+                .onAppear { draft = info.title }
             }
             .onChange(of: isPresented) { _, shown in if !shown { model.restoreFocus() } }
     }

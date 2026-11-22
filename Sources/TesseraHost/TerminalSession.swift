@@ -19,7 +19,7 @@ public final class TerminalSession: NSObject {
     /// command, or bound from the tool's session log).
     public private(set) var sessionId: String?
     /// Shut down by the user (or restored that way); Resume brings the conversation back.
-    public private(set) var isSuspended = false
+    public internal(set) var isSuspended = false
     /// The last time the user's hands touched the terminal — keyboard or a paste through the
     /// view — which a queued wake message waits out. `send(_:)`, how messages are typed in,
     /// does not count.
@@ -64,7 +64,7 @@ public final class TerminalSession: NSObject {
     @ObservationIgnored private(set) var clock: Timer?
     @ObservationIgnored private var nextScanAt: Date = .distantPast
     @ObservationIgnored private var progress: Double?
-    @ObservationIgnored public private(set) var isRunning = false
+    @ObservationIgnored public internal(set) var isRunning = false
     /// Opens web links clicked in this terminal (the workspace makes them web tiles).
     @ObservationIgnored public var onOpenLink: ((URL) -> Void)?
     /// Called when what this tile would resume changes (an agent started or ended), so it can be saved.

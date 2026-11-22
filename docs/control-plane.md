@@ -69,8 +69,15 @@ own tile is never closed:
 | `tessera whoami` | `whoami` | Caller tile, when identifiable |
 | `tessera read <tile> [--lines N]` | `read_tile` | Redacted native screen or transcript |
 | `tessera send <tile> <text…>` | `send_to_tile` | A message typed at a terminal agent's idle prompt (asks first as policy allows) |
+| `tessera rename <tile> <name…>` | `rename_tile` | Rename a tile at its origin: shells and pages at once; claude, devin, omp and agy typed as `/rename` when idle; Codex through `codex app-server`. Sources that can't be renamed answer why |
 | `tessera close <tile> [--force]` | `close_tile` | Close an idle tile as the developer would (toast + Undo); `--force` asks first when busy |
 | `tessera open <agent> <cwd> [--title T] [--prompt TEXT] [--resume ID]` | `open_tile` | Open a shell/claude/codex/devin/omp tile quietly; `reopen` brings a closed tile back; capped per caller per hour |
+
+A tile's title is its origin's own: a shell or page keeps the name the user gave it (an empty
+rename goes back to the program's own), an agent terminal keeps what the agent's store or terminal
+title reports, and an app conversation keeps the app's name. Accord observations carry the same
+title — there is no separate layer to override it — plus each tile's rename support, so an Accord
+`session-title` request either lands at the origin or is refused with the reason.
 
 `tessera install` configures Accord and the optional native tools. `tessera mcp` serves native
 inspection over stdio. Removed Tessera messaging, questions and resource commands are not

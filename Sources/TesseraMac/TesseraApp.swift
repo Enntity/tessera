@@ -120,6 +120,8 @@ final class AppModel {
     #endif
     /// The last close, while its toast offers to undo it.
     private(set) var closedToast: ClosedToast?
+    /// A short-lived note (a queued rename, a refusal), shown where the close toast sits.
+    var note: String?
     /// The closes Edit ▸ Undo can still undo, the latest last.
     private var undoMarks: [UndoMark] = []
     @ObservationIgnored weak var window: NSWindow?

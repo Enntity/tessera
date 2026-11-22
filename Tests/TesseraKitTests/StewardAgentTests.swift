@@ -184,7 +184,7 @@ final class AgentAPITests: XCTestCase {
         XCTAssertEqual((result["serverInfo"] as? [String: Any])?["name"] as? String, "tessera")
         let list = try await call(workspace, "tools/list")
         let names = ((list["result"] as? [String: Any])?["tools"] as? [[String: Any]])?.compactMap { $0["name"] as? String }
-        XCTAssertEqual(names, ["board", "close_tile", "open_tile", "read_tile", "send_to_tile", "whoami"])
+        XCTAssertEqual(names, ["board", "close_tile", "open_tile", "read_tile", "rename_tile", "send_to_tile", "whoami"])
         let unknown = try await call(workspace, "nope")
         XCTAssertNotNil(unknown["error"])
         let malformedCaller = try await call(workspace, "tools/call", ["name": "whoami", "_meta": ["tessera/caller": "invalid scalar"]])
