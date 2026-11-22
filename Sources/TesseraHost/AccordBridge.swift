@@ -257,28 +257,20 @@ public final class AccordBridge {
             // Accord's `list` caps at 200; with more, the most recent 200 cover the sweep.
             let own = (try? await operation(c, "sessions", ["source": "tessera", "limit": 200]))?["sessions"] as? [[String: Any]] ?? []
             let held = Self.tileRecords((board["sessions"] as? [[String: Any]] ?? []) + own, authority: c.2)
-            if held != tileRecords { tileRecords = held }
             let senders = Self.senderTiles((board["sessions"] as? [[String: Any]] ?? []) + own, authority: c.2)
             if senders != senderTiles { senderTiles = senders }
             // The agent record comes from find, one participant per agent; an older Accord has
             // no `agent` object and simply yields nothing here.
+            let agents: [String: (address: String, agent: [String: Any])]?
             if let found = try? await operation(c, "find", ["detail": true, "local": true]),
                let participants = (found["hosts"] as? [[String: Any]])?.first?["participants"] as? [[String: Any]] {
-                let agents = Self.agentByTile(participants, authority: c.2)
-                var merged = tileRecords
-                for (tile, record) in merged {
-                    guard let match = agents[tile] else { continue }
-                    var next = record, agent = match.agent
-                    next.agentAddress = match.address
-                    next.title = agent["title"] as? String
-                    next.titleSource = agent["titleSource"] as? String
-                    next.task = (agent["task"] as? String).map { String($0.prefix(80)) }
-                    next.client = agent["client"] as? String
-                    merged[tile] = next
-                }
-                if merged != tileRecords { tileRecords = merged }
-                await designateOverseer(c, agents: agents)
+                agents = Self.agentByTile(participants, authority: c.2)
+            } else {
+                agents = nil
             }
+            let merged = Self.mergingAgents(agents, into: held, previous: tileRecords)
+            if merged != tileRecords { tileRecords = merged }
+            if let agents { await designateOverseer(c, agents: agents) }
             // A tile closed while Tessera was away was never reported; its observation is still
             // live on Accord. Sweep the first pass after connecting, then every ten minutes —
             // but never on a board that looks emptied or mostly gone: that is a broken restore,
@@ -445,6 +437,35 @@ public final class AccordBridge {
             found[linked] = (address, agent)
         }
         return found
+    }
+
+    /// Tile records with the agent record merged in. `agents` is nil when find failed or the Accord
+    /// predates it; then each tile keeps the agent fields it had, so a missed pass changes nothing.
+    static func mergingAgents(_ agents: [String: (address: String, agent: [String: Any])]?,
+                              into held: [String: TileRecord], previous: [String: TileRecord]) -> [String: TileRecord] {
+        var merged = held
+        for (tile, record) in merged {
+            guard let match = agents?[tile] else {
+                if agents == nil, let prior = previous[tile] {
+                    var next = record
+                    next.agentAddress = prior.agentAddress
+                    next.title = prior.title
+                    next.titleSource = prior.titleSource
+                    next.task = prior.task
+                    next.client = prior.client
+                    merged[tile] = next
+                }
+                continue
+            }
+            var next = record, agent = match.agent
+            next.agentAddress = match.address
+            next.title = agent["title"] as? String
+            next.titleSource = agent["titleSource"] as? String
+            next.task = (agent["task"] as? String).map { String($0.prefix(80)) }
+            next.client = agent["client"] as? String
+            merged[tile] = next
+        }
+        return merged
     }
 
     /// Whose wake policy a message answers to: a native-prompt from this host's scheduler is

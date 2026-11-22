@@ -209,4 +209,62 @@ extension AgentRecordTests {
         let replayed = try await bridge.request("session-title", args: ["key": "fixture-title-1", "id": id, "title": "The Overseer"])
         XCTAssertEqual(replayed["titleSource"] as? String ?? (replayed["agent"] as? [String: Any])?["titleSource"] as? String, "operator")
     }
+
+    private func heldRecord(_ tile: String, title: String? = nil) -> AccordBridge.TileRecord {
+        AccordBridge.TileRecord(address: "mac/" + tile + "-obs", givenTitle: title, changedAt: Date())
+    }
+
+    func testMergingAgentsAppliesTheAgentRecordAndLeavesTheObservationIntact() {
+        let held = ["tile-1": heldRecord("tile-1", title: "Given name")]
+        let agents = AccordBridge.agentByTile([participant("mac/mcp", tile: "tile-1", role: "agent",
+                                                         title: "The Overseer", titleSource: "overseer",
+                                                         task: "watching the board", client: "devin")], authority: "mac")
+        let merged = AccordBridge.mergingAgents(agents, into: held, previous: [:])
+        let record = merged["tile-1"]
+        XCTAssertEqual(record?.agentAddress, "mac/mcp")
+        XCTAssertEqual(record?.title, "The Overseer")
+        XCTAssertEqual(record?.titleSource, "overseer")
+        XCTAssertEqual(record?.task, "watching the board")
+        XCTAssertEqual(record?.client, "devin")
+        XCTAssertEqual(record?.givenTitle, "Given name")
+        XCTAssertEqual(record?.address, "mac/tile-1-obs")
+    }
+
+    func testAMissedFindKeepsTheAgentFieldsTheTileAlreadyHad() {
+        let held = ["tile-1": heldRecord("tile-1")]
+        let agents = AccordBridge.agentByTile([participant("mac/mcp", tile: "tile-1", title: "The Overseer",
+                                                         titleSource: "overseer", task: "watching", client: "devin")], authority: "mac")
+        let merged = AccordBridge.mergingAgents(agents, into: held, previous: [:])
+        // find failed this pass: nothing about the tile's agent record may change.
+        XCTAssertEqual(AccordBridge.mergingAgents(nil, into: held, previous: merged), merged)
+    }
+
+    func testATileAbsentFromASuccessfulFindLosesItsAgentFields() {
+        let held = ["tile-1": heldRecord("tile-1"), "tile-2": heldRecord("tile-2")]
+        var previous = held
+        previous["tile-2"]!.agentAddress = "mac/gone"
+        previous["tile-2"]!.title = "Old name"
+        previous["tile-2"]!.titleSource = "peer"
+        previous["tile-2"]!.task = "old task"
+        previous["tile-2"]!.client = "cli"
+        let agents = AccordBridge.agentByTile([participant("mac/mcp", tile: "tile-1", title: "Kept",
+                                                         titleSource: "agent")], authority: "mac")
+        let merged = AccordBridge.mergingAgents(agents, into: held, previous: previous)
+        XCTAssertEqual(merged["tile-1"]?.title, "Kept")
+        XCTAssertNil(merged["tile-2"]?.agentAddress)
+        XCTAssertNil(merged["tile-2"]?.title)
+        XCTAssertNil(merged["tile-2"]?.titleSource)
+        XCTAssertNil(merged["tile-2"]?.task)
+        XCTAssertNil(merged["tile-2"]?.client)
+    }
+
+    func testMergingTheSamePassTwiceChangesNothing() {
+        let held = ["tile-1": heldRecord("tile-1", title: "Given name")]
+        let agents = AccordBridge.agentByTile([participant("mac/mcp", tile: "tile-1", title: "The Overseer",
+                                                         titleSource: "overseer", task: "watching", client: "devin")],
+                                              authority: "mac")
+        let first = AccordBridge.mergingAgents(agents, into: held, previous: [:])
+        // The refresh loop only assigns when the merge differs, so a repeat pass must be equal.
+        XCTAssertEqual(AccordBridge.mergingAgents(agents, into: held, previous: first), first)
+    }
 }
