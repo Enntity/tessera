@@ -39,7 +39,7 @@ export class AccordClient {
     }
   }
   me() { return request(this.url, this.credential, '/v1/me'); }
-  collaborate(operation,args={},host,timeout=operation.startsWith('workload-')?30000:4000) { return request(this.url,this.credential,'/v1/collaboration',{operation,args,...(host?{host}:{})},timeout); }
+  collaborate(operation,args={},host,timeout=/^(workload|messenger)-/.test(operation)?30000:4000) { return request(this.url,this.credential,'/v1/collaboration',{operation,args,...(host?{host}:{})},timeout); }
   announce({key=randomUUID(),...args}) {return this.collaborate('announce',{...args,key});}
   find(query='',{detail=false,local=false}={}){return this.collaborate('find',{query,...(detail?{detail:true}:{}),...(local?{local:true}:{})});}
   send(to,text,{key=randomUUID(),kind='message',delivery='inbox'}={}){return this.collaborate('send',{to,text,key,kind,delivery});}

@@ -64,7 +64,7 @@ export function find(result,query=''){
   return view;
 }
 export const reservation=r=>clean({...r,workloads:r.workloads?workloadLines(r.workloads):undefined});
-export const schedule=s=>clean({id:s.id,state:s.state,to:s.to,trigger:s.trigger,nextAt:s.nextAt?new Date(s.nextAt).toISOString():undefined,firedCount:s.firedCount||undefined,expiresAt:new Date(s.expiresAt).toISOString(),endedReason:s.endedReason,lastError:s.lastError});
+export const schedule=s=>clean({id:s.id,state:s.state,to:s.to,trigger:s.trigger,text:s.text===undefined?undefined:String(s.text).slice(0,80),nextAt:s.nextAt?new Date(s.nextAt).toISOString():undefined,firedCount:s.firedCount||undefined,persistent:s.persistent||undefined,expiresAt:s.expiresAt!==undefined?new Date(s.expiresAt).toISOString():undefined,endedReason:s.endedReason,lastError:s.lastError});
 export const schedules=r=>clean({schedules:(r.schedules??[]).map(schedule)});
 
 // Mutates only the supplied presentation arrays. Complete records remain in storage.

@@ -97,14 +97,40 @@ hooks and unread counts see the same durable state regardless of sender host.
 
 ## Retired recipients
 
-A send to a retired address fails immediately with `RECIPIENT_RETIRED` (410).
-When the retired session has a recorded `successor` — a rebound native
-conversation, for example — the error includes the successor's address, resolved
-through at most ten hops. The same rejection happens on the receiving host for
-remote delivery, and the sender's outbox marks that envelope `failed`
-permanently instead of retrying it. Unread mail already delivered to the retired
-address stays readable by the successor through the bound-conversation aliases
+A send to a retired address follows the retired session's successor chain
+(resolved through at most ten hops) when it ends at a live recipient: the mail
+is delivered to the successor and the send result carries
+`redirectedTo: '<authority>/<id>'`. With no live successor the send still fails
+immediately with `RECIPIENT_RETIRED` (410), naming the last known successor in
+the error when one is recorded. The receiving host applies the same rule to
+remote envelopes, so mail queued before a retirement lands with the successor
+too; without one the sender's outbox marks that envelope `failed` permanently
+instead of retrying it. Unread mail already delivered to the retired address
+stays readable by the successor through the bound-conversation aliases
 described above.
+
+## Tile agents
+
+A Tessera tile is its own observed session, but the agent running inside it
+changes over time. `tileAgent(tile)` — used by `bridge-inbox` for `tessera`
+observations — resolves the actor currently speaking for the tile: the
+`tessera:<tile>` binding's actor followed through successors (≤10 hops) while
+retired or closed, and when that chain dies or no binding exists, the most
+recently linked live `agent`-role actor. Nested actors never qualify. The
+bridge inbox returns mail for that actor plus the tile observation's own
+inbox, deduplicated by delivery id, so mail addressed to the tile's real agent
+is actually surfaced to the adapter. `agentRecord.tile` carries
+`current: true` on the actor the rule picks.
+
+Enrollment narrows who may claim a tile: Tessera exports
+`TESSERA_TILE_AGENT=<flavor>` (claude, codex, devin, omp, agy, shell) in each
+tile's environment. An MCP enrollment links as `agent` only when its client
+family matches — codex clients need `codex`, claude clients need `claude`,
+zcode needs `zcode`, and any other client needs a flavor outside
+codex/claude/zcode/shell. A mismatch links as `nested` and never takes the
+`tessera:<tile>` binding, so a scratch client run inside an agent's tile
+cannot steal its mailbox. With the variable unset, enrollment behaves exactly
+as before.
 
 ## Scheduled deliveries
 
@@ -115,10 +141,27 @@ message text reads `Scheduled by <owner label> (<schedule id>): <text>` plus
 any event detail; the envelope data carries `scheduledBy` (the owner's
 address) and `scheduleId`, which surfaces in the inbox view so adapters such
 as Tessera can apply the owner's wake policy — including native-prompt
-delivery when the schedule requested `wake`. Tessera support lands in a later
-change. Scheduled message ids are deterministic, so retries cannot duplicate
-a delivery; every other outbox rule — `RECIPIENT_*` failures, expiry and the
-durable queue — applies unchanged.
+delivery when the schedule requested `wake`. Tessera types native-prompt
+scheduled mail once the tile's agent is idle: before typing it checks
+`bridge-unread` so a message the agent already read is dropped instead of
+typed, and queued messages with the same `scheduleId` coalesce so only the
+newest wake waits. Scheduled message ids are deterministic, so retries cannot
+duplicate a delivery; every other outbox rule — `RECIPIENT_*` failures, expiry
+and the durable queue — applies unchanged.
+
+Schedules can be `persistent` (`expiresInMs` is refused alongside it): they
+never expire and show `persistent: true` instead of `expiresAt`. They can be
+paused with `schedule-pause` — paused rows ignore events and fires, resume
+re-arms the trigger from now, and non-persistent paused rows still expire on
+schedule. An interval schedule whose previous fire is still unread skips the
+next fire rather than stacking wakes. A retired target at fire time follows
+its successor when one is live and ends `target-retired` when none is. Rows
+leaving `active`/`paused` keep a 72-hour retention window in `expires_at`
+before the tick deletes them. The designated overseer may list all schedules
+and pause or cancel any owner's rows.
+
+`bridge-unread {ids}` lets a host adapter ask which delivery ids are still
+unread (still pending or offered) before typing them.
 
 ## Qualification
 

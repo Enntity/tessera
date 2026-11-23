@@ -853,6 +853,31 @@ export class SessionAwareness {
   tileView(tileId) {
     return this.db.prepare("SELECT * FROM session_views WHERE source='tessera' AND external_id=?").get(tileId);
   }
+  // The actor currently speaking for a tile: the tessera:<tile> binding's actor,
+  // followed through successors (≤10 hops) while retired or closed. A chain
+  // that dies without a live actor — or no binding at all — falls back to the
+  // most recently linked live agent-role actor. Nested actors never qualify.
+  tileAgent(tile) {
+    const now = this.store.now();
+    const live = (id) => {
+      const s = this.db.prepare("SELECT closed_at,retired_at,expires_at FROM sessions WHERE id=?").get(id);
+      return !!s && s.closed_at === null && s.retired_at === null && s.expires_at > now;
+    };
+    const nested = (id) => !!this.db.prepare("SELECT 1 FROM agent_tiles WHERE actor=? AND role='nested'").get(id);
+    let actor = this.db.prepare("SELECT actor FROM session_bindings WHERE source='tessera' AND external_id=?").get(tile)?.actor;
+    const seen = new Set();
+    for (let hops = 0; actor && !live(actor) && hops < 10; hops++) {
+      if (seen.has(actor)) { actor = null; break; }
+      seen.add(actor);
+      actor = this.db.prepare("SELECT successor FROM sessions WHERE id=?").get(actor)?.successor ?? null;
+    }
+    if (actor && live(actor) && !nested(actor)) return actor;
+    return this.db.prepare(
+      `SELECT t.actor FROM agent_tiles t JOIN sessions s ON s.id=t.actor
+       WHERE t.tile=? AND t.role='agent' AND s.closed_at IS NULL AND s.retired_at IS NULL AND s.expires_at>?
+       ORDER BY t.linked_at DESC LIMIT 1`,
+    ).get(tile, now)?.actor ?? null;
+  }
   // One record per agent: tile link (binding counts as role agent), the title
   // the origin reports — the tile's own name when it has one, the agent's own
   // session title otherwise — the current task, previous addresses and the
@@ -875,7 +900,7 @@ export class SessionAwareness {
     return {
       host: { authority: this.store.authority, name: this.hostName },
       client,
-      ...(tile ? { tile: { id: tile.tile, role: tile.role } } : {}),
+      ...(tile ? { tile: { id: tile.tile, role: tile.role, ...(this.tileAgent(tile.tile) === actorId ? { current: true } : {}) } } : {}),
       title, titleSource: "origin",
       ...(job?.title ?? participant?.activity ? { task: job?.title ?? participant?.activity } : {}),
       ...(previous.length ? { previous } : {}),

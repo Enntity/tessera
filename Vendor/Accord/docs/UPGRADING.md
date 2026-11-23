@@ -13,6 +13,57 @@ second authority or copy tokens between hosts. Keep the previous package availab
 binary rollback; database rollback is a separate recovery operation and can invalidate
 fencing history. See [recovery](RECOVERY.md).
 
+## Install 0.10.0
+
+```sh
+npm install -g https://github.com/Enntity/accord/releases/download/v0.10.0/enntity-accord-0.10.0.tgz
+accord install
+```
+
+Migration 24 is additive: it creates `messenger_claims` (one holder per Messenger
+identity) and `messenger_leases` (the lease tokens Accord keeps so a holder's
+reply can acknowledge). No existing table or migration checksum changes. Restart
+the coordinator the way you did for 0.9.0; the rest of this document applies
+unchanged.
+
+**Behavior change — successor follow.** A send to a retired recipient whose
+successor chain ends at a live recipient is now delivered to that successor and
+the send result carries `redirectedTo`; the receiving host applies the same rule
+to remote envelopes. With no live successor the send still fails
+`RECIPIENT_RETIRED`, and schedules whose target has no live successor now end
+`target-retired` instead of failing.
+
+**Schedules.** New `persistent: true` schedules never expire (refused with
+`expiresInMs`, still capped per owner); `schedule-pause {id, paused}` suspends
+any trigger kind and re-arms it on resume; an interval fire whose previous
+message is still unread is skipped instead of stacking; rows leaving
+active/paused are retained 72 hours and then pruned. The designated overseer may
+list all schedules and pause or cancel any owner's. Schedule views now include
+`text`.
+
+**Tile agent and nested gating.** `bridge-inbox` for a `tessera` view serves the
+tile's live agent — the binding's actor followed through successors — and
+`agentRecord.tile` marks that actor `current: true`. An MCP enrollment reads
+`TESSERA_TILE_AGENT` and links as `agent` only when its client family matches
+the tile's flavor; a mismatch links as `nested` and never binds the tile. Unset
+keeps the previous behavior.
+
+**New operation.** `bridge-unread {ids}` (admin only, ≤200 delivery ids)
+reports which deliveries are still pending or offered, so a bridge never types
+mail the agent already handled.
+
+**Messenger claims.** The watcher and claim machinery from migration 24 start
+only for principals named in `messenger.json`; with no `messenger.json` the
+watcher idles and nothing changes. See [MESSENGER-CLAIMS](MESSENGER-CLAIMS.md).
+
+**Rollback.** Migration 24 is forward-only: a 0.9.0 binary enumerates the
+database's migration rows, finds a version it does not know (24), and refuses
+to start with `SCHEMA_MISMATCH` — "Unsupported or changed database migration"
+(503). Rollback is therefore not "reinstall 0.9.0": restore the pre-activation
+database backup the deployment procedure takes before the coordinator restarts,
+then run the 0.9.0 binary against it. As before, never delete the migration
+record or restore older fencing history just to make a downgrade start.
+
 ## Install 0.9.0
 
 ```sh
