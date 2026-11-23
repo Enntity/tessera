@@ -60,6 +60,17 @@ extension AppModel {
             case "machine": workspace.machines.add(host: arg, name: nil)
             case "vitals": debugRead([MachineVitals].self, arg).map(workspace.machines.pin)
             case "accounts": debugRead([UsageReading].self, arg).map(workspace.usage.pin)
+            // schedules=<file>: a demo-shot seed — JSON {agentAddress, tile?, schedules:[…]},
+            // feeds the tile's schedule line, tile menu and the overseer's Schedules list.
+            case "schedules":
+                if let data = try? Data(contentsOf: URL(fileURLWithPath: arg)),
+                   let seed = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                   let agent = seed["agentAddress"] as? String {
+                    let tile = (seed["tile"] as? String).flatMap { $0 == "selected" ? workspace.selectedId : debugTile($0) }
+                        ?? workspace.selectedId
+                    let list = (seed["schedules"] as? [[String: Any]] ?? []).compactMap(AccordSchedule.init)
+                    if let tile { workspace.accord.debugSeedSchedules(list, tile: tile, agentAddress: agent) }
+                }
             case "remote": server.start() // not persisted: normal launches keep the user's setting
             case "pairurl": try? server.pairingURL?.absoluteString.write(toFile: arg, atomically: true, encoding: .utf8)
             case "privacy": privacyMode = arg != "off"

@@ -23,6 +23,25 @@ to the user as Open and Copy. Tessera persists an attempt before touching the te
 automatically replays an uncertain attempt after a crash. Terminal input does not prove that the
 agent acted on it.
 
+Queued mail is verified unread before it is typed. Tessera asks Accord `bridge-unread` for the
+delivery id; a delivery the recipient already read (or that died) is marked handled and never
+typed — reading mail elsewhere is enough to cancel a pending wake. When the coordinator can't
+answer, the message types as before. A wake a schedule produced carries its schedule id: a newer
+fire supersedes an older queued one for the same tile, so a busy agent returns to one pending
+wake, not a stack of them.
+
+The desk keeps its own ledger (`accord-desk.json`), pruned of terminal-state entries older than
+seven days while Accord remains the authority on unread mail. Closing a tile for good fails its
+queued wakes.
+
+## Schedules
+
+Accord's live schedules surface where they act: an agent tile shows a short line for each of its
+agent's schedules ("every 10m: check Messenger"), its tile menu offers Pause/Resume and Delete,
+and the overseer panel keeps a collapsible list of all of them with the same controls. Paused and
+active rows show; ended rows don't. On an Accord that predates these operations the display and
+controls stay hidden.
+
 ## Human decisions
 
 Agents use `accord_ask` with answer choices and retrieve the result with `accord_question`.

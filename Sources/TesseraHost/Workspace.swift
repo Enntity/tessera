@@ -212,14 +212,17 @@ public final class Workspace {
             self?.renameDelivery(tile: tile, title: title, sender: sender, requestId: request)
                 ?? (accepted: false, reason: "Tessera can't rename sources yet")
         }
-        accord.deliver = { [weak self] delivery, tile, sender, text, wantsTyping in
+        accord.deliver = { [weak self] delivery, tile, sender, text, wantsTyping, scheduleId in
             guard let self, let info = self.info(tile) else { return false }
             let senderTile = self.tileForSender(sender)
             let kind = self.wakeKind(forTile: senderTile)
             let label = senderTile.flatMap { self.info($0)?.title } ?? sender
             return self.desk.importMessage(id: "accord:" + delivery, text: text, from: label, address: sender, tile: senderTile,
-                                           to: tile, title: info.title, route: self.wakeRoute(for: tile, kind: kind, wantsTyping: wantsTyping))
+                                           to: tile, title: info.title, route: self.wakeRoute(for: tile, kind: kind, wantsTyping: wantsTyping),
+                                           scheduleId: scheduleId)
         }
+        accord.pendingCardDeliveries = { [weak self] in self?.desk.pendingCardDeliveries ?? [] }
+        accord.cardHandled = { [weak self] id in self?.desk.markHandled("accord:" + id) }
         desk.openWithText = { [weak self] tile, text in
             guard let self else { return false }
             NSPasteboard.general.clearContents()
@@ -264,8 +267,9 @@ public final class Workspace {
         // Agent terminals take their title from the origin: the bound session's own store when
         // one is known, else what the program itself last set (OSC). Tessera names (customTitle)
         // apply only to shell and custom flavors, and Accord records never title them.
-        if let t = terminals[id], ![AgentFlavor.shell, .custom, .web].contains(t.flavor) {
-            info.title = storeTitles[id] ?? t.title
+        if let t = terminals[id] {
+            info.title = Self.tileTitle(overseer: id == overseerId, flavor: t.flavor,
+                                        storeTitle: storeTitles[id], programTitle: t.title) ?? info.title
         }
         info.summary = accord.summaries[id] ?? steward.summaries[id]?.summary
         info.needs = steward.summaries[id]?.needs ?? steward.brief?.attention.first { $0.id == id }?.why
@@ -279,7 +283,17 @@ public final class Workspace {
         }
         if info.needs?.isEmpty == true { info.needs = nil }
         info.wake = desk.wakeMark(for: id)
+        info.scheduleLines = schedules(for: id).map(\.line)
         return info
+    }
+
+    /// A terminal tile's displayed title: the overseer is Tessera's own face on the board and is
+    /// always called Tessera, whatever name its agent's origin happens to carry; other agent
+    /// terminals take their origin's title; shells and pages keep their own (nil: leave it).
+    nonisolated static func tileTitle(overseer: Bool, flavor: AgentFlavor?, storeTitle: String?, programTitle: String) -> String? {
+        if overseer { return Overseer.title }
+        if let flavor, ![AgentFlavor.shell, .custom, .web].contains(flavor) { return storeTitle ?? programTitle }
+        return nil
     }
 
     /// Whether `id` is on the board (a closed app session is still known, but not on it). Unlike
@@ -471,6 +485,7 @@ public final class Workspace {
         if let b = browsers.removeValue(forKey: id) { b.webView.stopLoading() }
         if agents.sessions[id] != nil { hiddenAgents[id] = Date() } else { groups.assign(id, to: nil) }
         desk.setAside(id)
+        desk.failQueued(id)
         // Its place as of now (an app session may have arrived since the board was last saved).
         rememberOrder()
         order.removeAll { $0 == id }
@@ -1062,14 +1077,25 @@ public final class Workspace {
         pumpingWakes = true
         defer { pumpingWakes = false }
         desk.expireQueued()
+        desk.prune(stillInInbox: accord.inboxDeliveryIds)
         repeat {
             wakeAgain = false
             for tile in desk.queuedTiles {
                 guard let t = terminals[tile] else { desk.failQueued(tile); continue }
+                guard let next = desk.nextQueued(for: tile) else { continue }
+                // An Accord delivery is re-checked before it is typed: one the agent already
+                // read through Accord settles as handled instead of reaching the prompt.
+                let checksUnread = next.id.hasPrefix("accord:") && !unreadBypassed.contains(next.id)
                 guard Self.canWake(activity: t.info.activity, isAgent: isWakeableTerminal(tile),
                                    agentInForeground: t.runsForegroundProgram, running: t.isRunning,
                                    suspended: t.isSuspended, lastUserInputAt: t.lastUserInputAt,
-                                   lastWokeAt: wokeAt[tile]) else { continue }
+                                   lastWokeAt: wokeAt[tile]) else {
+                    // A verification is only good for the typing it precedes: a tile that went
+                    // back to work re-checks when it comes idle again.
+                    if checksUnread { unreadVerified.remove(next.id) }
+                    continue
+                }
+                if checksUnread, !unreadVerified.contains(next.id) { checkUnread(next.id, tile: tile); continue }
                 if desk.deliverQueued(tile) { wokeAt[tile] = Date() }
             }
         } while wakeAgain
@@ -1084,6 +1110,52 @@ public final class Workspace {
             wakeTimer = timer
             RunLoop.main.add(timer, forMode: .common)
         }
+    }
+
+    /// Accord delivery ids the unread check is running for, verified unread for the immediate
+    /// typing that follows, or whose check failed and so type as they did before it existed.
+    private var unreadChecking: Set<String> = []
+    private var unreadVerified: Set<String> = []
+    private var unreadBypassed: Set<String> = []
+
+    /// Before an accord: message is typed, ask Accord whether it is still unread. The answer is
+    /// async: the tile's idleness and the message's place in the queue are both re-established
+    /// by the next pump, never trusted from before the call.
+    private func checkUnread(_ id: String, tile: String) {
+        guard unreadChecking.insert(id).inserted else { return }
+        let deliveryId = String(id.dropFirst("accord:".count))
+        Task { [weak self] in
+            let unread = await self?.accord.unread([deliveryId])
+            guard let self else { return }
+            self.unreadChecking.remove(id)
+            guard let unread else {
+                // An Accord that can't answer types as today.
+                self.unreadBypassed.insert(id)
+                self.pumpWakes()
+                return
+            }
+            if unread.contains(deliveryId) { self.unreadVerified.insert(id) }
+            else { self.desk.markHandled(id) }
+            self.pumpWakes()
+        }
+    }
+
+    /// The live schedules an agent tile's Accord agent owns or is the target of.
+    public func schedules(for tile: String) -> [AccordSchedule] {
+        guard let agent = accord.tileRecords[tile]?.agentAddress, let list = accord.schedules else { return [] }
+        // Accord lists the owner as a bare session id and the target as an address.
+        let actor = agent.split(separator: "/").last.map(String.init) ?? agent
+        return list.filter { $0.live && ($0.to == agent || $0.owner == agent || $0.owner == actor) }
+    }
+
+    /// Pause or resume a schedule from a tile menu or the overseer panel.
+    public func setSchedulePaused(_ id: String, paused: Bool) {
+        Task { await accord.setSchedulePaused(id, paused: paused) }
+    }
+
+    /// Delete a schedule from a tile menu or the overseer panel.
+    public func cancelSchedule(_ id: String) {
+        Task { await accord.cancelSchedule(id) }
     }
 
     /// The tile an Accord address speaks from on this board, if any: a tile's own session, or the

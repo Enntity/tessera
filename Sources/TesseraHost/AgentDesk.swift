@@ -32,8 +32,11 @@ public final class AgentDesk {
         public var text: String
         public var sentAt: Date
         public var read: Bool = false
+        /// The Accord schedule this delivery came from, when it is one: fires of the same
+        /// schedule coalesce in the queue so a busy agent never faces a stack of them.
+        public var scheduleId: String?
         /// waiting or open (cards for the user), queued (types when the tile is idle), attempting,
-        /// typed, opened, failed, declined, reviewed, or nil (inbox only).
+        /// typed, opened, failed, declined, reviewed, handled, superseded, or nil (inbox only).
         public var delivery: String?
     }
 
@@ -135,18 +138,26 @@ public final class AgentDesk {
     /// ("local:…"). Delivery IDs are durable deduplication keys, including across app restart.
     /// Persisted before any native interaction so a crash cannot cause retyping.
     public func importMessage(id: String, text: String, from label: String, address: String?, tile fromTile: String?,
-                              to: String, title: String, route: Route, at: Date = Date()) -> Bool {
+                              to: String, title: String, route: Route, at: Date = Date(), scheduleId: String? = nil) -> Bool {
         if deliveries.contains(id) { return true }
         // Ordinary inbox content stays exclusively in Accord.
         guard route != .inbox else { return true }
         deliveries.insert(id)
         var message = Message(id: id, from: label, fromAddress: address, fromTile: fromTile, to: to, toTitle: title,
-                              text: Redactor.redact(text).preview(4000), sentAt: at)
+                              text: Redactor.redact(text).preview(4000), sentAt: at, scheduleId: scheduleId)
         switch route {
         case .queued: message.delivery = "queued"
         case .ask: message.delivery = "waiting"
         case .open: message.delivery = "open"
         case .inbox: break
+        }
+        // A newer fire of the same schedule replaces the waiting one rather than stacking: one
+        // wake waits, never a queue of them.
+        if let scheduleId {
+            for i in messages.indices where messages[i].to == to && messages[i].scheduleId == scheduleId
+                && ["queued", "waiting"].contains(messages[i].delivery ?? "") {
+                messages[i].delivery = "superseded"
+            }
         }
         messages.append(message); changed()
         guard let saved = StateFile.load(Saved.self, from: store), saved.accordDeliveries?.contains(id) == true else {
@@ -217,6 +228,29 @@ public final class AgentDesk {
         return messages.filter { $0.delivery == "queued" }.compactMap { seen.insert($0.to).inserted ? $0.to : nil }
     }
 
+    /// The next queued message for a tile, without touching it.
+    public func nextQueued(for tile: String) -> Message? {
+        messages.first { $0.delivery == "queued" && $0.to == tile }
+    }
+
+    /// The delivery ids of Accord messages still waiting on a card (approval or open): the
+    /// bridge re-checks them so one read in its own session doesn't sit here forever.
+    public var pendingCardDeliveries: [String] {
+        messages.compactMap { message in
+            guard message.id.hasPrefix("accord:"), ["waiting", "open"].contains(message.delivery) else { return nil }
+            return String(message.id.dropFirst(7))
+        }
+    }
+
+    /// A delivery the agent already read through Accord never reaches the prompt: the message
+    /// settles as handled — no card, no mark, no typing.
+    public func markHandled(_ id: String) {
+        guard let i = messages.firstIndex(where: { $0.id == id }),
+              let delivery = messages[i].delivery, ["queued", "waiting", "open"].contains(delivery) else { return }
+        messages[i].delivery = "handled"
+        changed()
+    }
+
     /// The next queued message for a tile that can take it now: persisted as "attempting" before
     /// the terminal is touched — after a crash it stays unknown and is never replayed — then typed
     /// through `typeInto`. False when nothing is queued, or when the attempt never reached the
@@ -246,6 +280,22 @@ public final class AgentDesk {
         }
         if touched { changed() }
     }
+
+    /// Terminal-state messages older than a week leave the desk — typed, failed, declined,
+    /// handled, opened, reviewed and superseded alike. A pruned delivery id is forgotten only
+    /// when it no longer appears in the bridge's latest inbox, or the unread mail it names
+    /// would be imported and queued again.
+    public func prune(now: Date = Date(), stillInInbox: Set<String> = []) {
+        let terminal: Set<String> = ["typed", "failed", "declined", "handled", "opened", "reviewed", "superseded"]
+        let old = messages.filter { $0.delivery.map(terminal.contains) == true && now.timeIntervalSince($0.sentAt) > Self.pruneAfter }
+        guard !old.isEmpty else { return }
+        for message in old where !message.id.hasPrefix("accord:") || !stillInInbox.contains(String(message.id.dropFirst(7))) {
+            deliveries.remove(message.id)
+        }
+        messages.removeAll { old.contains($0) }
+        changed()
+    }
+    static let pruneAfter: TimeInterval = 7 * 24 * 3600
 
     /// A queued message whose tile is gone for good fails, so the user is told to check it.
     public func failQueued(_ tile: String) {

@@ -15,6 +15,9 @@ struct OverseerPanel: View {
     @State private var draft = ""
     /// The brief the user collapsed, by when it was written — a newer brief opens again.
     @State private var collapsedBriefAt: Date?
+    /// The schedules list opens collapsed; nothing re-opens it on its own. Demo shots pass
+    /// TESSERA_SCHEDULES_OPEN to start with it expanded.
+    @State private var schedulesCollapsed = ProcessInfo.processInfo.environment["TESSERA_SCHEDULES_OPEN"] == nil
     @FocusState private var composerFocused: Bool
 
     private enum Mode { case chat, terminal }
@@ -45,6 +48,7 @@ struct OverseerPanel: View {
                         Hairline()
                     }
                     briefBlock(maxHeight: min(780, geo.size.height - 2 * Style.Space.xl) * 0.4)
+                    schedulesBlock
                     switch shown {
                     case .chat: chatBody
                     case .terminal:
@@ -252,6 +256,58 @@ struct OverseerPanel: View {
             .buttonStyle(.plain)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// Every live schedule on this Accord, collapsed to its header until asked: the same
+    /// Pause/Resume and Delete the tile menus carry. Ended rows are not shown.
+    @ViewBuilder private var schedulesBlock: some View {
+        let workspace = model.workspace
+        let schedules = (workspace.accord.schedules ?? []).filter(\.live)
+        if !schedules.isEmpty {
+            VStack(alignment: .leading, spacing: 0) {
+                Button {
+                    schedulesCollapsed.toggle()
+                } label: {
+                    HStack(spacing: Style.Space.s) {
+                        Image(systemName: "clock").font(Style.caption).foregroundStyle(Style.Overseer.violet)
+                        Text("Schedules").micro().foregroundStyle(Style.muted)
+                        Text("\(schedules.count)").font(Style.caption).foregroundStyle(Style.muted)
+                        Spacer()
+                        Image(systemName: schedulesCollapsed ? "chevron.down" : "chevron.up")
+                            .font(Style.caption).foregroundStyle(Style.muted)
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                if !schedulesCollapsed {
+                    VStack(alignment: .leading, spacing: Style.Space.xs) {
+                        ForEach(schedules) { schedule in
+                            HStack(alignment: .firstTextBaseline, spacing: Style.Space.s) {
+                                Text(schedule.line.obscured(privacy)).font(Style.caption).foregroundStyle(Style.ink)
+                                    .lineLimit(1).layoutPriority(-1)
+                                Text(schedule.ownerLabel ?? schedule.owner).font(Style.caption).foregroundStyle(Style.muted)
+                                    .lineLimit(1)
+                                Spacer(minLength: Style.Space.s)
+                                if workspace.accord.schedulePauseSupported {
+                                    Button(schedule.paused ? "Resume" : "Pause") { workspace.setSchedulePaused(schedule.id, paused: !schedule.paused) }
+                                        .font(Style.caption)
+                                }
+                                Button("Delete") { workspace.cancelSchedule(schedule.id) }
+                                    .font(Style.caption)
+                            }
+                        }
+                    }
+                    .padding(.top, Style.Space.s)
+                }
+            }
+            .padding(Style.Space.m)
+            .background {
+                Style.Overseer.violet.opacity(0.07)
+                    .clipShape(RoundedRectangle(cornerRadius: Style.Radius.m, style: .continuous))
+            }
+            .padding(.horizontal, Style.Space.l)
+            .padding(.top, Style.Space.m)
+        }
     }
 
     private static let suggestions = [

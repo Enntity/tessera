@@ -153,6 +153,11 @@ public struct TileCard<Content: View>: View {
                     .layoutPriority(1)
             } else if info.activity == .failed, let detail = info.detail {
                 Text(detail).foregroundStyle(Style.coral).lineLimit(1)
+            } else if let schedule = info.scheduleLines.first {
+                // A life loop this tile's agent runs or is the target of.
+                Label(privacy ? schedule.obscured(true) : schedule + (info.scheduleLines.count > 1 ? " +\(info.scheduleLines.count - 1)" : ""),
+                      systemImage: "clock")
+                    .foregroundStyle(Style.muted).lineLimit(1).layoutPriority(1)
             } else if let summary = info.summary {
                 // The steward's line on it, ahead of the folder when space is short.
                 Text(privacy ? summary.obscured(true) : summary).foregroundStyle(Style.dim).lineLimit(1).layoutPriority(1)

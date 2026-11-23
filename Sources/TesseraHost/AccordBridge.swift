@@ -60,12 +60,28 @@ public final class AccordBridge {
     @ObservationIgnored public var logFailure: ((String) -> Void)?
     /// Test seams for the two operator writes; production leaves both nil.
     @ObservationIgnored var designateOperation: ((String) async throws -> Void)?
-    @ObservationIgnored public var deliver: ((String, String, String, String, Bool) -> Bool)?
+    @ObservationIgnored public var deliver: ((String, String, String, String, Bool, String?) -> Bool)?
     /// What each tile reports as its rename support: ("supported", nil) or ("unsupported", reason).
     @ObservationIgnored public var renameInfo: ((String) -> (String, String?)?)?
     /// A queued rename request — handled by the workspace, never typed as a prompt.
     /// (tile, title, sender, requestId) → (accepted, refusal reason).
     @ObservationIgnored public var renameTile: ((String, String, String, String) -> (accepted: Bool, reason: String?))?
+    /// The delivery ids bridge-inbox returned on the latest pass: a desk entry pruned while its
+    /// delivery is still unread there would be imported again.
+    public private(set) var inboxDeliveryIds: Set<String> = []
+    /// Accord schedules visible to the admin connection (active, paused and recently ended): nil
+    /// until an Accord new enough answers — the schedule display stays off on an older one.
+    public internal(set) var schedules: [AccordSchedule]?
+    /// Whether schedule-pause exists on this Accord: a refused call hides Pause/Resume.
+    public internal(set) var schedulePauseSupported = true
+    /// Waiting/open desk cards' delivery ids, and how to retire one whose delivery was read
+    /// elsewhere (the agent handled it in its own session).
+    @ObservationIgnored public var pendingCardDeliveries: (() -> [String])?
+    @ObservationIgnored public var cardHandled: ((String) -> Void)?
+    @ObservationIgnored private var schedulesUnsupported = false
+    @ObservationIgnored private var schedulesLogged = false
+    @ObservationIgnored private var lastSchedulesFetch = Date.distantPast
+    @ObservationIgnored private var lastCardCheck = Date.distantPast
     @ObservationIgnored public var questions: (([[String: Any]]) -> Void)?
     @ObservationIgnored public var notes: (([[String: Any]]) -> Void)?
     @ObservationIgnored public var noteReads: (() -> [String])?
@@ -328,13 +344,32 @@ public final class AccordBridge {
                 answered.insert(id)
             }
             let inbox = try await operation(c, "bridge-inbox", ["source": "tessera"])
+            inboxDeliveryIds = Set(((inbox["deliveries"] as? [[String: Any]]) ?? []).compactMap { $0["deliveryId"] as? String })
             for message in (inbox["deliveries"] as? [[String: Any]]) ?? [] {
                 guard let delivery = message["deliveryId"] as? String, let tile = message["externalId"] as? String,
                       let text = message["text"] as? String, let sender = message["from"] as? String,
                       let record = message["session"] as? String,
-                      deliver?(delivery, tile, Self.scheduledSender(from: sender, scheduledBy: message["scheduledBy"], authority: c.2), text, message["delivery"] as? String == "native-prompt") == true else { continue }
+                      deliver?(delivery, tile, Self.scheduledSender(from: sender, scheduledBy: message["scheduledBy"], authority: c.2), text, message["delivery"] as? String == "native-prompt", message["scheduleId"] as? String) == true else { continue }
                 // Display is not read acknowledgement. The recipient acknowledges through Accord.
                 _ = record
+            }
+            // Schedules ride the same pass at a slower cadence. An Accord without the operation
+            // hides the display rather than failing the refresh; a transport problem is not
+            // "unsupported" — the next pass tries again.
+            if !schedulesUnsupported, Date().timeIntervalSince(lastSchedulesFetch) >= 30 {
+                lastSchedulesFetch = Date()
+                await fetchSchedules(c)
+            }
+            // Approval cards for Accord deliveries go away once the delivery is read elsewhere;
+            // checked at most once a minute, and silently kept when the call can't be made.
+            if Date().timeIntervalSince(lastCardCheck) >= 60 {
+                lastCardCheck = Date()
+                let pending = pendingCardDeliveries?() ?? []
+                if !pending.isEmpty,
+                   let unread = (try? await operation(c, "bridge-unread", ["ids": pending]))?["unread"] as? [String] {
+                    let stillUnread = Set(unread)
+                    for id in pending where !stillUnread.contains(id) { cardHandled?(id) }
+                }
             }
             // Rename requests are a dedicated queue, not mail: each is settled with
             // bridge-rename-result so it never comes back.
@@ -385,6 +420,72 @@ public final class AccordBridge {
         if !items.isEmpty { value.snapshot.items = items }
         return value
     }
+    /// Test seam: replaces the bridge-unread call entirely.
+    @ObservationIgnored var unreadOverride: (([String]) async -> Set<String>?)?
+
+    #if DEBUG
+    /// Demo shots only (scripts/demo): feed the schedule views and a tile's agent record without
+    /// a coordinator.
+    public func debugSeedSchedules(_ list: [AccordSchedule], tile: String, agentAddress: String) {
+        schedules = list
+        var record = tileRecords[tile] ?? TileRecord(address: "demo/observed", givenTitle: nil,
+            changedAt: nil, agentAddress: nil, title: nil, titleSource: nil, task: nil, client: nil)
+        record.agentAddress = agentAddress
+        tileRecords[tile] = record
+    }
+    #endif
+
+    /// Which of these Accord deliveries are still unread, or nil when the coordinator can't
+    /// say (an older Accord, or one not answering): callers then do what they did before the
+    /// check existed.
+    public func unread(_ ids: [String]) async -> Set<String>? {
+        if let unreadOverride { return await unreadOverride(ids) }
+        guard let unread = try? await request("bridge-unread", args: ["ids": ids])["unread"] as? [String] else { return nil }
+        return Set(unread)
+    }
+
+    /// The schedules pass, shared by the 30 s refresh cadence and the pause/cancel controls.
+    private func fetchSchedules(_ c: (URL, String, String)) async {
+        do {
+            let list = (try await operation(c, "schedules", ["all": true]))["schedules"] as? [[String: Any]] ?? []
+            schedules = list.compactMap(AccordSchedule.init)
+        } catch {
+            // A transport failure keeps the last good list and tries again next pass; any other
+            // refusal means this Accord doesn't know the operation and the display stays off.
+            if let urlError = error as? URLError,
+               [.timedOut, .cannotFindHost, .cannotConnectToHost, .networkConnectionLost,
+                .dnsLookupFailed, .notConnectedToInternet, .secureConnectionFailed].contains(urlError.code) { return }
+            schedulesUnsupported = true
+            if !schedulesLogged {
+                schedulesLogged = true
+                logFailure?("schedules are not supported by this Accord; schedule display and controls stay off")
+            }
+        }
+    }
+
+    /// Refresh the schedule list now (after a control changed one).
+    public func refreshSchedules() async {
+        guard !schedulesUnsupported, let c = try? connection() else { return }
+        await fetchSchedules(c)
+    }
+
+    /// Pause or resume a schedule, then re-list. A coordinator without the operation hides the
+    /// control from then on.
+    public func setSchedulePaused(_ id: String, paused: Bool) async {
+        do { _ = try await request("schedule-pause", args: ["id": id, "paused": paused]) }
+        catch {
+            schedulePauseSupported = false
+            logFailure?("schedule-pause is not supported by this Accord; Pause and Resume are hidden")
+        }
+        await refreshSchedules()
+    }
+
+    /// Delete a schedule, then re-list.
+    public func cancelSchedule(_ id: String) async {
+        _ = try? await request("schedule-cancel", args: ["id": id])
+        await refreshSchedules()
+    }
+
     public func connectHost(_ host: String) async throws -> String {
         guard MachineConfig.isValidHost(host), let executable = AccordExecutable.locate() else { throw URLError(.resourceUnavailable) }
         _ = try connection() // Never fall back to another host's default profile.
@@ -456,17 +557,26 @@ public final class AccordBridge {
 
     /// Each tile's agent record, by tile id: the participant Accord links to the tile with role
     /// agent (preferred), or whose mailbox binding is the tile itself. A nested CLI session only
-    /// stands in for the tile when no agent does.
+    /// stands in for the tile when no agent does. Accord's tile-agent rule marks the actor it
+    /// picked with `tile.current`: that one wins outright — an older Accord has no flag and the
+    /// last-listing rule stands.
     static func agentByTile(_ participants: [[String: Any]], authority: String) -> [String: (address: String, agent: [String: Any])] {
         var found: [String: (address: String, agent: [String: Any])] = [:]
+        var settled: Set<String> = []
         for p in participants {
             guard let address = p["address"] as? String, address.hasPrefix(authority + "/"),
                   let agent = p["agent"] as? [String: Any] else { continue }
-            let tile = (agent["tile"] as? [String: Any])?["id"] as? String
+            let tileInfo = agent["tile"] as? [String: Any]
+            let tile = tileInfo?["id"] as? String
             let native = agent["native"] as? [String: Any]
             let linked = tile ?? ((native?["source"] as? String) == "tessera" ? native?["id"] as? String : nil)
-            guard let linked else { continue }
-            let role = (agent["tile"] as? [String: Any])?["role"] as? String ?? "agent"
+            guard let linked, !settled.contains(linked) else { continue }
+            if tileInfo?["current"] as? Bool == true {
+                found[linked] = (address, agent)
+                settled.insert(linked)
+                continue
+            }
+            let role = tileInfo?["role"] as? String ?? "agent"
             let existingRole = ((found[linked]?.agent["tile"] as? [String: Any])?["role"] as? String) ?? "agent"
             if existingRole == "agent", role != "agent" { continue }
             found[linked] = (address, agent)
@@ -589,4 +699,51 @@ public final class AccordBridge {
         }
     }
 
+}
+
+/// One row of Accord's `schedules {all:true}` listing: a durable timer that messages an agent.
+public struct AccordSchedule: Equatable, Sendable, Identifiable {
+    public var id: String
+    public var state: String
+    /// The session that created it (address) and its tile-facing label.
+    public var owner: String
+    public var ownerLabel: String?
+    /// The address its fires go to.
+    public var to: String
+    /// The trigger in words: "every 10m", "at 2026-11-23T07:00:00Z", "reservation:pair:released".
+    public var trigger: String
+    /// The first of what the fire says, when the coordinator shares it.
+    public var text: String?
+    public var nextAt: Date?
+    public var persistent: Bool
+
+    public init?(_ value: [String: Any]) {
+        guard let id = value["id"] as? String, let state = value["state"] as? String,
+              let owner = value["owner"] as? String, let to = value["to"] as? String,
+              let trigger = value["trigger"] as? String else { return nil }
+        self.id = id
+        self.state = state
+        self.owner = owner
+        self.ownerLabel = value["ownerLabel"] as? String
+        self.to = to
+        self.trigger = trigger
+        if let text = value["text"] as? String {
+            // The scheduler's own prefix explains Accord, not the schedule.
+            self.text = text.hasPrefix("Scheduled by") ? String(text.drop(while: { $0 != ":" }).dropFirst(2)) : text
+        }
+        self.nextAt = (value["nextAt"] as? Double).map { Date(timeIntervalSince1970: $0 / 1000) }
+        self.persistent = value["persistent"] as? Bool ?? false
+    }
+
+    /// Live rows only: done, cancelled, expired, failed and ended leave the display.
+    public var live: Bool { ["active", "paused"].contains(state) }
+    public var paused: Bool { state == "paused" }
+
+    /// The tile's short line for it: "every 10m: check Messenger", "paused · every 10m".
+    public var line: String {
+        let body = text?.preview(60)
+        var line = body.map { "\(trigger): \($0)" } ?? trigger
+        if paused { line = "paused · " + line }
+        return line
+    }
 }
