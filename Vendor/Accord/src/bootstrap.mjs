@@ -22,7 +22,23 @@ export async function enrollProfile(path, {label = 'agent', harness = 'cli', cli
   const profile = profileAt(path);
   const client = await AccordClient.enroll(profile.url, readFileSync(profile.enrollmentFile, 'utf8').trim(),
     {authority:profile.authority, label, harness, client:clientName, ttlMs, key});
-  await bindNativeSession(profile,client,nativeIdentity,{role:harness==='mcp'?'agent':'nested'});
+  // The tile's declared agent flavor (TESSERA_TILE_AGENT) decides whether an
+  // MCP enrollment is the tile's agent: a mismatch links as nested and never
+  // takes the tessera binding. Unset keeps every tile working as before.
+  const flavor = process.env.TESSERA_TILE_AGENT;
+  let role = harness === 'mcp' ? 'agent' : 'nested', identity = nativeIdentity;
+  if (harness === 'mcp' && flavor !== undefined) {
+    const family = String(clientName ?? '').toLowerCase();
+    const matches = family.startsWith('codex') ? flavor === 'codex'
+      : family.startsWith('claude') ? flavor === 'claude'
+      : family.startsWith('zcode') ? flavor === 'zcode'
+      : !['codex', 'claude', 'zcode', 'shell'].includes(flavor);
+    if (!matches) {
+      role = 'nested';
+      if (identity?.source === 'tessera') identity = undefined;
+    }
+  }
+  await bindNativeSession(profile,client,identity,{role});
   return client;
 }
 export function notice(host) {

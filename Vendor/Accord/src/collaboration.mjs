@@ -166,6 +166,13 @@ export class Collaboration {
       { code: 'RECIPIENT_RETIRED', status: 410, ...(successor ? { successor: `${this.store.authority}/${successor}` } : {}) },
     );
   }
+  // The live actor a retired session's successor chain ends at, or null when
+  // the chain dies without one.
+  liveSuccessor(session) {
+    const retired = this.retiredRecipient(session);
+    if (!retired?.successor) return null;
+    return !this.retiredRecipient(retired.successor) && this.recipientExists(retired.successor) ? retired.successor : null;
+  }
   recipientExists(recipient) {
     // Enrollment is enough to receive a reply, including legacy sessions that
     // sent after reconnect without announcing again. Directory presence is UI.
@@ -182,29 +189,42 @@ export class Collaboration {
       requireThat(body.to.split('/').length===2,'INVALID_INPUT','Use the recipient address from find',400);
       requireThat(body.to!==this.address(actor),'SELF_MESSAGE','Send to another participant; self-messages are not supported',400);
       const [authority,recipient]=body.to.split('/');
+      let to=body.to,redirectedTo;
       if(authority===this.store.authority){
         requireThat(this.recipientExists(recipient),'RECIPIENT_UNKNOWN','Recipient is not registered; use an address from find or a received message',404);
-        const retired=this.retiredRecipient(recipient);
-        if(retired)throw this.retiredError(retired);
+        if(this.retiredRecipient(recipient)){
+          // A retired recipient with a live successor takes the mail there;
+          // without one the send fails the way it always has.
+          const successor=this.liveSuccessor(recipient);
+          if(successor){to=`${authority}/${successor}`;redirectedTo=to;}
+          else throw this.retiredError(this.retiredRecipient(recipient));
+        }
       }
       requireThat(authority===this.store.authority||this.db.prepare('SELECT 1 FROM links WHERE authority=?').get(authority),'HOST_UNKNOWN','Recipient host is not linked',404);
       requireThat(this.db.prepare("SELECT count(*) n FROM message_outbox WHERE state='queued'").get().n<100000,'CAPACITY_LIMIT','Pending message limit reached');
       requireThat(body.delivery===undefined||['inbox','native-prompt'].includes(body.delivery),'INVALID_INPUT','Unknown delivery preference',400);
-      const messageId=id(),envelope={id:messageId,from:this.address(actor),to:body.to,text:body.text,kind:body.kind==='notification'?'notification':'message',delivery:body.delivery??'inbox'};
+      const messageId=id(),envelope={id:messageId,from:this.address(actor),to,text:body.text,kind:body.kind==='notification'?'notification':'message',delivery:body.delivery??'inbox'};
       this.db.prepare("INSERT INTO message_outbox(id,actor,envelope,state,error,created_at) VALUES(?,?,?,'queued',NULL,?)").run(messageId,actor.id,JSON.stringify(envelope),this.store.now());
-      this.store.emit('message.queued',{id:messageId,from:envelope.from,to:envelope.to});return {id:messageId,state:'queued'};
+      this.store.emit('message.queued',{id:messageId,from:envelope.from,to:envelope.to});return {id:messageId,state:'queued',...(redirectedTo?{redirectedTo}:{})};
     });
   }
   deliver(envelope) {
     text(envelope.id,'id',128);text(envelope.from,'from',220);text(envelope.text,'text',4000);
     const [authority,recipient]=String(envelope.to).split('/');
     requireThat(authority===this.store.authority&&this.recipientExists(recipient),'RECIPIENT_UNKNOWN','Recipient is not registered',404);
-    const retired=this.retiredRecipient(recipient);
-    if(retired)throw this.retiredError(retired);
-    const from=this.principal(envelope.from),to=this.principal(envelope.to);
-    const conversation=this.messages.createConversation(from,{members:[to.handle]});
-    this.messages.sendMessage(from,{conversationId:conversation.id,clientMessageId:envelope.id,body:envelope.text,data:{id:envelope.id,from:envelope.from,to:envelope.to,kind:envelope.kind,delivery:envelope.delivery==='native-prompt'?'native-prompt':'inbox',...(envelope.scheduledBy?{scheduledBy:envelope.scheduledBy}:{}),...(envelope.scheduleId?{scheduleId:envelope.scheduleId}:{})}});
-    try{this.onDeliver?.(recipient);}catch{/* A delivered message stays delivered if its hint fails. */}
+    // The receiving host applies the same successor rule as the sending one, so
+    // mail queued before a retirement still lands with the live successor.
+    let deliveredTo=recipient;
+    if(this.retiredRecipient(recipient)){
+      const successor=this.liveSuccessor(recipient);
+      if(successor)deliveredTo=successor;
+      else throw this.retiredError(this.retiredRecipient(recipient));
+    }
+    const to=`${authority}/${deliveredTo}`;
+    const from=this.principal(envelope.from),toPrincipal=this.principal(to);
+    const conversation=this.messages.createConversation(from,{members:[toPrincipal.handle]});
+    this.messages.sendMessage(from,{conversationId:conversation.id,clientMessageId:envelope.id,body:envelope.text,data:{id:envelope.id,from:envelope.from,to,kind:envelope.kind,delivery:envelope.delivery==='native-prompt'?'native-prompt':'inbox',...(envelope.scheduledBy?{scheduledBy:envelope.scheduledBy}:{}),...(envelope.scheduleId?{scheduleId:envelope.scheduleId}:{})}});
+    try{this.onDeliver?.(deliveredTo);}catch{/* A delivered message stays delivered if its hint fails. */}
     return {id:envelope.id,state:'delivered'};
   }
   // A linked host reports that one of its own sessions retired or revived; the

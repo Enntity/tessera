@@ -5,6 +5,7 @@ import { managerSchema } from './resource-managers.mjs';
 import { awarenessSchema } from './session-awareness.mjs';
 import { continuitySchema, persistentDeadline, upgradeSessionContinuity } from './session-continuity.mjs';
 import { discoveryCleanupSchema } from './discovery-cleanup.mjs';
+import { messengerClaimsSchema } from './messenger-claims.mjs';
 import { windowDuration } from './reservation-policy.mjs';
 import { database, transaction, hash, id, requireThat, text, integer, monotonicWallClock } from './common.mjs';
 import { applyRetirement, enqueueLifecycle, orphanGraceDefaultMs, cooperativeAgeOutDefaultMs } from './lifecycle.mjs';
@@ -106,7 +107,10 @@ export class Store {
       // bridge-renames and settles with bridge-rename-result; it is not mail.
       `ALTER TABLE session_views ADD COLUMN rename TEXT;ALTER TABLE session_views ADD COLUMN rename_reason TEXT;
       CREATE TABLE rename_requests(id TEXT PRIMARY KEY, session TEXT NOT NULL, tile TEXT NOT NULL, source TEXT NOT NULL, title TEXT NOT NULL, by TEXT NOT NULL, state TEXT NOT NULL CHECK(state IN('pending','accepted','failed')), reason TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);
-      CREATE INDEX rename_requests_pending ON rename_requests(state,source,created_at);`]); this.now = now; this.leaderMs = leaderMs;
+      CREATE INDEX rename_requests_pending ON rename_requests(state,source,created_at);`,
+      // Migration 24: Messenger identity claims, one holder each, and the
+      // lease tokens Accord keeps so a holder's reply can acknowledge.
+      messengerClaimsSchema]); this.now = now; this.leaderMs = leaderMs;
     transaction(this.db, () => {
       this.db.prepare("INSERT OR IGNORE INTO meta VALUES('authority',?)").run(id());
       this.db.prepare("INSERT OR IGNORE INTO meta VALUES('paused','false')").run();

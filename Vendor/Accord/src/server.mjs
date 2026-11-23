@@ -5,6 +5,7 @@ import { awarenessRuntime } from './awareness-runtime.mjs';
 import { SessionAwareness } from './session-awareness.mjs';
 import { Overseer } from './overseer.mjs';
 import { Schedules } from './schedules.mjs';
+import { MessengerClaims } from './messenger-claims.mjs';
 import { dirname,join } from 'node:path';
 import { homedir } from 'node:os';
 import { readdirSync } from 'node:fs';
@@ -30,7 +31,7 @@ export function coordinator({ db, claimSecret, driverUrl, driverToken, driverIns
   requireThat(parsed.protocol === 'http:' && ['127.0.0.1', 'localhost'].includes(parsed.hostname) && !parsed.username && !parsed.password,
     'BAD_DRIVER_URL', 'This release supports a loopback HTTP driver only', 400);
   const store = new Store(db, { leaderMs });
-  let collaboration,memory,managers,awareness,overseer,attention,telemetry,schedules;
+  let collaboration,memory,managers,awareness,overseer,attention,telemetry,schedules,messenger;
   try {
     // Synchronous mailbox migrations and config reads can outlast a lease. Finish
     // them before taking leadership; no timer can renew while they block startup.
@@ -44,6 +45,7 @@ export function coordinator({ db, claimSecret, driverUrl, driverToken, driverIns
     overseer=new Overseer(store,awareness,collaboration);
     collaboration.agentRecord=actorId=>awareness.agentRecord(actorId);
     schedules=new Schedules(store,collaboration,{resourceExists:localId=>!!store.db.prepare('SELECT 1 FROM resources WHERE id=?').get(localId)||!!store.binding(localId)||managers.owns(localId)});
+    messenger=new MessengerClaims(store,collaboration,schedules,{directory:dirname(db)});
   } catch (error) {
     attention?.close();
     try { collaboration?.close(); } finally {
@@ -51,6 +53,7 @@ export function coordinator({ db, claimSecret, driverUrl, driverToken, driverIns
     }
     throw error;
   }
+  messenger.start();
   managers.onRunning=row=>{try{collaboration.granted(overseer.actor,{key:`grant:${row.id}`,reservation:row.id,actor:row.actor,resource:row.resource,queuedAt:row.created_at});}catch{/* A notice is a hint. */}};
   const observationRuntime=awarenessRuntime(dirname(db),awareness);
   awareness.lifecycleConfig=()=>observationRuntime.lifecycle();
@@ -363,7 +366,17 @@ export function coordinator({ db, claimSecret, driverUrl, driverToken, driverIns
   async function collaborate(actor,operation,args={},signal) {
     if(['telemetry','metadata','memory'].includes(operation))return telemetry[operation]();
     if(operation==='hosts')return {authority:store.authority,hosts:[{authority:store.authority,local:true},...store.db.prepare('SELECT authority FROM links ORDER BY authority').all().map(h=>({...h,local:false}))]};
-    if(operation==='bridge-inbox'){requireThat(actor.role==='admin','FORBIDDEN','Host adapter required',403);text(args.source,'source',64);return {deliveries:store.db.prepare('SELECT id,source,external_id FROM session_views WHERE source=? AND private=0 AND hidden=0 ORDER BY observed_at DESC LIMIT 200').all(args.source).flatMap(s=>collaboration.inbox(nativeActor(s)).messages.slice(0,10).map(m=>({...m,session:s.id,externalId:s.external_id}))).slice(0,100)};}
+    if(operation==='bridge-inbox'){requireThat(actor.role==='admin','FORBIDDEN','Host adapter required',403);text(args.source,'source',64);return {deliveries:store.db.prepare('SELECT id,source,external_id FROM session_views WHERE source=? AND private=0 AND hidden=0 ORDER BY observed_at DESC LIMIT 200').all(args.source).flatMap(s=>{
+      // A tessera tile's mail addresses its live agent plus the observation's
+      // own inbox; other sources keep the binding-or-observation actor.
+      const actors=s.source==='tessera'
+        ?[...new Set([awareness.tileAgent(s.external_id),s.id].filter(Boolean))].map(id=>({id,role:'worker'}))
+        :[nativeActor(s)];
+      const seen=new Set(),messages=[];
+      for(const a of actors)for(const m of collaboration.inbox(a).messages){if(seen.has(m.deliveryId))continue;seen.add(m.deliveryId);messages.push(m);}
+      return messages.slice(0,10).map(m=>({...m,session:s.id,externalId:s.external_id}));
+    }).slice(0,100)};}
+    if(operation==='bridge-unread'){requireThat(actor.role==='admin','FORBIDDEN','Host adapter required',403);requireThat(Array.isArray(args.ids)&&args.ids.length<=200,'INVALID_INPUT','ids must be an array of at most 200 delivery ids',400);const unread=[];for(const raw of args.ids){const deliveryId=text(raw,'ids[]',128);const row=collaboration.messages.db.prepare('SELECT state FROM deliveries WHERE id=?').get(deliveryId);if(row&&['pending','offered'].includes(row.state))unread.push(deliveryId);}return {unread};}
     if(operation==='bridge-renames'){requireThat(actor.role==='admin','FORBIDDEN','Host adapter required',403);text(args.source,'source',64);const now=store.now();store.mutate(()=>store.db.prepare("UPDATE rename_requests SET state='failed',reason='expired',updated_at=? WHERE state='pending' AND created_at<?").run(now,now-86400000));return {renames:store.db.prepare('SELECT id,session,tile,title,by,created_at FROM rename_requests WHERE state=\'pending\' AND source=? ORDER BY created_at DESC LIMIT 50').all(args.source)};}
     if(operation==='bridge-rename-result'){requireThat(actor.role==='admin','FORBIDDEN','Host adapter required',403);text(args.id,'id',128);requireThat(['accepted','failed'].includes(args.outcome),'INVALID_INPUT','outcome must be accepted or failed',400);return store.mutate(()=>{const row=store.db.prepare('SELECT * FROM rename_requests WHERE id=?').get(args.id);requireThat(row&&row.state==='pending','NOT_FOUND','Unknown pending rename request',404);store.db.prepare('UPDATE rename_requests SET state=?,reason=?,updated_at=? WHERE id=?').run(args.outcome,args.reason??null,store.now(),row.id);store.emit(`session.rename-${args.outcome}`,{request:row.id,session:row.session,tile:row.tile,title:row.title,reason:args.reason??null});return {id:row.id,state:args.outcome};});}
     if(operation==='manager-configure')return managers.configure(actor,args);
@@ -409,8 +422,12 @@ export function coordinator({ db, claimSecret, driverUrl, driverToken, driverIns
     if(operation==='schedule')return schedules.create(actor,args);
     if(operation==='schedules')return schedules.list(actor,{all:args.all===true});
     if(operation==='schedule-cancel')return schedules.cancel(actor,args);
+    if(operation==='schedule-pause')return schedules.pause(actor,args);
     if(operation==='topic-publish')return schedules.publish(actor,args);
-    if(operation==='send'){const r=collaboration.send(actor,args);void collaboration.flush().catch(()=>{});return collaboration.sent(actor,r.id);}
+    if(operation==='messenger-claim')return messenger.claim(actor,args);
+    if(operation==='messenger-inbox')return messenger.inbox(actor,args);
+    if(operation==='messenger-reply')return messenger.reply(actor,args);
+    if(operation==='send'){const r=collaboration.send(actor,args);void collaboration.flush().catch(()=>{});return {...collaboration.sent(actor,r.id),...(r.redirectedTo?{redirectedTo:r.redirectedTo}:{})};}
     if(operation==='inbox'){
       integer(args.waitMs??0,'waitMs',0,3600000);
       if(args.waitMs)await attention.wait(()=>collaboration.pendingCount(actor)>0||null,args.waitMs,signal,actor.id);
@@ -496,7 +513,7 @@ export function coordinator({ db, claimSecret, driverUrl, driverToken, driverIns
         requireThat(body.args?.scheduledBy===undefined||String(body.args.scheduledBy).split('/')[0]===peer.authority,'FORBIDDEN','scheduledBy does not match linked host',403);
         value=collaboration.deliver(body.args);
       }else{
-        requireThat(['capabilities','resources','reserve','reservation','release','renew','start','process','workload-register','workload-launch','workload-list','telemetry','metadata','sessions','session-read','jobs','job','overseer','session-snooze','memories','memory-read','schedule','schedules','schedule-cancel'].includes(body.operation),'FORBIDDEN','Operation cannot be forwarded',403);
+        requireThat(['capabilities','resources','reserve','reservation','release','renew','start','process','workload-register','workload-launch','workload-list','telemetry','metadata','sessions','session-read','jobs','job','overseer','session-snooze','memories','memory-read','schedule','schedules','schedule-cancel','schedule-pause'].includes(body.operation),'FORBIDDEN','Operation cannot be forwarded',403);
         value=await collaborate(actor,body.operation,body.args);
       }
       store.assertLeader();return {authority:store.authority,value};
@@ -513,7 +530,7 @@ export function coordinator({ db, claimSecret, driverUrl, driverToken, driverIns
     if(url.pathname==='/v1/collaboration'&&req.method==='POST'){
       const body=await readBody(req);
       if(body.host&&body.host!==store.authority){
-        requireThat(['capabilities','resources','reserve','reservation','release','renew','start','process','workload-register','workload-launch','workload-list','telemetry','metadata','sessions','session-read','jobs','job','overseer','session-snooze','memories','memory-read','schedule','schedules','schedule-cancel'].includes(body.operation),'FORBIDDEN','Operation cannot be forwarded',403);
+        requireThat(['capabilities','resources','reserve','reservation','release','renew','start','process','workload-register','workload-launch','workload-list','telemetry','metadata','sessions','session-read','jobs','job','overseer','session-snooze','memories','memory-read','schedule','schedules','schedule-cancel','schedule-pause'].includes(body.operation),'FORBIDDEN','Operation cannot be forwarded',403);
         return attachWorkloads(await collaboration.forward(body.host,body.operation,body.args,actor),actor,body.operation);
       }
       if(body.operation==='sessions'&&!body.host)return sessionsAcrossHosts(actor,body.args);
@@ -648,7 +665,7 @@ export function coordinator({ db, claimSecret, driverUrl, driverToken, driverIns
   return {
     server, store, reconcile, failed,
     async close() {
-      closed = true; attention.close(); await observationRuntime.close();clearInterval(timer); clearInterval(heartbeat);clearInterval(mailTimer);clearInterval(overseerTimer);clearTimeout(pruneStart);clearInterval(pruneTimer);memory.close();
+      closed = true; attention.close(); await messenger.close(); await observationRuntime.close();clearInterval(timer); clearInterval(heartbeat);clearInterval(mailTimer);clearInterval(overseerTimer);clearTimeout(pruneStart);clearInterval(pruneTimer);memory.close();
       server.closeAllConnections();
       await new Promise(resolve => server.close(resolve));
       while (busy||claimFlights.size||collaboration.sending||monitoring||pruning||managers.busy) await new Promise(resolve => setTimeout(resolve, 10));

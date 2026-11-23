@@ -29,7 +29,7 @@ You need Node.js 22.16 or newer. macOS and Linux support automatic service setup
 On Windows, run `accord up` under your own supervisor after installation.
 
 ```sh
-npm install -g https://github.com/Enntity/accord/releases/download/v0.9.0/enntity-accord-0.9.0.tgz
+npm install -g https://github.com/Enntity/accord/releases/download/v0.10.0/enntity-accord-0.10.0.tgz
 accord install
 ```
 
@@ -180,6 +180,7 @@ Shell scripts can use `accord run -- COMMAND`, or commands such as `accord find`
 
 - [Install options and how joining works](docs/BOOTSTRAP.md)
 - [Message delivery and wakes](docs/MESSAGE-DELIVERY.md)
+- [Messenger identity claims](docs/MESSENGER-CLAIMS.md)
 - [The web board](docs/WEB.md)
 - [Sessions, search, jobs and the overseer](docs/SESSION-BACKPLANE.md)
 - [Host telemetry](docs/telemetry.md)

@@ -16,6 +16,7 @@ const FIRE_COALESCE_MS = 60000;
 const MAX_FIRES_PER_OWNER_HOUR = 60;
 const MAX_PUBLISH_PER_ACTOR_HOUR = 60;
 const MAX_PENDING_DETAIL = 5;
+const RETENTION_MS = 72 * 3600000;
 const FIRE_BATCH = 64;
 const EVENT_BATCH = 500;
 const TOPIC_RE = /^[a-z0-9][a-z0-9:._#/-]{0,119}$/i;
@@ -47,10 +48,11 @@ export class Schedules {
     const trigger = JSON.parse(row.trigger);
     return {
       id: row.id, state: row.state, owner: row.owner, ownerLabel: row.owner_label ?? undefined,
-      to: row.target, kind: row.kind, delivery: row.delivery, trigger: triggerSummary(trigger),
+      to: row.target, kind: row.kind, delivery: row.delivery, trigger: triggerSummary(trigger), text: row.text,
       nextAt: row.next_at ?? undefined, firedCount: row.fired_count,
       pendingEvents: row.pending_events || undefined,
-      expiresAt: row.expires_at, lastFiredAt: row.last_fired_at ?? undefined,
+      ...(row.expires_at === Number.MAX_SAFE_INTEGER ? { persistent: true } : { expiresAt: row.expires_at }),
+      lastFiredAt: row.last_fired_at ?? undefined,
       endedReason: row.ended_reason ?? undefined, lastError: row.last_error ?? undefined,
       createdAt: row.created_at,
     };
@@ -133,7 +135,9 @@ export class Schedules {
       requireThat(['message', 'notification'].includes(kind), 'INVALID_INPUT', 'Unknown schedule kind', 400);
       const delivery = body.delivery !== undefined ? body.delivery : body.wake === true ? 'native-prompt' : 'inbox';
       requireThat(['inbox', 'native-prompt'].includes(delivery), 'INVALID_INPUT', 'Unknown delivery preference', 400);
-      const expiresAt = body.expiresInMs !== undefined ? now + integer(body.expiresInMs, 'expiresInMs', 60000, MAX_EXPIRY_MS) : now + DEFAULT_EXPIRY_MS;
+      requireThat(body.persistent !== true || body.expiresInMs === undefined, 'INVALID_INPUT', 'persistent cannot combine with expiresInMs', 400);
+      const expiresAt = body.persistent === true ? Number.MAX_SAFE_INTEGER
+        : body.expiresInMs !== undefined ? now + integer(body.expiresInMs, 'expiresInMs', 60000, MAX_EXPIRY_MS) : now + DEFAULT_EXPIRY_MS;
       requireThat(nextAt === null || nextAt <= expiresAt, 'INVALID_INPUT', 'The trigger never fires before expiry', 400);
       const maxFires = body.maxFires === undefined ? null : integer(body.maxFires, 'maxFires', 1, 10000);
       if (actor.role !== 'admin')
@@ -150,8 +154,14 @@ export class Schedules {
     });
   }
 
+  // The designated overseer manages schedules like an admin, addressed by its
+  // own session address.
+  overseer(actor) {
+    return this.db.prepare("SELECT value FROM meta WHERE key='overseer_address'").get()?.value === `${this.store.authority}/${actor.id}`;
+  }
+
   list(actor, { all = false } = {}) {
-    if (all) requireThat(actor.role === 'admin', 'FORBIDDEN', 'Administrator required', 403);
+    if (all) requireThat(actor.role === 'admin' || this.overseer(actor), 'FORBIDDEN', 'Administrator required', 403);
     return {
       schedules: this.db.prepare(`SELECT * FROM schedules ${all ? '' : 'WHERE owner=?'} ORDER BY created_at DESC LIMIT 200`).all(...(all ? [] : [actor.id])).map((row) => this.view(row)),
     };
@@ -161,9 +171,32 @@ export class Schedules {
     text(body.id, 'id', 128);
     const row = this.db.prepare('SELECT * FROM schedules WHERE id=?').get(body.id);
     requireThat(row, 'NOT_FOUND', 'Unknown schedule', 404);
-    requireThat(row.owner === actor.id || actor.role === 'admin', 'NOT_OWNER', 'Schedule belongs to another actor', 403);
-    if (row.state === 'active')
-      this.store.mutate(() => this.db.prepare("UPDATE schedules SET state='cancelled',ended_reason='cancelled' WHERE id=? AND state='active'").run(body.id));
+    requireThat(row.owner === actor.id || actor.role === 'admin' || this.overseer(actor), 'NOT_OWNER', 'Schedule belongs to another actor', 403);
+    if (row.state === 'active' || row.state === 'paused')
+      this.store.mutate(() => this.db.prepare("UPDATE schedules SET state='cancelled',ended_reason='cancelled',expires_at=? WHERE id=? AND state IN('active','paused')").run(this.store.now() + RETENTION_MS, body.id));
+    return this.view(this.db.prepare('SELECT * FROM schedules WHERE id=?').get(body.id));
+  }
+
+  pause(actor, body) {
+    text(body.id, 'id', 128);
+    requireThat(typeof body.paused === 'boolean', 'INVALID_INPUT', 'paused must be a boolean', 400);
+    const row = this.db.prepare('SELECT * FROM schedules WHERE id=?').get(body.id);
+    requireThat(row, 'NOT_FOUND', 'Unknown schedule', 404);
+    requireThat(row.owner === actor.id || actor.role === 'admin' || this.overseer(actor), 'NOT_OWNER', 'Schedule belongs to another actor', 403);
+    const now = this.store.now();
+    if (body.paused) {
+      if (row.state === 'active')
+        this.store.mutate(() => this.db.prepare("UPDATE schedules SET state='paused' WHERE id=? AND state='active'").run(body.id));
+    } else if (row.state === 'paused') {
+      this.store.mutate(() => {
+        const trigger = JSON.parse(row.trigger);
+        // Resume re-arms from now: an interval waits one period, a passed
+        // one-shot fires on the next tick, event triggers listen fresh.
+        const nextAt = trigger.everyMs !== undefined ? now + trigger.everyMs
+          : trigger.at !== undefined ? Math.max(trigger.at, now) : null;
+        this.db.prepare("UPDATE schedules SET state='active',next_at=?,pending_events=0,pending_detail=NULL WHERE id=? AND state='paused'").run(nextAt, body.id);
+      });
+    }
     return this.view(this.db.prepare('SELECT * FROM schedules WHERE id=?').get(body.id));
   }
 
@@ -225,10 +258,10 @@ export class Schedules {
         // A rebound session inherits the retired owner's schedules; the owner
         // label stays unless the successor has one of its own.
         // Self-targeted check-ins follow the rebound owner; explicit targets stay.
-        this.db.prepare("UPDATE schedules SET owner=?,owner_label=coalesce(?,owner_label),target=CASE WHEN target=? THEN ? ELSE target END WHERE owner=? AND state='active'")
+        this.db.prepare("UPDATE schedules SET owner=?,owner_label=coalesce(?,owner_label),target=CASE WHEN target=? THEN ? ELSE target END WHERE owner=? AND state IN('active','paused')")
           .run(successor, label ?? null, `${this.store.authority}/${data.session}`, `${this.store.authority}/${successor}`, data.session);
       } else {
-        this.db.prepare("UPDATE schedules SET state='cancelled',ended_reason='owner-retired' WHERE owner=? AND state='active'").run(data.session);
+        this.db.prepare("UPDATE schedules SET state='cancelled',ended_reason='owner-retired',expires_at=? WHERE owner=? AND state IN('active','paused')").run(this.store.now() + RETENTION_MS, data.session);
       }
     }
     const summary = this.eventSummary(ev.kind, data);
@@ -270,11 +303,31 @@ export class Schedules {
         this.db.prepare('UPDATE schedules SET next_at=?,deferred=1 WHERE id=?').run(Math.ceil(now / 60000) * 60000, row.id);
         continue;
       }
-      const error = this.targetError(row.target, row.owner);
+      // A retired target follows its successor chain when one is live; without
+      // one the schedule ends rather than failing.
+      let target = row.target;
+      if (this.targetError(target, row.owner) === 'RECIPIENT_RETIRED') {
+        const successor = this.targetSuccessor(target);
+        if (successor) {
+          this.db.prepare('UPDATE schedules SET target=? WHERE id=?').run(successor, row.id);
+          target = successor;
+        } else {
+          this.db.prepare("UPDATE schedules SET state='ended',ended_reason='target-retired',expires_at=? WHERE id=?").run(now + RETENTION_MS, row.id);
+          this.store.emit('schedule.ended', { schedule: row.id, owner: row.owner, reason: 'target-retired' });
+          continue;
+        }
+      }
+      const error = this.targetError(target, row.owner);
       const fired = row.fired_count + 1;
       if (error) {
-        this.db.prepare("UPDATE schedules SET state='failed',last_error=? WHERE id=?").run(error, row.id);
+        this.db.prepare("UPDATE schedules SET state='failed',last_error=?,expires_at=? WHERE id=?").run(error, now + RETENTION_MS, row.id);
         this.store.emit('schedule.failed', { schedule: row.id, owner: row.owner, error });
+        continue;
+      }
+      // An interval wake whose previous fire is still unread never stacks: the
+      // fire is skipped and the cadence simply advances.
+      if (trigger.everyMs !== undefined && row.fired_count > 0 && target.split('/')[0] === this.store.authority && this.previousFireUnread(row)) {
+        this.db.prepare('UPDATE schedules SET next_at=? WHERE id=?').run(now + trigger.everyMs, row.id);
         continue;
       }
       const detail = row.pending_events > 0
@@ -286,7 +339,7 @@ export class Schedules {
       const envelope = {
         id: hash(`${row.id}:${fired}`),
         from: `${this.store.authority}/accord-scheduler`,
-        to: row.target,
+        to: target,
         text: `Scheduled by ${ownerLabel} (${row.id}): ${row.text}${detail}${late}${deferred}`,
         kind: row.kind,
         delivery: row.delivery,
@@ -298,11 +351,28 @@ export class Schedules {
       const done = trigger.at !== undefined || (row.max_fires !== null && fired >= row.max_fires);
       const nextAt = done || trigger.event !== undefined ? null : now + trigger.everyMs;
       const armed = trigger.event === 'idle' ? 0 : 1;
-      this.db.prepare("UPDATE schedules SET last_fired_at=?,fired_count=?,pending_events=0,pending_detail=NULL,deferred=0,armed=?,next_at=?,state=? WHERE id=?")
-        .run(now, fired, armed, nextAt, done ? 'done' : 'active', row.id);
+      this.db.prepare("UPDATE schedules SET last_fired_at=?,fired_count=?,pending_events=0,pending_detail=NULL,deferred=0,armed=?,next_at=?,state=?,expires_at=? WHERE id=?")
+        .run(now, fired, armed, nextAt, done ? 'done' : 'active', done ? now + RETENTION_MS : row.expires_at, row.id);
       this.store.emit('schedule.fired', { schedule: row.id, owner: row.owner, count: fired });
     }
     return flushed;
+  }
+
+  // The previous interval fire is identified by its deterministic outbox id,
+  // stored as the Messenger clientMessageId. A message missing from the store
+  // counts as read; only a pending or offered one suppresses the next fire (a dead one never blocks the loop).
+  previousFireUnread(row) {
+    const previous = this.collaboration.messages.db
+      .prepare('SELECT d.state FROM messages m JOIN deliveries d ON d.message_id=m.id WHERE m.client_message_id=?')
+      .get(hash(`${row.id}:${row.fired_count}`));
+    return !!previous && ['pending', 'offered'].includes(previous.state);
+  }
+
+  targetSuccessor(target) {
+    const [authority, recipient] = String(target).split('/');
+    if (authority !== this.store.authority) return null;
+    const successor = this.collaboration.liveSuccessor(recipient);
+    return successor ? `${authority}/${successor}` : null;
   }
 
   targetError(target, owner) {
@@ -330,15 +400,20 @@ export class Schedules {
     const now = this.store.now();
     const cursor = this.db.prepare('SELECT event_seq FROM schedule_cursor WHERE id=1').get()?.event_seq ?? 0;
     const hasDue = this.db.prepare("SELECT 1 FROM schedules WHERE state='active' AND next_at IS NOT NULL AND next_at<=? LIMIT 1").get(now);
-    const hasExpiry = this.db.prepare("SELECT 1 FROM schedules WHERE state='active' AND expires_at<=? LIMIT 1").get(now);
+    // Ended rows keep a 72 h retention deadline in expires_at; prunable rows
+    // make the fast path enter the mutation like any other work.
+    const hasExpiry = this.db.prepare("SELECT 1 FROM schedules WHERE state IN('active','paused') AND expires_at<=? LIMIT 1").get(now);
+    const hasPrune = this.db.prepare("SELECT 1 FROM schedules WHERE state IN('done','cancelled','expired','failed','ended') AND expires_at<=? LIMIT 1").get(now);
     const hasEvents = this.db.prepare('SELECT 1 FROM events WHERE seq>? LIMIT 1').get(cursor);
     const hasIdle = this.db.prepare("SELECT 1 FROM schedules WHERE state='active' AND json_extract(trigger,'$.event')='idle' LIMIT 1").get();
-    if (!hasDue && !hasExpiry && !hasEvents && !hasIdle) return false;
+    if (!hasDue && !hasExpiry && !hasPrune && !hasEvents && !hasIdle) return false;
     let flushed = false;
     this.store.mutate(() => {
       const now = this.store.now();
       if (hasExpiry)
-        this.db.prepare("UPDATE schedules SET state='expired',ended_reason='expired' WHERE state='active' AND expires_at<=?").run(now);
+        this.db.prepare("UPDATE schedules SET state='expired',ended_reason='expired',expires_at=? WHERE state IN('active','paused') AND expires_at<=?").run(now + RETENTION_MS, now);
+      if (hasPrune)
+        this.db.prepare("DELETE FROM schedules WHERE state IN('done','cancelled','expired','failed','ended') AND expires_at<=?").run(now);
       const cursor = this.db.prepare('SELECT event_seq FROM schedule_cursor WHERE id=1').get()?.event_seq ?? 0;
       let last = cursor;
       for (const ev of this.db.prepare('SELECT seq,kind,at,data FROM events WHERE seq>? ORDER BY seq LIMIT ?').all(cursor, EVENT_BATCH)) {
