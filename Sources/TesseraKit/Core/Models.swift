@@ -176,6 +176,8 @@ public struct TileInfo: Codable, Identifiable, Hashable, Sendable {
     public var needs: String?
     /// A message an agent sent to wake this tile, while it waits or just after it landed.
     public var wake: WakeMark?
+    /// The tile agent's live Accord schedules, one line each ("every 10m: check Messenger").
+    public var scheduleLines: [String] = []
 
     /// Why the tile waits on the user, in a line: its question, its error, what it finished with.
     public var reason: String {
@@ -217,6 +219,28 @@ public struct TileInfo: Codable, Identifiable, Hashable, Sendable {
 
     /// The lane line when what the tile shows isn't at hand.
     public var laneLine: String { laneLine(shown: nil) }
+
+    /// Newer fields an older peer may not send: decoding fills them rather than failing.
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        kind = try c.decode(TileKind.self, forKey: .kind)
+        flavor = try c.decode(AgentFlavor.self, forKey: .flavor)
+        title = try c.decode(String.self, forKey: .title)
+        subtitle = try c.decode(String.self, forKey: .subtitle)
+        activity = try c.decode(TileActivity.self, forKey: .activity)
+        attention = try c.decode(Bool.self, forKey: .attention)
+        lastActivityAt = try c.decode(Date.self, forKey: .lastActivityAt)
+        detail = try c.decodeIfPresent(String.self, forKey: .detail)
+        cols = try c.decodeIfPresent(Int.self, forKey: .cols)
+        rows = try c.decodeIfPresent(Int.self, forKey: .rows)
+        url = try c.decodeIfPresent(String.self, forKey: .url)
+        progress = try c.decodeIfPresent(Double.self, forKey: .progress)
+        summary = try c.decodeIfPresent(String.self, forKey: .summary)
+        needs = try c.decodeIfPresent(String.self, forKey: .needs)
+        wake = try c.decodeIfPresent(WakeMark.self, forKey: .wake)
+        scheduleLines = try c.decodeIfPresent([String].self, forKey: .scheduleLines) ?? []
+    }
 
     public init(id: String, kind: TileKind, flavor: AgentFlavor, title: String, subtitle: String = "",
                 activity: TileActivity = .starting, attention: Bool = false, lastActivityAt: Date = Date(),

@@ -200,7 +200,8 @@ public final class TerminalSession: NSObject {
     /// Agent CLIs animate their titles with spinner glyphs (braille dots, ✳ ✶ ·); keep just the words.
     nonisolated static func cleanTitle(_ title: String) -> String {
         let spinner: (Unicode.Scalar) -> Bool = { s in
-            (0x2800...0x28FF).contains(s.value) || (0x2700...0x27BF).contains(s.value) || "·•*∙⋅".unicodeScalars.contains(s)
+            (0x2800...0x28FF).contains(s.value) || (0x2700...0x27BF).contains(s.value) || (0x25A0...0x25FF).contains(s.value)
+                || "·•*∙⋅".unicodeScalars.contains(s)
         }
         let scalars = title.unicodeScalars.drop { spinner($0) || $0 == " " }
         return String(String.UnicodeScalarView(scalars)).trimmingCharacters(in: .whitespaces)
@@ -263,7 +264,8 @@ public final class TerminalSession: NSObject {
                                                          followUp: ShellIntegration.followUpShell(shell, nonce: shellNonce),
                                                          dialect: LaunchScript.dialect(forShell: executable) ?? .posix, nonce: shellNonce)]
         }
-        process.startProcess(executable: executable, args: args, environment: Self.environment(tileId: id, shell: shell, nonce: shellNonce, overrides: environmentOverrides),
+        process.startProcess(executable: executable, args: args, environment: Self.environment(tileId: id, shell: shell, nonce: shellNonce,
+                             tileAgent: command.flatMap(SessionResume.conversationTool(for:))?.rawValue, overrides: environmentOverrides),
                              execName: nil, currentDirectory: cwd)
         // forkpty fails when the system is out of terminals; say so (with Restart) instead of "Starting" forever.
         guard process.shellPid > 0 else {
@@ -571,7 +573,7 @@ public final class TerminalSession: NSObject {
         return SessionResume.conversationTool(for: line) != nil ? line : nil
     }
 
-    static func environment(tileId: String, shell: String, nonce: String, overrides: [String: String] = [:]) -> [String] {
+    static func environment(tileId: String, shell: String, nonce: String, tileAgent: String? = nil, overrides: [String: String] = [:]) -> [String] {
         var env = ProcessInfo.processInfo.environment
         // Tessera may itself be launched from an agent; don't leak nesting markers into tiles.
         for key in ["CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", "TERM_SESSION_ID", "ITERM_SESSION_ID"] { env.removeValue(forKey: key) }
@@ -580,6 +582,9 @@ public final class TerminalSession: NSObject {
         env["COLORTERM"] = "truecolor"
         env["TERM_PROGRAM"] = "Tessera"
         env["TESSERA_TILE_ID"] = tileId
+        // Accord's nested gating: an MCP enrollment inside this tile links as its agent only when
+        // the client family matches what the tile launched. Shell tiles leave it unset.
+        if let tileAgent { env["TESSERA_TILE_AGENT"] = tileAgent }
         env.merge(ShellIntegration.environment(shell: shell, base: ProcessInfo.processInfo.environment, nonce: nonce)) { _, new in new }
         env.merge(overrides) { _, new in new }
         if env["LANG"] == nil { env["LANG"] = "en_US.UTF-8" }

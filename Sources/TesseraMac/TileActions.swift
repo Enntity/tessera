@@ -86,6 +86,20 @@ struct TileMenu: View {
                 Button("Session: \(record.address)") {}.disabled(true)
             }
         }
+        let tileSchedules = workspace.schedules(for: info.id)
+        if !tileSchedules.isEmpty {
+            // The tile agent's life loops: pause one that nags, delete one that is done with.
+            Menu("Schedules") {
+                ForEach(tileSchedules) { schedule in
+                    Button(schedule.line) {}.disabled(true)
+                    if workspace.accord.schedulePauseSupported {
+                        Button(schedule.paused ? "Resume" : "Pause") { workspace.setSchedulePaused(schedule.id, paused: !schedule.paused) }
+                    }
+                    Button("Delete", role: .destructive) { workspace.cancelSchedule(schedule.id) }
+                    if schedule.id != tileSchedules.last?.id { Divider() }
+                }
+            }
+        }
         ForEach(model.actions(for: info)) { action in Button(action.title, action: action.run) }
         if info.needsUser { Button(info.dismissLabel) { workspace.dismiss(info.id) } }
         Menu("Move to Tab") {
