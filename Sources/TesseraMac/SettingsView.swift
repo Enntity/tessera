@@ -208,6 +208,14 @@ struct GeneralSettings: View {
                 }
                 Text("Where a new tile starts when the selected tile isn't working in a folder of its own. The launcher (⌘N) starts the next one anywhere: pick a folder there, or type its path.").note()
             }
+            Section("Tabs") {
+                Toggle("Keep my tabs organized", isOn: $workspace.autoTabs)
+                    .onChange(of: workspace.autoTabs) { _, _ in workspace.save() }
+                Toggle("File without asking", isOn: $workspace.autoTabsApply)
+                    .disabled(!workspace.autoTabs)
+                    .onChange(of: workspace.autoTabsApply) { _, _ in workspace.save() }
+                Text("Sessions an agent starts (side sessions, forks, tiles it opens) always go in the tab of the one that started them, and move with it. With tabs kept organized, the steward's model (Agents) files everything else you haven't placed yourself, making tabs as needed and putting away the ones it made once they are empty. Tabs you made, and tiles you dragged onto a tab or back to All, stay where you put them. Without filing on its own, its moves wait in the tab strip.").note()
+            }
             Section("Claude & Codex apps") {
                 Toggle("Move and resize app windows to match the opened tile", isOn: $workspace.placeNativeWindows)
                     .onChange(of: workspace.placeNativeWindows) { _, _ in workspace.save() }

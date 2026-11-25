@@ -141,15 +141,12 @@ struct RenamePopover: ViewModifier {
             .popover(isPresented: $isPresented) {
                 let support = model.workspace.renameSupport(for: info.id)
                 VStack(alignment: .leading, spacing: Style.Space.xs) {
-                    TextField("Title", text: $draft)
-                        .textFieldStyle(.roundedBorder)
-                        .frame(width: Style.Metrics.nameField)
-                        .disabled(support.mechanism == nil)
-                        .onSubmit {
-                            do { model.note = try model.workspace.rename(info.id, to: draft) }
-                            catch { model.note = error.localizedDescription }
-                            isPresented = false
-                        }
+                    NameField(prompt: "Title", text: $draft) {
+                        do { model.note = try model.workspace.rename(info.id, to: draft) }
+                        catch { model.note = error.localizedDescription }
+                        isPresented = false
+                    }
+                    .disabled(support.mechanism == nil)
                     if case .unsupported(let reason) = support {
                         Text(reason).font(Style.ui(.label)).foregroundStyle(Style.dim)
                             .frame(width: Style.Metrics.nameField, alignment: .leading)
@@ -158,6 +155,32 @@ struct RenamePopover: ViewModifier {
                 .padding(Style.Space.gutter)
                 .onAppear { draft = info.title }
             }
-            .onChange(of: isPresented) { _, shown in if !shown { model.restoreFocus() } }
+    }
+}
+
+/// A name typed in a popover (a tile's, a tab's). It takes the keyboard as it appears, and while
+/// it is up the board under it takes no keys: typed on the board, they would go to the filter.
+struct NameField: View {
+    @Environment(AppModel.self) private var model
+    let prompt: String
+    @Binding var text: String
+    let commit: () -> Void
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        TextField(prompt, text: $text)
+            .textFieldStyle(.roundedBorder)
+            .frame(width: Style.Metrics.nameField)
+            .focused($focused)
+            .onSubmit(commit)
+            .onAppear {
+                model.isNaming = true
+                // (The popover's window has to be up before its field can take the keyboard.)
+                DispatchQueue.main.async { focused = true }
+            }
+            .onDisappear {
+                model.isNaming = false
+                model.restoreFocus()
+            }
     }
 }

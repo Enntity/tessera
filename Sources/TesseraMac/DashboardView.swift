@@ -554,6 +554,7 @@ struct TabStrip: View {
                         }
                         .transition(.scale(scale: 0.8).combined(with: .opacity))
                 }
+                TabSuggestions()
                 Button {
                     draft = ""
                     naming = true
@@ -581,15 +582,49 @@ struct TabStrip: View {
     }
 
     private func nameField(_ prompt: String, commit: @escaping (String) -> Void) -> some View {
-        TextField(prompt, text: $draft)
-            .textFieldStyle(.roundedBorder)
-            .frame(width: Style.Metrics.nameField)
-            .padding(Style.Space.gutter)
-            .onSubmit {
-                commit(draft)
-                naming = false
-                renaming = nil
+        NameField(prompt: prompt, text: $draft) {
+            commit(draft)
+            naming = false
+            renaming = nil
+        }
+        .padding(Style.Space.gutter)
+    }
+}
+
+/// The organizer's moves, when it offers them rather than making them: each one, or all at once.
+/// Absent when there are none.
+struct TabSuggestions: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        let workspace = model.workspace
+        let moves = workspace.tabSuggestions
+        if !moves.isEmpty {
+            Menu {
+                Section("Tessera would file") {
+                    ForEach(moves, id: \.self) { move in
+                        Button("\(workspace.info(move.tile)?.title ?? move.tile) → \(workspace.tabName(move.tab))") {
+                            withAnimation(Style.Motion.standard) { workspace.fileTabs([move]) }
+                        }
+                    }
+                }
+                Divider()
+                Button("File All") { withAnimation(Style.Motion.standard) { workspace.fileTabs(moves) } }
+                Button("Always File Without Asking") {
+                    workspace.autoTabsApply = true
+                    withAnimation(Style.Motion.standard) { workspace.fileTabs(moves) }
+                }
+                Button("Not These") { workspace.dismissTabSuggestions() }
+            } label: {
+                Label("\(moves.count) to file", systemImage: "sparkles").font(Style.caption).foregroundStyle(Style.muted)
             }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .fixedSize()
+            .tint(Style.muted)
+            .help("Tessera's suggestions for your tabs")
+            .transition(.opacity)
+        }
     }
 }
 

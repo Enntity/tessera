@@ -46,6 +46,12 @@ extension Workspace {
         var dockWidth: Double?
         /// The overseer's tile.
         var overseer: String?
+        /// Tiles the user took out of every tab, and where agents' tiles came from (their tabs follow).
+        var keptOnAll: [String]?
+        var origins: [String: String]?
+        /// Tessera keeps the tabs, and makes the organizer's moves without asking.
+        var autoTabs: Bool?
+        var autoTabsApply: Bool?
     }
 
     /// Where a tile that reappears (an app session found again after launch) goes: right after the

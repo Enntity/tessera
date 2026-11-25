@@ -69,6 +69,16 @@ public final class Workspace {
     public private(set) var textSets = 0
     @ObservationIgnored private var typingInField = false
     public private(set) var groups = TileGroups()
+    /// Tessera keeps the tabs: the organizer files every tile the user hasn't placed themself.
+    public var autoTabs = true { didSet { if !autoTabs { tabSuggestions = [] } } }
+    /// The organizer's moves are made at once, not offered.
+    public var autoTabsApply = false
+    /// Moves the organizer offers, waiting on the user.
+    public private(set) var tabSuggestions: [Steward.TabMove] = []
+    /// Offers the user waved off: not made again.
+    @ObservationIgnored private var dismissedMoves: Set<Steward.TabMove> = []
+    /// The tile each agent-opened tile was opened from.
+    @ObservationIgnored private var tileOrigins: [String: String] = [:]
     /// Place the Claude / Codex window where the opened tile would sit when an app session is opened.
     public var placeNativeWindows = false
     /// Bring terminals back into their conversations when Tessera opens (else they wait, shut down).
@@ -180,6 +190,8 @@ public final class Workspace {
         steward.digests = { [weak self] in self?.stewardDigests().filter { $0.id != self?.overseerId } ?? [] }
         steward.changes = { [weak self] in self.map { Steward.changes($0.allTiles, since: $0.awaySince) } ?? [] }
         steward.sharedSummaries = { [weak self] in self?.accord.tileSummaries ?? [:] }
+        steward.tabBoard = { [weak self] in self?.tabBoard() }
+        steward.tabsPlanned = { [weak self] in self?.planned($0) }
         steward.configureShared = { [weak self] config, key, migration in
             guard let self else { return }
             var args: [String:Any] = ["url":config.url,"model":config.model,"ifAbsent":migration]
@@ -430,7 +442,7 @@ public final class Workspace {
 
     public func renameGroup(_ id: String, to name: String) {
         groups.rename(id, to: name)
-        save()
+        tabsChanged()
     }
 
     public func deleteGroup(_ id: String) {
@@ -443,8 +455,100 @@ public final class Workspace {
     public func move(tile tileId: String, toGroup groupId: String?) {
         guard info(tileId) != nil else { return }  // e.g. an account row dropped on a tab
         groups.assign(tileId, to: groupId)
+        keepTabs()
         reconcileSelection()
         save()
+    }
+
+    // MARK: Tabs Tessera keeps
+
+    /// Where tiles came from: an app session's own record (a side session, a fork), or the tile of
+    /// the agent that opened it.
+    var origins: [String: String] {
+        var all = tileOrigins.filter { exists($0.key) }
+        for id in order { if let origin = agents.session(id)?.origin { all[id] = origin } }
+        return all
+    }
+
+    /// Spawned work goes beside the work it came from; the tabs Tessera made that hold nothing go.
+    private func keepTabs() {
+        var next = groups
+        next.follow(origins)
+        if agents.hasScanned { next.prune(existing: Set(order)) }
+        guard next != groups else { return }
+        groups = next
+        tabsChanged()
+    }
+
+    private func tabsChanged() {
+        if case .group(let g) = filter, !groups.list.contains(where: { $0.id == g }) { filter = .all }
+        tabSuggestions.removeAll { !exists($0.tile) || !groups.isMovable($0.tile) }
+        save()
+    }
+
+    /// The board as the organizer reads it: nil when tabs are the user's alone, or nothing may move.
+    /// A spawned tile goes with its origin, so it is not the organizer's to place.
+    func tabBoard() -> (tabs: [Steward.TabDigest], tiles: [Steward.TabTile], state: Int)? {
+        guard autoTabs else { return nil }
+        let origins = origins
+        let tiles = boardTiles.filter { ![AgentFlavor.agentDesk, .lloom].contains($0.flavor) }.prefix(80).map { t in
+            Steward.TabTile(id: t.id, title: t.title, folder: t.subtitle, tab: groups.group(of: t.id)?.id,
+                            movable: groups.isMovable(t.id) && origins[t.id].map(exists) != true, summary: t.summary)
+        }
+        guard tiles.contains(where: \.movable) else { return nil }
+        let tabs = groups.list.map { Steward.TabDigest(id: $0.id, name: $0.name, byUser: !$0.isTessera) }
+        // What the organizer decides on: not where it filed things itself, or it would be asked again.
+        var hasher = Hasher()
+        for t in tiles {
+            hasher.combine(t.id); hasher.combine(t.title); hasher.combine(t.movable)
+            if !t.movable { hasher.combine(t.tab) }
+        }
+        for t in tabs { hasher.combine(t.id); hasher.combine(t.name) }
+        return (tabs, Array(tiles), hasher.finalize())
+    }
+
+    private func planned(_ moves: [Steward.TabMove]) {
+        // (Switched off while the model was answering.)
+        guard autoTabs else { return }
+        let fresh = moves.filter { !dismissedMoves.contains($0) }
+        if autoTabsApply { fileTabs(fresh) } else { tabSuggestions = fresh }
+    }
+
+    /// Makes the organizer's moves: into the tab named, made when there is none.
+    public func fileTabs(_ moves: [Steward.TabMove]) {
+        for move in moves {
+            let tab: String
+            switch move.tab {
+            case .existing(let id): tab = id
+            case .new(let name):
+                tab = groups.list.first { $0.name.caseInsensitiveCompare(name) == .orderedSame }?.id ?? groups.create(named: name, byTessera: true)
+            }
+            groups.file(move.tile, to: tab)
+        }
+        tabSuggestions.removeAll { moves.contains($0) }
+        keepTabs()
+        tabsChanged()
+    }
+
+    public func dismissTabSuggestions() {
+        dismissedMoves.formUnion(tabSuggestions)
+        tabSuggestions = []
+    }
+
+    /// The tab a suggested move goes to, by name.
+    public func tabName(_ target: Steward.TabMove.Target) -> String {
+        switch target {
+        case .existing(let id): groups.list.first { $0.id == id }?.name ?? "a tab"
+        case .new(let name): name
+        }
+    }
+
+    /// Demo and tests only: the organizer's answer (its JSON) for the board as it is.
+    public func debugTabPlan(_ json: String) {
+        guard let board = tabBoard(),
+              let data = try? JSONSerialization.data(withJSONObject: ["choices": [["message": ["content": json]]]]),
+              let moves = try? Steward.tabPlan(fromCompletion: data, tabs: board.tabs, tiles: board.tiles) else { return }
+        planned(moves)
     }
 
     /// New work belongs in the tab being viewed, and shows: the filter is dropped.
@@ -455,7 +559,13 @@ public final class Workspace {
     }
 
     private func insert(_ id: String, quietly: Bool = false, tab: String? = nil, after: String? = nil) {
-        groups.assign(id, to: quietly ? tab : tabForNewTiles())
+        if quietly {
+            // An agent's open goes in its own tab, and moves with it from then on.
+            if let after { tileOrigins[id] = after }
+            if let tab { groups.file(id, to: tab) }
+        } else if let tab = tabForNewTiles() {
+            groups.assign(id, to: tab)
+        }
         // New tiles land after the selection so related work clusters.
         if let spot = (quietly ? after : selectedId), let i = order.firstIndex(of: spot) {
             order.insert(id, at: i + 1)
@@ -483,7 +593,7 @@ public final class Workspace {
                                 tab: groups.group(of: id)?.id)
         if let t = terminals.removeValue(forKey: id) { t.terminate() }
         if let b = browsers.removeValue(forKey: id) { b.webView.stopLoading() }
-        if agents.sessions[id] != nil { hiddenAgents[id] = Date() } else { groups.assign(id, to: nil) }
+        if agents.sessions[id] != nil { hiddenAgents[id] = Date() } else { groups.forget(id) }
         desk.setAside(id)
         desk.failQueued(id)
         // Its place as of now (an app session may have arrived since the board was last saved).
@@ -508,7 +618,7 @@ public final class Workspace {
         } else if let closed, revive(closed.tile, as: restorePlan(order.compactMap(savedTile) + [closed.tile])[id],
                                      suspended: closed.tile.suspended == true) {
             order.insert(id, at: Self.restoredIndex(of: id, saved: savedOrder, in: order))
-            groups.assign(id, to: closed.tab)
+            if let tab = closed.tab { groups.assign(id, to: tab) }
         }
         guard exists(id) else { return false }
         // An open tile keeps the selection, and an agent's reopen leaves it alone.
@@ -1590,6 +1700,7 @@ public final class Workspace {
             added.append(a)
         }
         openPendingAppConversation(newlyAdded: added)
+        keepTabs()
         // Write only a real change: even an empty removal would re-render everything reading `order`.
         let kept = order.filter { id in !(id.contains(":") && live[id] == nil && terminals[id] == nil && browsers[id] == nil) }
         if kept.count != order.count {
@@ -1749,7 +1860,9 @@ public final class Workspace {
                              groups: groups.list, resumeOnLaunch: resumeOnLaunch, order: savedOrder, hidden: hiddenAgents,
                              agentLookbackHours: agents.lookback / 3600, titles: [:],
                              closed: recentlyClosed.tiles.map(Lossy.init), dock: dock.ids,
-                             dockWidth: dockWidth.map(Double.init), overseer: overseerId), to: saveURL)
+                             dockWidth: dockWidth.map(Double.init), overseer: overseerId,
+                             keptOnAll: groups.keptOnAll.sorted(), origins: tileOrigins.filter { exists($0.key) },
+                             autoTabs: autoTabs, autoTabsApply: autoTabsApply), to: saveURL)
     }
 
     /// Notes every tile's place. App sessions not on the board now (closed, or not rescanned yet
@@ -1805,7 +1918,10 @@ public final class Workspace {
         if tiles.count < saved.tiles.count { StateFile.keepAside(saveURL) }
         defaultDirectory = saved.defaultDirectory ?? defaultDirectory
         placeNativeWindows = saved.placeNativeWindows ?? false
-        groups = TileGroups(saved.groups ?? [])
+        groups = TileGroups(saved.groups ?? [], keptOnAll: Set(saved.keptOnAll ?? []))
+        tileOrigins = saved.origins ?? [:]
+        autoTabs = saved.autoTabs ?? true
+        autoTabsApply = saved.autoTabsApply ?? false
         resumeOnLaunch = saved.resumeOnLaunch ?? true
         savedOrder = saved.order ?? []
         hiddenAgents = saved.hidden ?? [:]
