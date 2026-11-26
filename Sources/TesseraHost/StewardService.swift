@@ -40,6 +40,11 @@ public final class StewardService {
     @ObservationIgnored public var changes: (() -> [String])?
     /// Privacy mode is on: nothing is read or sent.
     @ObservationIgnored public var paused: (() -> Bool)?
+    /// The board's tabs as the organizer reads them, and a fingerprint of what it would decide on;
+    /// nil when there is nothing for it to file.
+    @ObservationIgnored public var tabBoard: (() -> (tabs: [Steward.TabDigest], tiles: [Steward.TabTile], state: Int)?)?
+    /// The organizer's moves for the board it was given.
+    @ObservationIgnored public var tabsPlanned: (([Steward.TabMove]) -> Void)?
 
     @ObservationIgnored private let store: URL
     @ObservationIgnored private let feedback: URL
@@ -50,6 +55,9 @@ public final class StewardService {
     @ObservationIgnored private var briefedState: Int?
     @ObservationIgnored private var lastBriefAt = Date.distantPast
     @ObservationIgnored private var retryAt = Date.distantPast
+    @ObservationIgnored private var organizing = false
+    @ObservationIgnored private var organizedState: Int?
+    @ObservationIgnored private var lastOrganizedAt = Date.distantPast
     @ObservationIgnored private var generation = UUID()
     @ObservationIgnored private let session: URLSession
     @ObservationIgnored private let readKey: @Sendable () -> String?
@@ -63,6 +71,8 @@ public final class StewardService {
     nonisolated static let account = "steward.key"
     /// Native board brief cadence; Accord schedules individual session summaries.
     static let briefEvery: TimeInterval = 60
+    /// The tabs are looked at again at most this often, and only once the board has changed.
+    static let organizeEvery: TimeInterval = 120
 
     public init(directory: URL) {
         self.session = Self.makeSession()
@@ -127,6 +137,8 @@ public final class StewardService {
         brief = nil
         summaries = [:]
         lastBriefAt = .distantPast
+        organizedState = nil
+        lastOrganizedAt = .distantPast
         config = next
         StateFile.save(config, to: store)
         if let key, !key.isEmpty { Keychain.set(key, account: Self.account) }
@@ -157,6 +169,8 @@ public final class StewardService {
     public func refresh() {
         briefedState = nil
         lastBriefAt = .distantPast
+        organizedState = nil
+        lastOrganizedAt = .distantPast
         retryAt = .distantPast
         tick()
     }
@@ -193,6 +207,26 @@ public final class StewardService {
         // another tile to summarize, and the brief would starve. It runs on its own request.
         if !briefing, briefedState != boardState, now.timeIntervalSince(lastBriefAt) >= Self.briefEvery || brief == nil {
             makeBrief(digests.map { var d = $0; d.summary = shared[d.id]?.summary; return d }, state: boardState, base: base)
+        }
+        if !organizing, now.timeIntervalSince(lastOrganizedAt) >= Self.organizeEvery, let board = tabBoard?(), board.state != organizedState {
+            organize(tabs: board.tabs, tiles: board.tiles, state: board.state, base: base)
+        }
+    }
+
+    private func organize(tabs: [Steward.TabDigest], tiles: [Steward.TabTile], state: Int, base: URL) {
+        organizing = true
+        call(base: base, messages: Steward.tabMessages(tabs: tabs, tiles: tiles), maxTokens: 1200) { [weak self] data in
+            guard let self else { return }
+            self.organizing = false
+            self.lastOrganizedAt = Date()
+            guard let data else { return }
+            do {
+                let moves = try Steward.tabPlan(fromCompletion: data, tabs: tabs, tiles: tiles)
+                self.organizedState = state
+                self.tabsPlanned?(moves)
+            } catch {
+                self.status = .failed(error.localizedDescription)
+            }
         }
     }
 

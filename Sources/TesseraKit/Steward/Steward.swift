@@ -202,6 +202,89 @@ public enum Steward {
                      at: at)
     }
 
+    // MARK: Tabs
+
+    /// A tab as the organizer sees it.
+    public struct TabDigest: Equatable, Sendable {
+        public var id: String
+        public var name: String
+        /// The developer made or named it: it is theirs, though Tessera may still file tiles in it.
+        public var byUser: Bool
+        public init(id: String, name: String, byUser: Bool) { self.id = id; self.name = name; self.byUser = byUser }
+    }
+
+    /// A tile as the organizer sees it: what it is about, where it is, and whether it may move.
+    public struct TabTile: Equatable, Sendable {
+        public var id: String
+        public var title: String
+        public var folder: String
+        /// The tab it is in now.
+        public var tab: String?
+        /// False when the developer put it where it is.
+        public var movable: Bool
+        public var summary: String?
+        public init(id: String, title: String, folder: String, tab: String?, movable: Bool, summary: String?) {
+            self.id = id; self.title = title; self.folder = folder; self.tab = tab; self.movable = movable; self.summary = summary
+        }
+    }
+
+    /// One move the organizer proposes: a tile into a tab there is, or into a new one by name.
+    public struct TabMove: Equatable, Hashable, Sendable {
+        public enum Target: Equatable, Hashable, Sendable { case existing(String), new(String) }
+        public var tile: String
+        public var tab: Target
+        public init(tile: String, tab: Target) { self.tile = tile; self.tab = tab }
+    }
+
+    public static let tabsSystemPrompt = """
+        You are Tessera's organizer. A developer's board holds terminals, AI agent sessions and pages; \
+        tabs group them by project or line of work so the developer finds their things together. \(guardrail)
+        Reply with JSON only: {"moves": [{"id": "<tile id>", "tab": "<tab id, or a new tab's name>"}]}.
+        Move only tiles marked movable, and only where they clearly belong: by what the work is about \
+        (title, folder, summary), not by what kind of tile it is. Prefer the tabs there are. Name a new tab \
+        (1-3 words, the project or workstream) only for work no tab covers. Leave a tile where it is when \
+        it already fits or you are unsure; not every tile needs a tab. Use only ids from the input.
+        """
+
+    public static func tabMessages(tabs: [TabDigest], tiles: [TabTile]) -> [[String: String]] {
+        let tabLines = tabs.map { "<tab> id=\($0.id) | \($0.name) | \($0.byUser ? "made by the developer" : "made by Tessera") </tab>" }
+        let tileLines = tiles.map { t in
+            "<tile> id=\(t.id) | \(t.title) | \(t.folder) | \(t.tab.map { "tab \($0)" } ?? "no tab") | "
+                + "\(t.movable ? "movable" : "placed by the developer")\(t.summary.map { " | \($0.preview(120))" } ?? "") </tile>"
+        }
+        let body = "Tabs:\n" + (tabLines.isEmpty ? "(none yet)" : tabLines.joined(separator: "\n"))
+            + "\n\nTiles:\n" + tileLines.joined(separator: "\n")
+        return [["role": "system", "content": tabsSystemPrompt], ["role": "user", "content": Redactor.redact(body)]]
+    }
+
+    /// The organizer's moves, kept to what the board can make: known, movable tiles, one move each,
+    /// none to where a tile already is. A new tab named like one there is goes to that one.
+    public static func tabPlan(fromCompletion data: Data, tabs: [TabDigest], tiles: [TabTile]) throws -> [TabMove] {
+        let object = try object(fromCompletion: data)
+        let known = Dictionary(tiles.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+        let ids = Set(tabs.map(\.id))
+        var seen = Set<String>()
+        // One new tab, however the model spelled it from move to move.
+        var newNames: [String] = []
+        return ((object["moves"] as? [[String: Any]]) ?? []).compactMap { raw -> TabMove? in
+            guard let id = raw["id"] as? String, let tile = known[id], tile.movable, !seen.contains(id),
+                  let named = (raw["tab"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines), !named.isEmpty else { return nil }
+            let target: TabMove.Target
+            if ids.contains(named) {
+                target = .existing(named)
+            } else if let tab = tabs.first(where: { $0.name.caseInsensitiveCompare(named) == .orderedSame }) {
+                target = .existing(tab.id)
+            } else {
+                let name = newNames.first { $0.caseInsensitiveCompare(named) == .orderedSame } ?? String(named.prefix(40))
+                if !newNames.contains(name) { newNames.append(name) }
+                target = .new(name)
+            }
+            if case .existing(let tab) = target, tab == tile.tab { return nil }
+            seen.insert(id)
+            return TabMove(tile: id, tab: target)
+        }.prefix(60).map { $0 }
+    }
+
     /// The last `limit` characters, starting at a line boundary when there is one nearby.
     public static func tail(_ text: String, _ limit: Int) -> String {
         guard text.count > limit else { return text }

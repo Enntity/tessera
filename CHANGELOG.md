@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- Tabs keep themselves. Work an agent starts goes in the tab of the session that started it, and
+  moves with it: Claude app side sessions and forks (`spawnedFrom`, `forkedFromSessionId`) and
+  tiles an agent opens with `open_tile`. With Settings ▸ General ▸ Tabs ▸ "Keep my tabs
+  organized" (on by default), the steward's model looks over the board at most every two minutes,
+  only after it has changed, and files every tile you haven't placed yourself, making tabs as
+  needed and putting away the tabs it made once they are empty. Its moves wait in the tab strip
+  ("N to file": one at a time, File All, Not These) unless "File without asking" is on. Tabs you
+  made, and tiles you dragged onto a tab or back to All, stay where you put them; renaming a tab
+  Tessera made makes it yours. Tabs saved before this are yours.
+- Fixed: typing a new name after Rename… went to the board's filter instead of the name. The
+  name field in a tile's or tab's popover now takes the keyboard as it opens, and the board takes
+  no typing while a name is being typed.
 - Tile titles come from their origin, and renames write through to it. Shells, custom terminals
   and pages keep Tessera's name (an empty one goes back to the program's own title); agent
   terminals show the bound session's own name — Claude's transcript `customTitle`, Codex's

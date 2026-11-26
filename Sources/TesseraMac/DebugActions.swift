@@ -54,6 +54,9 @@ extension AppModel {
                 for tile in workspace.allTiles.prefix(2) { workspace.move(tile: tile.id, toGroup: id) }
             case "overseercmd": workspace.overseerCommand = arg
             case "brief": workspace.steward.debugBrief(arg)
+            case "tabplan": workspace.debugTabPlan(arg) // the organizer's answer, as JSON
+            case "filetabs": workspace.fileTabs(workspace.tabSuggestions) // the strip's File All
+            case "renaming": debugRenaming = debugTile(arg) // Rename… from the tile's menu
             case "ask": openOverseer(asking: arg.isEmpty ? nil : arg)
             case "shutdown": if let id = workspace.selectedId { workspace.shutDown(id) }
             case "rename": if let id = workspace.selectedId { (try? workspace.rename(id, to: arg)) }
@@ -249,6 +252,11 @@ extension AppModel {
             "recentFolders": workspace.recentDirectories, "overseer": title(workspace.overseerId),
             "overseerScreen": workspace.overseerId.flatMap { workspace.shownText($0, lines: 12) } ?? "",
             "firstResponder": window?.firstResponder.map { String(describing: type(of: $0)) } ?? "",
+            "naming": isNaming, "tabSuggestions": workspace.tabSuggestions.map { "\(title($0.tile)) → \(workspace.tabName($0.tab))" },
+            "tabKinds": workspace.groups.list.map { "\($0.name): \($0.isTessera ? "Tessera's" : "the user's")" },
+            // A popover's window (a name being typed) and who has its keyboard.
+            "popover": NSApp.windows.filter { $0.isVisible && $0 !== window && String(describing: type(of: $0)).contains("Popover") }
+                .map { String(describing: $0.firstResponder.map { type(of: $0) }) },
             "keyWindow": key === window ? "board" : key?.title ?? "",
             // Hidden (behind other windows, the screen locked), continuous effects stop and nothing is drawn.
             "onScreen": window?.occlusionState.contains(.visible) == true,

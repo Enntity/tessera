@@ -22,6 +22,9 @@ public struct AgentAppSession: Identifiable, Equatable, Sendable {
     /// The conversation this one reports for (a LLooM job's `claude:<id>` / `codex:<id>`): opening
     /// it goes there.
     public var link: String? = nil
+    /// The conversation this one was spawned or forked from (`claude:local_…`): it is its own
+    /// task, filed in the same tab.
+    public var origin: String? = nil
 }
 
 /// One session's latest state, observed on its own so a busy session re-renders only its tile.
@@ -191,6 +194,12 @@ final class TranscriptScanner: @unchecked Sendable {
 
     // MARK: Claude desktop
 
+    /// The tile of the session a Claude app session was started from (a side session, a fork).
+    static func claudeOrigin(_ meta: [String: Any]) -> String? {
+        let parent = (meta["spawnedFrom"] as? [String: Any])?["sessionId"] as? String ?? meta["forkedFromSessionId"] as? String
+        return parent.flatMap { SessionResume.isSafeId($0) ? "claude:" + $0 : nil }
+    }
+
     private func scanClaudeDesktop(lookback: TimeInterval, now: Date) -> [AgentAppSession] {
         let root = home.appendingPathComponent("Library/Application Support/Claude/claude-code-sessions")
         guard let e = fm.enumerator(at: root, includingPropertiesForKeys: [.contentModificationDateKey]) else { return [] }
@@ -230,7 +239,8 @@ final class TranscriptScanner: @unchecked Sendable {
                 cwd: cwd, openURL: AgentApp.claude.conversationURL(localId),
                 resumeCommand: "claude --resume \(cliId) --fork-session",
                 snapshot: snapshot, summary: summary,
-                lastActivityAt: max(lastActivity, parser.lastEventAt ?? .distantPast)))
+                lastActivityAt: max(lastActivity, parser.lastEventAt ?? .distantPast),
+                origin: Self.claudeOrigin(meta)))
         }
         return out
     }

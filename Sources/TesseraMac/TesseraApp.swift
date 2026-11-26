@@ -112,6 +112,12 @@ final class AppModel {
     private(set) var dockFocus = 0
     /// The filter field has the keyboard, and keeps it while the board changes under it.
     @ObservationIgnored var isFiltering = false
+    /// A tile or a tab is being named in a popover: what is typed is the name's.
+    @ObservationIgnored var isNaming = false
+    #if DEBUG
+    /// A scripted Rename… (see `DebugActions`).
+    var debugRenaming: String?
+    #endif
     /// The last one-tap answer from the lane (see `answer`).
     @ObservationIgnored private var lastAnswer: (id: String, at: Date)?
     #if DEBUG

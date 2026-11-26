@@ -115,7 +115,7 @@ struct BoardView: View {
                 model.keyboardToPanel()
                 return .ignored
             }
-            guard press.modifiers.isDisjoint(with: [.command, .control, .option]) else { return .ignored }
+            guard press.modifiers.isDisjoint(with: [.command, .control, .option]), !model.isNaming else { return .ignored }
             // (⌫ arrives as the character DEL, which is not what SwiftUI calls `.delete`.)
             if press.key == .delete || press.characters == "\u{7F}", query.hasText {
                 model.beginFilter(text: String(query.text.dropLast()))
@@ -270,6 +270,9 @@ struct TileView: View {
         .onDrop(of: [.text], delegate: TileDropDelegate(target: info.id, workspace: workspace))
         .contextMenu { TileMenu(info: info) { renaming = true } }
         .modifier(RenamePopover(info: info, isPresented: $renaming))
+        #if DEBUG
+        .onChange(of: model.debugRenaming) { _, id in if id == info.id { renaming = true } }
+        #endif
     }
 
     @ViewBuilder
