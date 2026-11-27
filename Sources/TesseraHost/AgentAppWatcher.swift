@@ -400,32 +400,41 @@ final class TranscriptScanner: @unchecked Sendable {
 
     // MARK: Antigravity desktop
 
-    /// `agyhub_summaries_proto.pb` entries, parsed once per file mtime.
-    private var agyIndex: (modified: Date, entries: [AntigravityAppSessions.Entry])?
+    /// The app's conversation list, and each listed conversation's transcript, read again only when
+    /// its database or write-ahead log changes.
+    private var agySummaries: (stamp: [FileStat?], rows: [AntigravityAppSessions.Summary])?
+    private var agyTranscripts: [String: (stamp: [FileStat?], transcript: AntigravityAppSessions.Transcript)] = [:]
 
-    /// Antigravity.app conversations recent enough to show, from its protobuf index. Their
-    /// transcripts stay in the app — the index is the only surface, so activity is just "idle".
+    /// Antigravity.app's own conversations recent enough to show. They open only in the app,
+    /// which has no link to a conversation.
     private func scanAntigravityDesktop(lookback: TimeInterval, now: Date) -> [AgentAppSession] {
         let root = home.appendingPathComponent(".gemini/antigravity")
-        let index = root.appendingPathComponent("agyhub_summaries_proto.pb")
-        guard let modified = FileStat(index.path)?.modified else { return [] }
-        if agyIndex?.modified != modified {
-            let entries = (try? Data(contentsOf: index)).map(AntigravityAppSessions.entries) ?? []
-            agyIndex = (modified, entries)
-        }
-        return (agyIndex?.entries ?? []).compactMap { entry in
-            let updated = entry.updatedAt
-                ?? FileStat(root.appendingPathComponent("conversations/\(entry.id).pb").path)?.modified
-            guard let last = updated, now.timeIntervalSince(last) < lookback else { return nil }
+        func stamp(_ path: String) -> [FileStat?] { [FileStat(path), FileStat(path + "-wal")] }
+        let index = root.appendingPathComponent("conversation_summaries.db").path
+        let indexStamp = stamp(index)
+        guard indexStamp[0] != nil else { agySummaries = nil; agyTranscripts = [:]; return [] }
+        // A read that fails (the app mid-write) keeps the last list and tries again next scan.
+        if agySummaries?.stamp != indexStamp, let rows = AntigravityAppSessions.summaries(index) { agySummaries = (indexStamp, rows) }
+        let recent = (agySummaries?.rows ?? []).filter { now.timeIntervalSince($0.updatedAt) < lookback }
+        guard !recent.isEmpty else { agyTranscripts = [:]; return [] }
+        let appRunning = !NSRunningApplication.runningApplications(withBundleIdentifier: AgentApp.antigravity.bundleID).isEmpty
+        var kept: [String: (stamp: [FileStat?], transcript: AntigravityAppSessions.Transcript)] = [:]
+        let out = recent.map { s -> AgentAppSession in
+            let path = root.appendingPathComponent("conversations/\(s.id).db").path
+            let fileStamp = stamp(path)
+            var entry = agyTranscripts[s.id]
+            // A read that fails keeps what was shown, under its old stamp, so it is read again.
+            if entry?.stamp != fileStamp, let read = AntigravityAppSessions.transcript(path) { entry = (fileStamp, read) }
+            kept[s.id] = entry
+            let transcript = entry?.transcript ?? AntigravityAppSessions.Transcript()
             return AgentAppSession(
-                id: "antigravity:" + entry.id, flavor: .antigravityDesktop, title: entry.title,
-                cwd: entry.workspaceURI.map(AntigravityAppSessions.folder) ?? "",
+                id: "antigravity:" + s.id, flavor: .antigravityDesktop, title: s.title, cwd: s.folder,
                 openURL: nil, resumeCommand: nil,
-                snapshot: ConversationSnapshot(items: [], activity: .idle,
-                                               detail: "This conversation lives in the Antigravity app",
-                                               lastEventAt: last),
-                summary: nil, lastActivityAt: last)
+                snapshot: AntigravityAppSessions.snapshot(transcript, running: s.running, appRunning: appRunning, updatedAt: s.updatedAt),
+                summary: nil, lastActivityAt: max(s.updatedAt, transcript.lastEventAt ?? .distantPast))
         }
+        agyTranscripts = kept
+        return out
     }
 
     private func refreshCodexTitles() {

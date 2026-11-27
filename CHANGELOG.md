@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- Antigravity app conversations show what they say and what they're doing. Tessera reads the
+  app's `conversation_summaries.db` and each conversation's step store (Antigravity 2.36) instead
+  of its summary protobuf. Cards show your messages, the agent's replies, its tool runs (by the
+  app's own summary of each) and errors. They mark a run that is going as working, a tool waiting
+  for your approval as asking ("Approve run_command"), a finished reply as done, and a turn that
+  ended on an error as failed. Asking and working only count while the app is running. Untitled
+  conversations take their first message as a title. Conversations the `agy` CLI ran, and
+  subagents' runs, no longer get cards of their own: a CLI conversation is its tile's, and a
+  subagent belongs to the conversation that started it. A store caught mid-write keeps the last
+  reading instead of dropping the cards. The app still has no link to a single conversation, so
+  opening a card brings Antigravity forward.
+- `agy` tiles bind and resume conversations named with `-r` or `--resume` (agy 1.5's aliases for
+  `--conversation`), and a signed-out `agy`'s login chooser shows as waiting on you, not idle.
 - Tabs keep themselves. Work an agent starts goes in the tab of the session that started it, and
   moves with it: Claude app side sessions and forks (`spawnedFrom`, `forkedFromSessionId`) and
   tiles an agent opens with `open_tile`. With Settings ▸ General ▸ Tabs ▸ "Keep my tabs
