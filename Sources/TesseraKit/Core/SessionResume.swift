@@ -151,12 +151,12 @@ public enum SessionResume {
                   !before[i + 1].hasPrefix("-") else { return nil }
             return isSafeId(before[i + 1]) ? before[i + 1] : nil
         case .agy:
-            // `--conversation X` or `--conversation=X`.
-            if let eq = words.first(where: { $0.hasPrefix("--conversation=") }) {
-                let id = String(eq.dropFirst("--conversation=".count))
+            // `--conversation X`, its aliases `-r` and `--resume`, or `--conversation=X`.
+            if let eq = words.first(where: { w in agyResumeFlags.contains { w.hasPrefix($0 + "=") } }),
+               let id = eq.split(separator: "=", maxSplits: 1).last.map(String.init) {
                 return isSafeId(id) ? id : nil
             }
-            return value(after: ["--conversation"])
+            return value(after: agyResumeFlags)
         }
     }
 
@@ -224,10 +224,13 @@ public enum SessionResume {
         case .agy:
             // Resuming must not send its first prompt again: `--prompt-interactive <text>` goes
             // with the conversation selection.
-            return strip(words, flags: ["--conversation", "-i", "--prompt-interactive"],
-                         switches: ["-c", "--continue"]).filter { !$0.hasPrefix("--conversation=") }
+            return strip(words, flags: agyResumeFlags.union(["-i", "--prompt-interactive"]), switches: ["-c", "--continue"])
+                .filter { w in !agyResumeFlags.contains { w.hasPrefix($0 + "=") } }
         }
     }
+
+    /// `agy`'s ways to name the conversation to resume.
+    private static let agyResumeFlags: Set<String> = ["--conversation", "-r", "--resume"]
 
     /// Session ids are interpolated into shell commands; only plain ids pass.
     public static func isSafeId(_ id: String) -> Bool {

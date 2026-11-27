@@ -240,8 +240,8 @@ public struct TerminalActivityTracker: Sendable {
         "❯ 1. yes", "› 1. yes", "allow once", "yes, and don't ask again",
         // Devin's workspace-trust prompt and command-approval chooser.
         "❭ allow", "yes, trust",
-        // agy's trust/permission chooser ("‣ Yes, I trust this folder").
-        "i trust this folder"
+        // agy's trust/permission chooser ("‣ Yes, I trust this folder") and its sign-in chooser.
+        "i trust this folder", "select login method"
     ]
 
     static func matchesPrompt(_ lowered: String) -> Bool {
